@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<style>
+  @page { size: a4; margin: 1.5cm; }
+  body { font-family: {{ font_name or "Helvetica" }}; font-size: 10pt; }
+  h1 { text-align: center; font-size: 15pt; margin: 0; }
+  .center { text-align: center; }
+  .note { color: #a00; font-size: 8.5pt; text-align: center; border: 1px solid #a00; padding: 4px; }
+  table { width: 100%; }
+  .items td, .items th { border: 1px solid #555; padding: 3px; }
+  .items th { background: #eee; }
+  .r { text-align: right; }
+  .muted { color: #555; }
+</style></head>
+<body>
+  <p class="note">BẢN THỂ HIỆN DỰNG TỪ DỮ LIỆU XML TRÊN CỔNG THUẾ – KHÔNG PHẢI PDF GỐC CỦA NHÀ CUNG CẤP</p>
+  <h1>{{ inv.ten_hd or "HÓA ĐƠN GIÁ TRỊ GIA TĂNG" }}</h1>
+  <p class="center">
+    Ký hiệu: <b>{{ inv.khmshdon }}{{ inv.khhdon }}</b> &nbsp; Số: <b>{{ inv.shdon }}</b> &nbsp; Ngày lập: {{ inv.ngay_lap }}<br>
+    {% if inv.mccqt %}Mã của CQT: {{ inv.mccqt }}{% endif %}
+  </p>
+
+  <table>
+    <tr><td width="50%" valign="top">
+      <b>Đơn vị bán:</b> {{ inv.nguoi_ban.ten }}<br>
+      MST: {{ inv.nguoi_ban.mst }}<br>
+      Địa chỉ: {{ inv.nguoi_ban.dia_chi }}
+    </td><td valign="top">
+      <b>Đơn vị mua:</b> {{ inv.nguoi_mua.ten }}<br>
+      {% if inv.nguoi_mua.ho_ten_nguoi_mua %}Người mua: {{ inv.nguoi_mua.ho_ten_nguoi_mua }}<br>{% endif %}
+      MST: {{ inv.nguoi_mua.mst }}<br>
+      Địa chỉ: {{ inv.nguoi_mua.dia_chi }}<br>
+      Hình thức TT: {{ inv.htttoan }}
+    </td></tr>
+  </table>
+  <br>
+  <table class="items">
+    <tr><th>STT</th><th>Tên hàng hóa, dịch vụ</th><th>ĐVT</th><th>SL</th><th>Đơn giá</th><th>Thuế suất</th><th>Thành tiền</th></tr>
+    {% for h in inv.hang_hoa %}
+    <tr>
+      <td class="center">{{ h.stt }}</td><td>{{ h.ten }}</td><td>{{ h.dvt or "" }}</td>
+      <td class="r">{{ h.so_luong if h.so_luong is not none else "" }}</td>
+      <td class="r">{{ h.don_gia | money }}</td><td class="center">{{ h.thue_suat or "" }}</td>
+      <td class="r">{{ h.thanh_tien | money }}</td>
+    </tr>
+    {% endfor %}
+    <tr><td colspan="6" class="r">Cộng tiền hàng</td><td class="r">{{ inv.tong_chua_thue | money }}</td></tr>
+    <tr><td colspan="6" class="r">Tiền thuế GTGT</td><td class="r">{{ inv.tong_thue | money }}</td></tr>
+    <tr><td colspan="6" class="r"><b>Tổng thanh toán</b></td><td class="r"><b>{{ inv.tong_thanh_toan | money }}</b></td></tr>
+  </table>
+  <p>Số tiền viết bằng chữ: <i>{{ inv.bang_chu or "" }}</i></p>
+  {% if inv.lookup_code or inv.lookup_urls %}
+  <p class="muted">Tra cứu bản gốc: {{ inv.lookup_urls | join(", ") }} {% if inv.lookup_code %}– Mã tra cứu: {{ inv.lookup_code }}{% endif %}</p>
+  {% endif %}
+</body></html>

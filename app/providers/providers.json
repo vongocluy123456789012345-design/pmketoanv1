@@ -1,0 +1,95 @@
+{
+  "_huong_dan": [
+    "Mỗi nhà cung cấp (NCC) hóa đơn điện tử là 1 phần tử trong 'providers'.",
+    "mst_tcgp: MST tổ chức cung cấp giải pháp (trường MSTTCGP trong XML / msttcgp trên cổng thuế) - dùng để nhận diện NCC.",
+    "domains: tên miền trang tra cứu của NCC - nhận diện qua link tra cứu in trong XML.",
+    "pdf_urls: mẫu URL tải PDF. Biến: {lookup_code} {seller_mst} {buyer_mst} {khmshdon} {khhdon} {shdon} {mccqt} {lookup_url}.",
+    "   Mẫu thiếu biến (vd hóa đơn không có mã tra cứu) sẽ tự bỏ qua. URL trả về HTML thì phần mềm tự dò link PDF trong trang.",
+    "verified=false: mẫu URL chưa được kiểm chứng với hóa đơn thật - cần thử với 1 hóa đơn và sửa lại nếu sai.",
+    "Trang tra cứu nào bắt buộc nhập captcha thì phần mềm KHÔNG vượt qua; hóa đơn sẽ chuyển trạng thái 'failed' kèm link để tải tay rồi upload."
+  ],
+  "providers": [
+    {
+      "code": "vnpt",
+      "name": "VNPT Invoice",
+      "mst_tcgp": ["0100684378"],
+      "domains": ["vnpt-invoice.com.vn"],
+      "pdf_urls": ["{lookup_url}"],
+      "verified": false
+    },
+    {
+      "code": "viettel",
+      "name": "Viettel S-Invoice",
+      "mst_tcgp": ["0100109106"],
+      "domains": ["vinvoice.viettel.vn", "sinvoice.viettel.vn"],
+      "pdf_urls": ["{lookup_url}"],
+      "verified": false,
+      "note": "Trang tra cứu thường yêu cầu captcha."
+    },
+    {
+      "code": "misa",
+      "name": "MISA meInvoice",
+      "mst_tcgp": ["0101243150"],
+      "domains": ["meinvoice.vn"],
+      "pdf_urls": ["{lookup_url}"],
+      "verified": true,
+      "note": "Tải bằng connector fetch_misa trong plugins.py (2 bước: GetInvoiceDataByTransactionID rồi DownloadHandler)."
+    },
+    {
+      "code": "bkav",
+      "name": "BKAV eHoadon",
+      "mst_tcgp": ["0101360697"],
+      "domains": ["ehoadon.vn"],
+      "pdf_urls": ["https://van.ehoadon.vn/TCHD?MTC={lookup_code}", "{lookup_url}"],
+      "verified": false
+    },
+    {
+      "code": "fpt",
+      "name": "FPT eInvoice",
+      "mst_tcgp": ["0101248141"],
+      "domains": ["einvoice.fpt.com.vn", "fpt.com.vn"],
+      "pdf_urls": ["{lookup_url}"],
+      "verified": false
+    },
+    {
+      "code": "easyinvoice",
+      "name": "EasyInvoice (SoftDreams)",
+      "mst_tcgp": ["0105987432"],
+      "domains": ["easyinvoice.vn", "easyinvoice.com.vn"],
+      "pdf_urls": ["{lookup_url}"],
+      "verified": false
+    },
+    {
+      "code": "thaison",
+      "name": "Thái Sơn E-invoice",
+      "mst_tcgp": ["0101300842"],
+      "domains": ["einvoice.vn"],
+      "pdf_urls": ["{lookup_url}"],
+      "verified": false
+    },
+    {
+      "code": "minvoice",
+      "name": "M-Invoice",
+      "mst_tcgp": [],
+      "domains": ["minvoice.com.vn", "minvoice.vn"],
+      "pdf_urls": ["{lookup_url}"],
+      "verified": false
+    },
+    {
+      "code": "cyberbill",
+      "name": "CyberBill",
+      "mst_tcgp": [],
+      "domains": ["cyberbill.vn"],
+      "pdf_urls": ["{lookup_url}"],
+      "verified": false
+    },
+    {
+      "code": "efy",
+      "name": "EFY Invoice",
+      "mst_tcgp": [],
+      "domains": ["efy.com.vn"],
+      "pdf_urls": ["{lookup_url}"],
+      "verified": false
+    }
+  ]
+}

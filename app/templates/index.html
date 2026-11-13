@@ -1,0 +1,745 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Đồng bộ hóa đơn điện tử</title>
+<style>
+  :root { --b:#d0d7de; --bg:#f6f8fa; --pri:#0b5cad; --ok:#1a7f37; --warn:#9a6700; --err:#cf222e; }
+  * { box-sizing: border-box; }
+  body { font-family: "Segoe UI", Arial, sans-serif; margin: 0; background: var(--bg); color: #1f2328; font-size: 14px; }
+  header { background: var(--pri); color: #fff; padding: 12px 20px; font-size: 18px; font-weight: 600; }
+  main { padding: 16px 20px; display: grid; gap: 16px; }
+  .row { display: grid; grid-template-columns: 360px 1fr; gap: 16px; }
+  .card { background: #fff; border: 1px solid var(--b); border-radius: 8px; padding: 14px; }
+  .card h2 { font-size: 15px; margin: 0 0 10px; }
+  label { display: block; font-size: 12px; color: #57606a; margin: 8px 0 3px; }
+  input, select { width: 100%; padding: 7px 8px; border: 1px solid var(--b); border-radius: 6px; font: inherit; }
+  button { padding: 7px 12px; border: 1px solid var(--pri); background: var(--pri); color: #fff; border-radius: 6px; cursor: pointer; font: inherit; }
+  button.sec { background: #fff; color: var(--pri); }
+  button:disabled { opacity: .5; cursor: default; }
+  .inline { display: flex; gap: 8px; align-items: end; flex-wrap: wrap; }
+  .inline > div { flex: 1; min-width: 120px; }
+  #captchaImg { height: 44px; border: 1px solid var(--b); border-radius: 6px; background: #fff; cursor: pointer; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { border-bottom: 1px solid var(--b); padding: 6px; text-align: left; vertical-align: top; }
+  th { background: var(--bg); position: sticky; top: 0; }
+  td.r { text-align: right; white-space: nowrap; }
+  .badge { padding: 1px 7px; border-radius: 10px; font-size: 12px; white-space: nowrap; }
+  .original, .manual { background: #dafbe1; color: var(--ok); }
+  .rendered { background: #fff8c5; color: var(--warn); }
+  .failed { background: #ffebe9; color: var(--err); }
+  .pending { background: #eaeef2; }
+  .msg { margin-top: 8px; font-size: 13px; }
+  .msg.err { color: var(--err); } .msg.ok { color: var(--ok); }
+  #log { background: #0d1117; color: #c9d1d9; font: 12px Consolas, monospace; padding: 8px; height: 160px; overflow: auto; border-radius: 6px; white-space: pre-wrap; }
+  .tablewrap { max-height: 60vh; overflow: auto; }
+  progress { width: 100%; }
+  a { color: var(--pri); }
+  .muted { color: #57606a; font-size: 12px; }
+  nav { display: flex; gap: 2px; background: #fff; border-bottom: 1px solid var(--b); padding: 0 20px; position: sticky; top: 0; z-index: 5; }
+  nav a { padding: 11px 16px; text-decoration: none; color: #57606a; border-bottom: 3px solid transparent; font-weight: 500; }
+  nav a:hover { color: var(--pri); background: var(--bg); }
+  nav a.active { color: var(--pri); border-bottom-color: var(--pri); }
+  nav .badge { margin-left: 4px; }
+  .page { display: none; gap: 16px; }
+  .page.active { display: grid; }
+  .page-intro { margin: 0 0 4px; color: #57606a; }
+</style>
+</head>
+<body>
+<header>Đồng bộ hóa đơn điện tử – Cổng thuế &amp; PDF gốc</header>
+<nav>
+  <a href="#tai" data-page="tai">Tải hóa đơn <span id="navJob" class="badge original" style="display:none">đang chạy</span></a>
+  <a href="#chungtu" data-page="chungtu">Sao kê &amp; chứng từ</a>
+  <a href="#doichieu" data-page="doichieu">Đối chiếu tờ khai</a>
+  <a href="#lich" data-page="lich">Lịch tự động</a>
+  <a href="#nhapfile" data-page="nhapfile">Nhập file</a>
+  <a href="#dulieu" data-page="dulieu">Kho dữ liệu (Supabase)</a>
+</nav>
+<main>
+ <div class="page" id="page-tai">
+  <section class="card" style="border-color:var(--pri)">
+    <h2>Tự động tải hóa đơn từ cổng thuế (bạn tự đăng nhập trên Chrome)</h2>
+    <div class="inline">
+      <div style="flex:0 0 auto"><button id="btnOpen">1. Mở trang hóa đơn điện tử</button></div>
+      <div style="flex:2"><span id="bState" class="badge pending">Chưa mở trình duyệt</span>
+        <span class="muted" id="bHint">Bấm nút để mở Chrome, rồi đăng nhập (tự nhập mật khẩu + captcha) như bình thường.</span></div>
+    </div>
+    <div class="inline" style="margin-top:10px">
+      <div><label>Từ ngày</label><input id="aFrom" type="date"></div>
+      <div><label>Đến ngày</label><input id="aTo" type="date"></div>
+      <div style="flex:3"><label>Loại hóa đơn</label>
+        <label style="display:inline;margin-right:10px"><input type="checkbox" class="aKind" value="mua-vao" checked style="width:auto"> Mua vào (có mã)</label>
+        <label style="display:inline;margin-right:10px"><input type="checkbox" class="aKind" value="mua-vao-khong-ma" checked style="width:auto"> Mua vào (không mã)</label>
+        <label style="display:inline;margin-right:10px"><input type="checkbox" class="aKind" value="ban-ra" checked style="width:auto"> Bán ra</label>
+        <label style="display:inline;margin-right:10px"><input type="checkbox" class="aKind" value="mua-vao-mtt" style="width:auto"> Mua vào máy tính tiền*</label>
+        <label style="display:inline"><input type="checkbox" class="aKind" value="ban-ra-mtt" style="width:auto"> Bán ra máy tính tiền*</label>
+      </div>
+    </div>
+    <div class="inline" style="margin-top:6px">
+      <div style="flex:3">
+        <label style="display:inline;margin-right:10px"><input id="aExcel" type="checkbox" checked style="width:auto"> Bảng kê Excel</label>
+        <label style="display:inline;margin-right:10px"><input id="aXml" type="checkbox" checked style="width:auto"> XML</label>
+        <label style="display:inline;margin-right:10px"><input id="aPdf" type="checkbox" checked style="width:auto"> PDF gốc</label>
+        <label style="display:inline" title="Hóa đơn mua vào của người bán dùng EasyInvoice: trang tra cứu bắt captcha từng hóa đơn. Tắt thì dùng bản in từ trang hddt."><input id="aEasyCap" type="checkbox" style="width:auto"> PDF gốc EasyInvoice của người bán (nhập captcha)</label>
+        <div class="muted">* Hóa đơn máy tính tiền: cổng bắt nhập captcha khi tra cứu, phần mềm sẽ hiện ô để bạn nhập.
+          Lưu tại: <a href="#" id="aFolder"></a></div>
+      </div>
+      <div style="flex:0 0 auto"><button id="btnAuto" disabled>2. Bắt đầu tải</button></div>
+      <div style="flex:0 0 auto"><button id="btnStop" class="sec" disabled>Dừng</button></div>
+    </div>
+    <div id="capBox" style="display:none;margin-top:10px;padding:10px;border:1px solid var(--warn);border-radius:6px;background:#fff8c5">
+      <b>Cổng thuế yêu cầu captcha</b> <span class="muted" id="capReason"></span>
+      <div class="inline" style="margin-top:6px">
+        <img id="capImg" style="height:44px;background:#fff;border:1px solid var(--b);border-radius:6px">
+        <div><input id="capVal" autocomplete="off" placeholder="Nhập mã trong ảnh"></div>
+        <div style="flex:0 0 auto"><button id="capOk">Gửi</button> <button id="capSkip" class="sec">Bỏ qua loại này</button></div>
+        <div style="flex:0 0 auto"><button id="capCopy" class="sec" title="Chép ảnh captcha vào clipboard">Copy ảnh captcha</button>
+          <button id="capPaste" class="sec" title="Lấy chữ trong clipboard điền vào ô rồi gửi">Dán &amp; Gửi</button>
+          <span id="capCopyMsg" class="muted"></span></div>
+      </div>
+    </div>
+    <div style="margin-top:10px"><progress id="aProg" value="0" max="1"></progress>
+      <span id="aText" class="muted"></span> <a href="#" id="aSummary" style="display:none">Mở file tổng hợp</a></div>
+    <div id="aLog" style="background:#0d1117;color:#c9d1d9;font:12px Consolas,monospace;padding:8px;height:180px;overflow:auto;border-radius:6px;white-space:pre-wrap;margin-top:6px"></div>
+  </section>
+
+  <section class="card">
+    <h2>Mỗi tháng tải xong, trong thư mục tháng có</h2>
+    <ul class="muted" style="margin:0;padding-left:18px;line-height:1.7">
+      <li><b>TongHop_YYYY-MM.xlsx</b> – danh sách hóa đơn, link mở XML/PDF, trang <b>"Can chu y"</b> (HĐ thay thế, điều chỉnh, bị hủy, thiếu XML/PDF)</li>
+      <li><b>XuatPMKT_YYYY-MM.xlsx</b> – chi tiết từng dòng hàng (sheet Mua vào / Bán ra) để nhập phần mềm kế toán</li>
+      <li>Thư mục từng loại: <b>BangKe_*.xlsx</b>, <b>XML\</b>, <b>PDF\</b> (bản gốc; bản in từ cổng có đuôi <b>_hddt.pdf</b>)</li>
+    </ul>
+  </section>
+ </div>
+
+ <div class="page" id="page-chungtu">
+  <section class="card">
+    <h2>Đọc hóa đơn hàng loạt (PDF / XML / ZIP / ảnh scan)</h2>
+    <p class="page-intro">Kéo thả nhiều file hóa đơn (hoặc file .zip chứa nhiều hóa đơn). Phần mềm đọc ký hiệu, số, ngày, MST, tên, tiền hàng, thuế,
+      tổng thanh toán, mã CQT, mã tra cứu; rồi <b>so với dữ liệu đã tải từ cổng thuế</b> (khớp / lệch tiền / không có trên cổng / đã bị hủy).
+      Bản scan / ảnh chụp (PDF ảnh, JPG, PNG) được đọc bằng OCR – cột "Nguồn" ghi OCR, nên kiểm tra lại các dòng báo thiếu.</p>
+    <p class="muted" id="ocrInfo" style="margin:0 0 6px"></p>
+    <div class="drop" id="dropInv" style="border:2px dashed var(--b);border-radius:8px;padding:18px;text-align:center;cursor:pointer;background:var(--bg)">
+      <b>Kéo thả file hóa đơn vào đây</b> hoặc bấm để chọn<br><span class="muted" id="dropInvInfo">Chưa chọn file</span></div>
+    <input type="file" id="invFiles" multiple accept=".pdf,.xml,.zip,.jpg,.jpeg,.png,.tif,.tiff,.bmp,.webp" hidden>
+    <div style="margin-top:10px"><button id="btnInvRead">Đọc hóa đơn</button> <span id="invMsg" class="msg"></span></div>
+    <div class="tablewrap" style="margin-top:8px;max-height:45vh"><table><tbody id="invRows"></tbody></table></div>
+  </section>
+  <section class="card">
+    <h2>Đối chiếu sao kê ngân hàng ↔ hóa đơn</h2>
+    <p class="page-intro">Kéo thả file sao kê (Excel, CSV, PDF, hoặc bản scan / ảnh chụp – Vietcombank, Techcombank, MB, ACB, VietinBank, BIDV, Agribank, VPBank…).
+      Bản scan đọc bằng OCR theo từng dòng; chiều tiền vào/ra xác định theo biến động số dư.
+      Phần mềm tự nhận cột, rồi ghép từng giao dịch với hóa đơn đã tải trong khoảng ngày sao kê theo số tiền, số hóa đơn / MST / tên đối tác
+      trong nội dung. Kết quả: giao dịch đã khớp, hóa đơn chưa thấy thanh toán, giao dịch chưa có hóa đơn (tô vàng khoản chi từ 20 triệu).</p>
+    <div class="drop" id="dropBank" style="border:2px dashed var(--b);border-radius:8px;padding:18px;text-align:center;cursor:pointer;background:var(--bg)">
+      <b>Kéo thả file sao kê vào đây</b> hoặc bấm để chọn<br><span class="muted" id="dropBankInfo">Chưa chọn file</span></div>
+    <input type="file" id="bankFiles" multiple accept=".xlsx,.xls,.csv,.pdf,.jpg,.jpeg,.png,.tif,.tiff,.bmp,.webp" hidden>
+    <div style="margin-top:10px"><button id="btnBank">Đối chiếu sao kê</button> <span id="bankMsg" class="msg"></span></div>
+    <div id="bankResult" style="margin-top:8px"></div>
+  </section>
+ </div>
+
+ <div class="page" id="page-doichieu">
+  <section class="card">
+    <h2>Đối chiếu tờ khai thuế GTGT 01/GTGT với hóa đơn</h2>
+    <p class="page-intro">Chọn file tờ khai (XML nộp qua eTax hoặc Excel xuất từ HTKK). Phần mềm tự nhận kỳ (tháng/quý), cộng hóa đơn đã tải
+      theo từng chỉ tiêu và báo Khớp / LỆCH. Cần tải trọn các tháng của kỳ đó trước.</p>
+    <div class="inline">
+      <div><input type="file" id="tkFile" accept=".xml,.xls,.xlsx"></div>
+      <div style="flex:0 0 auto"><button id="btnTk">Đối chiếu</button></div>
+    </div>
+    <div id="tkMsg" class="msg"></div>
+    <table style="margin-top:8px"><tbody id="tkRows"></tbody></table>
+  </section>
+ </div>
+
+ <div class="page" id="page-lich">
+  <section class="card">
+    <h2>Tự động tải hóa đơn hằng tháng</h2>
+    <p class="page-intro">Đến ngày/giờ đã đặt, phần mềm tự tải hóa đơn của THÁNG TRƯỚC. Phần mềm phải đang mở.
+      Muốn tự mở cùng Windows: đặt shortcut của run.bat vào thư mục Startup (Win+R → shell:startup).</p>
+    <div style="max-width:640px">
+        <div class="inline">
+          <div style="flex:0 0 auto"><label><input type="checkbox" id="scOn" style="width:auto"> Bật</label></div>
+          <div><label>Ngày</label><input type="number" id="scDay" min="1" max="28" value="5"></div>
+          <div><label>Giờ</label><input type="number" id="scHour" min="0" max="23" value="8"></div>
+        </div>
+        <div style="margin-top:6px">
+          <label style="display:inline;margin-right:8px"><input type="checkbox" class="scKind" value="mua-vao" checked style="width:auto"> Mua vào có mã</label>
+          <label style="display:inline;margin-right:8px"><input type="checkbox" class="scKind" value="mua-vao-khong-ma" checked style="width:auto"> Mua vào không mã</label>
+          <label style="display:inline;margin-right:8px"><input type="checkbox" class="scKind" value="ban-ra" checked style="width:auto"> Bán ra</label>
+          <label style="display:inline;margin-right:8px"><input type="checkbox" class="scKind" value="mua-vao-mtt" style="width:auto"> MTT mua vào*</label>
+          <label style="display:inline"><input type="checkbox" class="scKind" value="ban-ra-mtt" style="width:auto"> MTT bán ra*</label>
+        </div>
+        <div class="muted">* cần bạn nhập captcha khi tới lịch (có tiếng báo). Chưa đăng nhập cổng thì phần mềm mở Chrome, báo Windows và thử lại mỗi 15 phút.</div>
+        <div style="margin-top:6px"><button id="btnSc">Lưu lịch</button> <button id="btnScNow" class="sec">Chạy ngay (tháng trước)</button></div>
+        <div id="scMsg" class="msg"></div>
+    </div>
+  </section>
+ </div>
+
+ <div class="page" id="page-nhapfile">
+  <section class="card">
+    <h2>Nhập hóa đơn từ file tải trên cổng thuế (miễn phí)</h2>
+    <p class="muted" style="margin:0 0 8px">
+      Đăng nhập <a href="https://hoadondientu.gdt.gov.vn" target="_blank" rel="noopener noreferrer">hoadondientu.gdt.gov.vn</a> trên Chrome/Edge →
+      Tra cứu → Tra cứu hóa đơn → chọn khoảng ngày → <b>Xuất Excel</b> (danh sách) và/hoặc tải <b>XML</b> từng hóa đơn (file .zip).
+      Kéo thả tất cả file .xml / .zip / .xlsx / .xls vào đây. Có XML thì phần mềm mới lấy được PDF gốc.
+    </p>
+    <div class="inline">
+      <div><label>MST doanh nghiệp của bạn</label><input id="imMst" placeholder="vd 0319124899"></div>
+      <div><label>File này là hóa đơn</label>
+        <select id="imDir"><option value="purchase">Mua vào (đầu vào)</option><option value="sold">Bán ra (đầu ra)</option></select></div>
+      <div style="flex:0 0 auto"><label><input id="imPdf" type="checkbox" checked style="width:auto"> Lấy PDF gốc</label></div>
+    </div>
+    <div id="drop" style="margin-top:10px;border:2px dashed var(--b);border-radius:8px;padding:18px;text-align:center;cursor:pointer;background:var(--bg)">
+      <b>Kéo thả file vào đây</b> hoặc bấm để chọn file<br><span class="muted" id="dropInfo">Chưa chọn file</span>
+    </div>
+    <input type="file" id="imFiles" multiple accept=".xml,.zip,.xlsx,.xls" hidden>
+    <div style="margin-top:10px"><button id="btnImport">Nhập hóa đơn</button> <span id="imMsg" class="msg"></span></div>
+  </section>
+
+  <section class="card">
+    <h2>Tự động nhập file vừa tải về</h2>
+    <p class="muted" style="margin:0 0 8px">Bật lên rồi cứ tải XML/Excel trên cổng thuế như bình thường – phần mềm tự phát hiện file mới trong thư mục,
+      tự nhận file thuộc MST khách hàng nào, tự nhập và lấy PDF. File có sẵn từ trước khi bật sẽ không bị nhập.</p>
+    <div class="inline">
+      <div style="flex:2"><label>Thư mục theo dõi</label><input id="wFolder"></div>
+      <div style="flex:0 0 auto"><label><input id="wPdf" type="checkbox" checked style="width:auto"> Lấy PDF gốc</label></div>
+      <div style="flex:0 0 auto"><button id="btnWatch">Bật theo dõi</button></div>
+      <div style="flex:0 0 auto"><span id="wState" class="badge pending">Đang tắt</span></div>
+    </div>
+    <div class="row" style="margin-top:10px;grid-template-columns:360px 1fr">
+      <div>
+        <label>MST khách hàng (để nhận diện file)</label>
+        <div class="inline"><div><input id="cMst" placeholder="MST"></div><div><input id="cName" placeholder="Tên (tùy chọn)"></div>
+          <div style="flex:0 0 auto"><button id="btnAddC" class="sec">Thêm</button></div></div>
+        <table style="margin-top:6px"><tbody id="cList"></tbody></table>
+      </div>
+      <div><label>Hoạt động gần đây</label><div id="wLog" style="max-height:180px;overflow:auto;font-size:13px"></div></div>
+    </div>
+  </section>
+
+ </div>
+
+ <div class="page" id="page-dulieu">
+  <p class="page-intro">Kho hóa đơn trên Supabase (phần cũ của phần mềm): xem danh sách đã đồng bộ, lấy lại / upload PDF.
+    Đăng nhập cổng trực tiếp bằng API có thể bị cổng chặn – nên dùng mục <b>Tải hóa đơn</b>.</p>
+  <div class="row">
+    <section class="card">
+      <h2>1. Đăng nhập cổng hoadondientu.gdt.gov.vn</h2>
+      <div id="gdtBox">
+      <label>Tên đăng nhập (MST)</label>
+      <input id="username" autocomplete="username">
+      <label>Mật khẩu</label>
+      <input id="password" type="password" autocomplete="current-password">
+      <label>Mã captcha (bấm vào ảnh để đổi)</label>
+      <div class="inline">
+        <img id="captchaImg" alt="captcha" title="Bấm để lấy captcha mới">
+        <div><input id="cvalue" autocomplete="off"></div>
+      </div>
+      <div style="margin-top:10px"><button id="btnLogin">Đăng nhập</button></div>
+      <div id="loginMsg" class="msg"></div>
+      <p class="muted">Mật khẩu chỉ gửi thẳng tới cổng thuế, không lưu lại. Phiên đăng nhập mất khi tắt phần mềm.
+        Nếu cổng báo "phát hiện hành vi không hợp lệ" thì dùng cách nhập file ở trên.</p>
+      </div>
+      <details id="tcBox" style="margin-top:8px">
+        <summary class="muted">Kết nối qua TConnect (dịch vụ trả phí, cần khóa API)</summary>
+        <p class="muted" id="tcInfo">Đang kiểm tra cấu hình TConnect...</p>
+        <label>MST doanh nghiệp</label>
+        <input id="tcMst" autocomplete="off">
+        <label>Mật khẩu cổng hoadondientu.gdt.gov.vn</label>
+        <input id="tcPass" type="password" autocomplete="off">
+        <div style="margin-top:10px"><button id="btnTc">Kết nối qua TConnect</button></div>
+        <div id="tcMsg" class="msg"></div>
+        <p class="muted">Mật khẩu được gửi tới TConnect (bên thứ ba) để họ lấy hộ hóa đơn; phần mềm này không lưu mật khẩu.</p>
+      </details>
+    </section>
+
+    <section class="card">
+      <h2>2. Đồng bộ hóa đơn</h2>
+      <div class="inline">
+        <div><label>Nguồn</label>
+          <select id="source"><option value="gdt">Cổng thuế trực tiếp</option><option value="tconnect">TConnect</option></select></div>
+        <div><label>MST</label><select id="syncMst"></select></div>
+        <div><label>Loại</label>
+          <select id="direction"><option value="purchase">Mua vào (đầu vào)</option><option value="sold">Bán ra (đầu ra)</option><option value="both">Cả hai (chỉ TConnect)</option></select></div>
+        <div><label>Từ ngày</label><input id="dFrom" type="date"></div>
+        <div><label>Đến ngày</label><input id="dTo" type="date"></div>
+        <div style="flex:0 0 auto"><label><input id="fetchPdf" type="checkbox" checked style="width:auto"> Lấy PDF gốc</label></div>
+        <div style="flex:0 0 auto"><button id="btnSync">Bắt đầu đồng bộ</button></div>
+      </div>
+      <div style="margin-top:10px"><progress id="prog" value="0" max="1"></progress>
+        <span id="progText" class="muted"></span></div>
+      <div id="log"></div>
+    </section>
+  </div>
+
+  <section class="card">
+    <h2>3. Hóa đơn đã đồng bộ</h2>
+    <div class="inline">
+      <div><label>MST</label><input id="fMst" placeholder="MST doanh nghiệp"></div>
+      <div><label>Loại</label><select id="fDir"><option value="">Tất cả</option><option value="purchase">Mua vào</option><option value="sold">Bán ra</option></select></div>
+      <div><label>Từ ngày</label><input id="fFrom" type="date"></div>
+      <div><label>Đến ngày</label><input id="fTo" type="date"></div>
+      <div><label>Trạng thái PDF</label><select id="fPdf"><option value="">Tất cả</option>
+        <option value="original">PDF gốc</option><option value="manual">Upload tay</option>
+        <option value="rendered">Bản dựng từ XML</option><option value="failed">Lỗi</option><option value="pending">Chưa lấy</option></select></div>
+      <div><label>Tìm (tên, MST, số HĐ)</label><input id="fQ"></div>
+      <div style="flex:0 0 auto"><button id="btnLoad">Lọc</button></div>
+      <div style="flex:0 0 auto"><button id="btnRetry" class="sec">Thử lại PDF lỗi</button></div>
+    </div>
+    <div class="tablewrap" style="margin-top:10px">
+      <table>
+        <thead><tr><th>Ngày lập</th><th>Ký hiệu / Số</th><th>Người bán</th><th>Người mua</th>
+          <th class="r">Chưa thuế</th><th class="r">Thuế</th><th class="r">Tổng TT</th><th>NCC</th><th>PDF</th><th>File</th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+    <div id="listMsg" class="msg"></div>
+  </section>
+ </div>
+</main>
+<input type="file" id="pdfFile" accept="application/pdf" hidden>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const money = v => v == null ? "" : Number(v).toLocaleString("vi-VN");
+const STATUS = {original:"PDF gốc", manual:"Upload tay", rendered:"Dựng từ XML", failed:"Lỗi", pending:"Chưa lấy"};
+let captchaKey = null, pollTimer = null, uploadFor = null;
+
+async function api(url, opts = {}) {
+  const r = await fetch(url, opts);
+  const ct = r.headers.get("content-type") || "";
+  const data = ct.includes("json") ? await r.json() : await r.text();
+  if (!r.ok) throw new Error((data && data.detail) ? (typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail)) : r.statusText);
+  return data;
+}
+function msg(el, text, ok) { el.textContent = text; el.className = "msg " + (ok ? "ok" : "err"); }
+
+async function loadCaptcha() {
+  try { const c = await api("/api/captcha"); captchaKey = c.key; $("captchaImg").src = c.image; $("cvalue").value = ""; }
+  catch (e) { msg($("loginMsg"), "Không lấy được captcha: " + e.message); }
+}
+let tcCompanies = [], gdtSessions = [];
+async function loadSessions() {
+  try { gdtSessions = (await api("/api/sessions")).sessions; } catch (e) { gdtSessions = []; }
+  try {
+    const t = await api("/api/tconnect/status");
+    tcCompanies = t.companies.map(c => c.mst);
+    $("tcInfo").textContent = t.configured
+      ? `TConnect đã cấu hình (${t.auth_base}). ${tcCompanies.length} MST đã kết nối.`
+      : "Chưa cấu hình TConnect: điền các biến TCONNECT_* trong file .env rồi khởi động lại phần mềm.";
+    $("btnTc").disabled = !t.configured;
+  } catch (e) { $("tcInfo").textContent = "Lỗi kiểm tra TConnect: " + e.message; }
+  const list = $("source").value === "tconnect" ? tcCompanies : gdtSessions;
+  $("syncMst").innerHTML = list.map(m => `<option>${esc(m)}</option>`).join("") || `<option value="">(chưa kết nối)</option>`;
+  if (list[0] && !$("fMst").value) $("fMst").value = list[0];
+}
+$("source").onchange = loadSessions;
+$("btnTc").onclick = async () => {
+  $("btnTc").disabled = true;
+  try {
+    const r = await api("/api/tconnect/accounts", {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({mst: $("tcMst").value.trim(), password: $("tcPass").value})});
+    msg($("tcMsg"), r.updated ? `Đã cập nhật mật khẩu cho ${r.mst}` : `Đã kết nối ${r.mst} với TConnect`, true);
+    $("tcPass").value = ""; $("source").value = "tconnect";
+    await loadSessions();
+  } catch (e) { msg($("tcMsg"), e.message); }
+  $("btnTc").disabled = false;
+};
+
+$("captchaImg").onclick = loadCaptcha;
+$("btnLogin").onclick = async () => {
+  $("btnLogin").disabled = true;
+  try {
+    const r = await api("/api/login", {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({username: $("username").value, password: $("password").value, ckey: captchaKey, cvalue: $("cvalue").value})});
+    msg($("loginMsg"), `Đã đăng nhập ${r.mst}${r.name ? " – " + r.name : ""}`, true);
+    $("password").value = "";
+    await loadSessions();
+  } catch (e) { msg($("loginMsg"), e.message); loadCaptcha(); }
+  $("btnLogin").disabled = false;
+};
+
+$("btnSync").onclick = async () => {
+  if (!$("syncMst").value) return alert("Hãy kết nối nguồn hóa đơn trước");
+  const tc = $("source").value === "tconnect";
+  if (!tc && $("direction").value === "both") return alert("Cổng thuế trực tiếp chỉ đồng bộ từng loại");
+  $("btnSync").disabled = true;
+  try {
+    const job = await api(tc ? "/api/tconnect/sync" : "/api/sync", {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({mst: $("syncMst").value, direction: $("direction").value,
+        date_from: $("dFrom").value, date_to: $("dTo").value, fetch_pdf: $("fetchPdf").checked})});
+    poll(job.id);
+  } catch (e) { $("log").textContent = "LỖI: " + e.message; $("btnSync").disabled = false; }
+};
+let imFiles = [];
+function setFiles(list) {
+  imFiles = Array.from(list || []);
+  const mb = imFiles.reduce((s, f) => s + f.size, 0) / 1048576;
+  $("dropInfo").textContent = imFiles.length ? `${imFiles.length} file (${mb.toFixed(1)} MB): ${imFiles.slice(0, 5).map(f => f.name).join(", ")}${imFiles.length > 5 ? "…" : ""}` : "Chưa chọn file";
+}
+$("drop").onclick = () => $("imFiles").click();
+$("imFiles").onchange = () => setFiles($("imFiles").files);
+["dragover", "dragenter"].forEach(ev => $("drop").addEventListener(ev, e => { e.preventDefault(); $("drop").style.borderColor = "var(--pri)"; }));
+["dragleave", "drop"].forEach(ev => $("drop").addEventListener(ev, e => { e.preventDefault(); $("drop").style.borderColor = "var(--b)"; }));
+$("drop").addEventListener("drop", e => setFiles(e.dataTransfer.files));
+$("btnImport").onclick = async () => {
+  const mst = $("imMst").value.trim().replace(/-/g, "");
+  if (!mst) return msg($("imMsg"), "Nhập MST doanh nghiệp");
+  if (!imFiles.length) return msg($("imMsg"), "Chọn file trước");
+  const fd = new FormData();
+  fd.append("mst", mst); fd.append("direction", $("imDir").value); fd.append("fetch_pdf", $("imPdf").checked);
+  imFiles.forEach(f => fd.append("files", f));
+  $("btnImport").disabled = true; msg($("imMsg"), "Đang tải file lên...", true);
+  try {
+    const job = await api("/api/import", {method: "POST", body: fd});
+    msg($("imMsg"), "Đang xử lý – xem tiến độ ở ô log bên dưới", true);
+    $("fMst").value = mst; setFiles([]); $("imFiles").value = "";
+    poll(job.id, () => { $("btnImport").disabled = false; msg($("imMsg"), "Xong", true); });
+  } catch (e) { msg($("imMsg"), e.message); $("btnImport").disabled = false; }
+};
+
+// ----- theo dõi thư mục + danh sách MST -----
+let watchOn = false;
+async function loadCompanies() {
+  try {
+    const {items} = await api("/api/companies");
+    $("cList").innerHTML = items.map(c => `<tr><td>${esc(c.mst)}</td><td>${esc(c.name || "")}</td>
+      <td><a href="#" data-del="${esc(c.mst)}">Xóa</a></td></tr>`).join("") || `<tr><td class="muted">Chưa có MST nào</td></tr>`;
+  } catch (e) { $("cList").innerHTML = `<tr><td class="msg err">${esc(e.message)}</td></tr>`; }
+}
+$("btnAddC").onclick = async () => {
+  try { await api("/api/companies", {method: "POST", headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({mst: $("cMst").value, name: $("cName").value})});
+        $("cMst").value = ""; $("cName").value = ""; loadCompanies(); }
+  catch (e) { alert(e.message); }
+};
+$("cList").onclick = async ev => {
+  const a = ev.target.closest("a[data-del]"); if (!a) return; ev.preventDefault();
+  if (!confirm(`Xóa MST ${a.dataset.del} khỏi danh sách nhận diện? (hóa đơn đã nhập vẫn giữ nguyên)`)) return;
+  await api(`/api/companies/${encodeURIComponent(a.dataset.del)}`, {method: "DELETE"}); loadCompanies();
+};
+function renderWatcher(s) {
+  watchOn = s.enabled;
+  if (document.activeElement !== $("wFolder")) $("wFolder").value = s.folder;
+  $("wPdf").checked = s.fetch_pdf;
+  $("btnWatch").textContent = s.enabled ? "Tắt theo dõi" : "Bật theo dõi";
+  $("wState").textContent = s.enabled ? (s.folder_exists ? "Đang theo dõi" : "Thư mục không tồn tại") : "Đang tắt";
+  $("wState").className = "badge " + (s.enabled ? (s.folder_exists ? "original" : "failed") : "pending");
+  const cls = {ok: "original", warn: "rendered", error: "failed", info: "pending"};
+  $("wLog").innerHTML = s.events.map(e => `<div><span class="muted">${esc(e.time)}</span>
+    <span class="badge ${cls[e.level] || "pending"}">${esc(e.level)}</span> ${esc(e.msg)}</div>`).join("") || `<span class="muted">Chưa có hoạt động</span>`;
+}
+$("btnWatch").onclick = async () => {
+  try { renderWatcher(await api("/api/watcher", {method: "POST", headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({enabled: !watchOn, folder: $("wFolder").value.trim(), fetch_pdf: $("wPdf").checked})})); }
+  catch (e) { alert(e.message); }
+};
+setInterval(async () => { try { renderWatcher(await api("/api/watcher")); } catch (e) {} }, 4000);
+
+function poll(id, onDone) {
+  clearInterval(pollTimer);
+  pollTimer = setInterval(async () => {
+    const j = await api("/api/jobs/" + id);
+    $("prog").max = Math.max(j.total, 1); $("prog").value = j.done;
+    $("progText").textContent = `${j.done}/${j.total} – PDF gốc: ${j.pdf_ok}, dựng từ XML: ${j.pdf_rendered}, lỗi: ${j.pdf_failed}`;
+    $("log").textContent = j.log.join("\n"); $("log").scrollTop = 1e9;
+    if (j.status !== "running") {
+      clearInterval(pollTimer); $("btnSync").disabled = false; loadInvoices();
+      if (onDone) onDone(j);
+      if (j.errors && j.errors.length) $("log").textContent += "\n--- LỖI ---\n" + j.errors.slice(-20).join("\n");
+      if (j.status === "auth_error") { alert("Phiên cổng thuế hết hạn, hãy đăng nhập lại."); loadSessions(); loadCaptcha(); }
+    }
+  }, 1500);
+}
+
+async function loadInvoices() {
+  const p = new URLSearchParams();
+  [["mst","fMst"],["direction","fDir"],["date_from","fFrom"],["date_to","fTo"],["pdf_status","fPdf"],["q","fQ"]]
+    .forEach(([k, id]) => { if ($(id).value) p.set(k, $(id).value.trim()); });
+  try {
+    const {items} = await api("/api/invoices?" + p);
+    $("rows").innerHTML = items.map(r => `
+      <tr>
+        <td>${esc((r.tdlap || "").slice(0, 10))}</td>
+        <td>${esc(r.khmshdon)}${esc(r.khhdon)}<br><b>${esc(r.shdon)}</b></td>
+        <td>${esc(r.nbten)}<br><span class="muted">${esc(r.nbmst)}</span></td>
+        <td>${esc(r.nmten)}<br><span class="muted">${esc(r.nmmst)}</span></td>
+        <td class="r">${money(r.tgtcthue)}</td><td class="r">${money(r.tgtthue)}</td><td class="r"><b>${money(r.tgtttbso)}</b></td>
+        <td>${esc(r.provider_code || "")}${r.lookup_code ? `<br><span class="muted">Mã TC: ${esc(r.lookup_code)}</span>` : ""}</td>
+        <td><span class="badge ${esc(r.pdf_status)}" title="${esc(r.pdf_error || "")}">${STATUS[r.pdf_status] || esc(r.pdf_status)}</span>
+          ${r.lookup_url && !["original","manual"].includes(r.pdf_status) ? `<br><a href="${esc(r.lookup_url)}" target="_blank" rel="noopener noreferrer">Trang tra cứu</a>` : ""}</td>
+        <td style="white-space:nowrap">
+          ${r.xml_path ? `<a href="/api/invoices/${r.id}/file/xml" target="_blank">XML</a>` : ""}
+          ${r.pdf_path ? ` · <a href="/api/invoices/${r.id}/file/pdf" target="_blank">PDF</a>` : ""}
+          <br><a href="#" data-act="refetch" data-id="${r.id}">Lấy lại</a> · <a href="#" data-act="upload" data-id="${r.id}">Upload PDF</a>
+        </td>
+      </tr>`).join("");
+    msg($("listMsg"), `${items.length} hóa đơn`, true);
+  } catch (e) { msg($("listMsg"), e.message); }
+}
+
+$("rows").onclick = async ev => {
+  const a = ev.target.closest("a[data-act]"); if (!a) return;
+  ev.preventDefault();
+  if (a.dataset.act === "upload") { uploadFor = a.dataset.id; $("pdfFile").click(); return; }
+  a.textContent = "Đang lấy...";
+  try { const r = await api(`/api/invoices/${a.dataset.id}/refetch-pdf`, {method: "POST"});
+        if (r.pdf_status !== "original") alert("Chưa lấy được PDF gốc: " + (r.pdf_error || "")); }
+  catch (e) { alert(e.message); }
+  loadInvoices();
+};
+$("pdfFile").onchange = async () => {
+  const f = $("pdfFile").files[0]; if (!f || !uploadFor) return;
+  const fd = new FormData(); fd.append("file", f);
+  try { await api(`/api/invoices/${uploadFor}/upload-pdf`, {method: "POST", body: fd}); loadInvoices(); }
+  catch (e) { alert(e.message); }
+  $("pdfFile").value = "";
+};
+$("btnLoad").onclick = loadInvoices;
+$("btnRetry").onclick = async () => {
+  if (!$("fMst").value) return alert("Nhập MST để thử lại");
+  $("btnRetry").disabled = true;
+  try { const r = await api(`/api/retry-failed-pdf?mst=${encodeURIComponent($("fMst").value)}${$("fDir").value ? "&direction=" + $("fDir").value : ""}`, {method: "POST"});
+        alert(`Đã thử ${r.checked} hóa đơn, lấy được ${r.original} PDF gốc`); loadInvoices(); }
+  catch (e) { alert(e.message); }
+  $("btnRetry").disabled = false;
+};
+
+// ----- tự động tải qua Chrome -----
+let autoJob = null, autoTimer = null, outDir = "", lastCapImg = null;
+async function refreshBrowser() {
+  let s; try { s = await api("/api/browser/status"); } catch (e) { return; }
+  outDir = s.output_dir; $("aFolder").textContent = outDir;
+  if (!s.open) { $("bState").textContent = "Chưa mở trình duyệt"; $("bState").className = "badge pending"; }
+  else if (!s.logged_in) { $("bState").textContent = s.expired ? "Phiên đã hết hạn – đăng nhập lại" : "Chờ bạn đăng nhập trên Chrome..."; $("bState").className = "badge rendered"; }
+  else { $("bState").textContent = "Đã đăng nhập MST " + (s.mst || ""); $("bState").className = "badge original"; }
+  $("bHint").style.display = s.logged_in ? "none" : "";
+  $("btnAuto").disabled = !s.logged_in || !!autoJob;
+  if (s.job_id && !autoJob) watchAuto(s.job_id);
+}
+$("btnOpen").onclick = async () => {
+  $("btnOpen").disabled = true; $("bState").textContent = "Đang mở Chrome...";
+  try { await api("/api/browser/open", {method: "POST"}); } catch (e) { alert(e.message); }
+  $("btnOpen").disabled = false; refreshBrowser();
+};
+$("aFolder").onclick = e => { e.preventDefault(); api("/api/open-folder", {method: "POST"}).catch(err => alert(err.message)); };
+// ----- Âm thanh "ting-ting" như tin nhắn + thông báo Windows -----
+let audioCtx = null;
+function unlockAlerts() {  // gọi trong lúc người dùng bấm nút (trình duyệt chỉ cho phép khi đó)
+  try { audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)(); audioCtx.resume(); } catch (e) {}
+  if ("Notification" in window && Notification.permission === "default") Notification.requestPermission();
+}
+function chime() {
+  if (!audioCtx) return;
+  const t0 = audioCtx.currentTime;
+  [[1318.5, 0], [1760, 0.16]].forEach(([f, d]) => {   // 2 nốt E6 -> A6, giống chuông tin nhắn
+    const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+    o.type = "sine"; o.frequency.value = f; o.connect(g); g.connect(audioCtx.destination);
+    g.gain.setValueAtTime(0.0001, t0 + d); g.gain.exponentialRampToValueAtTime(0.25, t0 + d + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + d + 0.35); o.start(t0 + d); o.stop(t0 + d + 0.4);
+  });
+}
+document.addEventListener("click", unlockAlerts);  // tải lại trang giữa chừng: bấm bất kỳ đâu để bật lại âm thanh
+function notifyUser(title, body) {
+  chime();
+  try {
+    if ("Notification" in window && Notification.permission === "granted") {
+      const n = new Notification(title, {body, tag: "hoadon", renotify: true, requireInteraction: false});
+      n.onclick = () => { window.focus(); $("capVal").focus(); n.close(); };
+    }
+  } catch (e) {}
+}
+
+$("btnAuto").onclick = async () => {
+  unlockAlerts();
+  const kinds = [...document.querySelectorAll(".aKind:checked")].map(c => c.value);
+  try {
+    const j = await api("/api/auto/start", {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({date_from: $("aFrom").value, date_to: $("aTo").value, kinds,
+        excel: $("aExcel").checked, xml: $("aXml").checked, pdf: $("aPdf").checked, easy_captcha: $("aEasyCap").checked})});
+    watchAuto(j.id);
+  } catch (e) { alert(e.message); }
+};
+$("btnStop").onclick = () => autoJob && api(`/api/auto/${autoJob}/stop`, {method: "POST"});
+// Chép ảnh captcha (SVG -> PNG) vào clipboard
+$("capCopy").onclick = async () => {
+  try {
+    const img = new Image(); img.src = $("capImg").src; await img.decode();
+    const w = (img.naturalWidth || 200) * 2, h = (img.naturalHeight || 60) * 2;
+    const c = document.createElement("canvas"); c.width = w; c.height = h;
+    const g = c.getContext("2d"); g.fillStyle = "#fff"; g.fillRect(0, 0, w, h); g.drawImage(img, 0, 0, w, h);
+    const blob = await new Promise(r => c.toBlob(r, "image/png"));
+    await navigator.clipboard.write([new ClipboardItem({"image/png": blob})]);
+    $("capCopyMsg").textContent = "Đã copy ảnh";
+  } catch (e) { $("capCopyMsg").textContent = "Không copy được: " + e.message; }
+  $("capVal").focus();
+};
+// Lấy chữ trong clipboard điền vào ô và gửi
+$("capPaste").onclick = async () => {
+  try {
+    const t = (await navigator.clipboard.readText()).trim().replace(/\s+/g, "");
+    if (!t) { $("capCopyMsg").textContent = "Clipboard đang trống"; return; }
+    $("capVal").value = t; sendCaptcha(t);
+  } catch (e) { $("capCopyMsg").textContent = "Không đọc được clipboard: " + e.message; }
+};
+async function sendCaptcha(value) {
+  if (!autoJob) return;
+  await api(`/api/auto/${autoJob}/captcha`, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({value})});
+  $("capBox").style.display = "none"; $("capVal").value = ""; lastCapImg = null;
+}
+$("capOk").onclick = () => sendCaptcha($("capVal").value.trim());
+$("capVal").onkeydown = e => { if (e.key === "Enter") sendCaptcha($("capVal").value.trim()); };
+$("capSkip").onclick = () => sendCaptcha(null);
+function watchAuto(id) {
+  autoJob = id; $("btnAuto").disabled = true; $("btnStop").disabled = false;
+  clearInterval(autoTimer);
+  autoTimer = setInterval(async () => {
+    let j; try { j = await api("/api/auto/" + id); } catch (e) { return; }
+    $("aProg").max = Math.max(j.total, 1); $("aProg").value = j.done;
+    $("aText").textContent = `${j.done}/${j.total} hóa đơn – bảng kê: ${j.excel_ok}, XML: ${j.xml_ok}, PDF gốc: ${j.pdf_ok}, PDF từ cổng: ${j.pdf_hddt || 0}, chưa có PDF: ${j.pdf_missing}`;
+    $("aLog").textContent = j.log.join("\n"); $("aLog").scrollTop = 1e9;
+    if (j.captcha) {
+      $("capReason").textContent = j.captcha.reason; $("capBox").style.display = "";
+      if (lastCapImg !== j.captcha.image) { lastCapImg = j.captcha.image; $("capImg").src = j.captcha.image; $("capVal").value = ""; $("capCopyMsg").textContent = ""; $("capVal").focus();
+        if (location.hash !== "#tai") location.hash = "tai";
+        notifyUser("Cần nhập captcha", j.captcha.reason); }
+    } else { $("capBox").style.display = "none"; }
+    $("aSummary").style.display = j.summary_file ? "" : "none";
+    $("aSummary").onclick = e => { e.preventDefault(); api("/api/open-folder?path=" + encodeURIComponent(j.summary_file), {method: "POST"}).catch(err => alert(err.message)); };
+    if (j.status !== "running") {
+      notifyUser(j.status === "done" ? "Tải hóa đơn xong" : "Lượt tải đã dừng",
+        `${j.done}/${j.total} hóa đơn – PDF gốc: ${j.pdf_ok}, PDF từ cổng: ${j.pdf_hddt || 0}` + (j.errors.length ? ` – ${j.errors.length} lỗi` : ""));
+      clearInterval(autoTimer); autoJob = null; $("btnStop").disabled = true; $("capBox").style.display = "none";
+      if (j.errors.length) $("aLog").textContent += "\n--- LỖI ---\n" + j.errors.join("\n");
+      if (j.status === "auth_error") alert("Phiên đăng nhập cổng thuế hết hạn. Đăng nhập lại trên Chrome rồi bấm Bắt đầu tải.");
+      refreshBrowser();
+    }
+  }, 1500);
+}
+setInterval(refreshBrowser, 3000);
+
+// ----- đối chiếu tờ khai -----
+$("btnTk").onclick = async () => {
+  const f = $("tkFile").files[0]; if (!f) return msg($("tkMsg"), "Chọn file tờ khai trước");
+  const fd = new FormData(); fd.append("file", f);
+  $("btnTk").disabled = true; msg($("tkMsg"), "Đang đối chiếu...", true); $("tkRows").innerHTML = "";
+  try {
+    const r = await api("/api/reconcile", {method: "POST", body: fd});
+    const [k, ky, nam] = r.period, lech = r.result.filter(x => x.ket_qua === "LỆCH").length;
+    msg($("tkMsg"), `${k === "Q" ? "Quý" : "Tháng"} ${ky}/${nam}: ${r.rows} hóa đơn – ${lech ? lech + " chỉ tiêu LỆCH" : "khớp tất cả"}` +
+      (r.missing_months.length ? ` (chưa tải tháng ${r.missing_months.join(", ")})` : ""), !lech);
+    $("tkRows").innerHTML = `<tr><th>CT</th><th>Nội dung</th><th class="r">Tờ khai</th><th class="r">Hóa đơn</th><th class="r">Chênh lệch</th><th></th></tr>` +
+      r.result.map(x => `<tr><td>[${esc(x.ct)}]</td><td>${esc(x.name)}</td><td class="r">${money(x.to_khai)}</td><td class="r">${money(x.hoa_don)}</td>
+        <td class="r">${money(x.chenh_lech)}</td><td><span class="badge ${x.ket_qua === "LỆCH" ? "failed" : x.ket_qua === "Khớp" ? "original" : "pending"}">${esc(x.ket_qua)}</span></td></tr>`).join("") +
+      `<tr><td colspan="6"><a href="#" id="tkOpen">Mở file đối chiếu Excel</a></td></tr>`;
+    $("tkOpen").onclick = e => { e.preventDefault(); api("/api/open-folder?path=" + encodeURIComponent(r.file), {method: "POST"}).catch(err => alert(err.message)); };
+  } catch (e) { msg($("tkMsg"), e.message); }
+  $("btnTk").disabled = false;
+};
+
+// ----- lịch tự động -----
+function renderSchedule(s) {
+  $("scOn").checked = s.enabled; $("scDay").value = s.day; $("scHour").value = s.hour;
+  document.querySelectorAll(".scKind").forEach(c => c.checked = s.kinds.includes(c.value));
+  msg($("scMsg"), (s.message || (s.enabled ? `Đang bật – ngày ${s.day} lúc ${s.hour}h` : "Đang tắt")) +
+    (s.last_run ? ` · Lần tự động gần nhất: ${s.last_run}` : ""), !s.waiting_login);
+}
+$("btnSc").onclick = async () => {
+  try { renderSchedule(await api("/api/schedule", {method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({enabled: $("scOn").checked, day: +$("scDay").value, hour: +$("scHour").value,
+      kinds: [...document.querySelectorAll(".scKind:checked")].map(c => c.value)})})); } catch (e) { msg($("scMsg"), e.message); }
+};
+$("btnScNow").onclick = async () => { unlockAlerts(); try { renderSchedule(await api("/api/schedule/run-now", {method: "POST"})); } catch (e) { msg($("scMsg"), e.message); } };
+api("/api/schedule").then(renderSchedule).catch(() => {});
+setInterval(() => api("/api/schedule").then(s => { if (document.activeElement.closest && !document.activeElement.closest("#scOn,#scDay,#scHour,.scKind")) renderSchedule(s); }).catch(() => {}), 10000);
+
+// ----- chuyển trang theo menu (#tai, #doichieu, #lich, #nhapfile, #dulieu) -----
+const PAGES = ["tai", "chungtu", "doichieu", "lich", "nhapfile", "dulieu"];
+
+// ----- trang Sao kê & chứng từ -----
+function dropZone(zoneId, inputId, infoId) {
+  const st = {files: []};
+  const set = list => { st.files = Array.from(list || []); const mb = st.files.reduce((s, f) => s + f.size, 0) / 1048576;
+    $(infoId).textContent = st.files.length ? `${st.files.length} file (${mb.toFixed(1)} MB)` : "Chưa chọn file"; };
+  $(zoneId).onclick = () => $(inputId).click();
+  $(inputId).onchange = () => set($(inputId).files);
+  ["dragover", "dragenter"].forEach(ev => $(zoneId).addEventListener(ev, e => { e.preventDefault(); $(zoneId).style.borderColor = "var(--pri)"; }));
+  ["dragleave", "drop"].forEach(ev => $(zoneId).addEventListener(ev, e => { e.preventDefault(); $(zoneId).style.borderColor = "var(--b)"; }));
+  $(zoneId).addEventListener("drop", e => set(e.dataTransfer.files));
+  return st;
+}
+api("/api/ocr/status").then(s => {
+  $("ocrInfo").innerHTML = s.language === "vi" ? "OCR: đang dùng bộ nhận dạng <b>tiếng Việt</b> của Windows."
+    : s.language === "en" ? "OCR: đang dùng bộ nhận dạng tiếng Anh của Windows (đọc đúng số, ngày, MST, tiền; tên có thể mất dấu). " +
+      "Muốn đọc tiếng Việt có dấu: mở PowerShell bằng quyền Administrator, chạy " +
+      "<code>Add-WindowsCapability -Online -Name \"Language.OCR~~~vi-VN~0.0.1.0\"</code> rồi khởi động lại phần mềm."
+    : "OCR chưa sẵn sàng trên máy này – chỉ đọc được PDF có chữ và XML.";
+}).catch(() => {});
+const openFile = p => api("/api/open-folder?path=" + encodeURIComponent(p), {method: "POST"}).catch(e => alert(e.message));
+const invZone = dropZone("dropInv", "invFiles", "dropInvInfo"), bankZone = dropZone("dropBank", "bankFiles", "dropBankInfo");
+$("btnInvRead").onclick = async () => {
+  if (!invZone.files.length) return msg($("invMsg"), "Chọn file trước");
+  const fd = new FormData(); invZone.files.forEach(f => fd.append("files", f));
+  $("btnInvRead").disabled = true; msg($("invMsg"), `Đang đọc ${invZone.files.length} file...`, true); $("invRows").innerHTML = "";
+  try {
+    const r = await api("/api/docs/invoices", {method: "POST", body: fd});
+    msg($("invMsg"), `Đọc ${r.count} hóa đơn – ` + Object.entries(r.stat).map(([k, v]) => `${k}: ${v}`).join(" · "), true);
+    $("invMsg").insertAdjacentHTML("beforeend", ` <a href="#" id="invOpen">Mở file Excel</a>`);
+    $("invOpen").onclick = e => { e.preventDefault(); openFile(r.file); };
+    $("invRows").innerHTML = `<tr><th>File</th><th>Ký hiệu/Số</th><th>Ngày</th><th>Người bán</th><th class="r">Tổng TT</th><th>Kiểm tra cổng</th></tr>` +
+      r.sample.map(x => `<tr><td>${esc(x.file)}</td><td>${esc(x.khhdon || "")} ${esc(x.shdon || "")}</td><td>${esc(x.ngay_lap || "")}</td>
+        <td>${esc(x.nbten || "")}</td><td class="r">${money(x.tgtttbso)}</td>
+        <td><span class="badge ${String(x._check).startsWith("Khớp") ? "original" : x.loi ? "failed" : "rendered"}">${esc(x.loi && !x.shdon ? x.loi : x._check)}</span></td></tr>`).join("");
+  } catch (e) { msg($("invMsg"), e.message); }
+  $("btnInvRead").disabled = false;
+};
+$("btnBank").onclick = async () => {
+  if (!bankZone.files.length) return msg($("bankMsg"), "Chọn file sao kê trước");
+  const fd = new FormData(); bankZone.files.forEach(f => fd.append("files", f));
+  $("btnBank").disabled = true; msg($("bankMsg"), "Đang đọc và đối chiếu...", true); $("bankResult").innerHTML = "";
+  try {
+    const r = await api("/api/docs/bank", {method: "POST", body: fd});
+    msg($("bankMsg"), `Sao kê ${r.from} → ${r.to}: ${r.txns} giao dịch`, true);
+    $("bankResult").innerHTML = `<table>
+      <tr><td>Tiền vào (ghi có)</td><td class="r"><b>${money(r.tien_vao)}</b></td><td>Tiền ra (ghi nợ)</td><td class="r"><b>${money(r.tien_ra)}</b></td></tr>
+      <tr><td>Hóa đơn trong kỳ để ghép</td><td class="r">${r.invoices}</td><td><span class="badge original">Đã khớp</span></td><td class="r">${r.matched}</td></tr>
+      <tr><td><span class="badge rendered">Hóa đơn chưa thấy thanh toán</span></td><td class="r">${r.unpaid}</td>
+          <td><span class="badge failed">Giao dịch chưa có hóa đơn</span></td><td class="r">${r.unmatched}</td></tr></table>` +
+      (r.invoices ? "" : `<div class="msg err">Chưa có dữ liệu hóa đơn đã tải cho khoảng ngày này – hãy tải hóa đơn các tháng đó trước.</div>`) +
+      (r.errors.length ? `<div class="msg err">${r.errors.map(esc).join("<br>")}</div>` : "") +
+      `<div style="margin-top:6px"><a href="#" id="bankOpen">Mở file đối chiếu Excel</a></div>`;
+    $("bankOpen").onclick = e => { e.preventDefault(); openFile(r.file); };
+  } catch (e) { msg($("bankMsg"), e.message); }
+  $("btnBank").disabled = false;
+};
+function showPage() {
+  const p = PAGES.includes(location.hash.slice(1)) ? location.hash.slice(1) : "tai";
+  document.querySelectorAll(".page").forEach(el => el.classList.toggle("active", el.id === "page-" + p));
+  document.querySelectorAll("nav a").forEach(a => a.classList.toggle("active", a.dataset.page === p));
+  if (p === "dulieu" && !window.__dulieuLoaded) { window.__dulieuLoaded = true; loadInvoices(); }
+}
+window.addEventListener("hashchange", showPage);
+showPage();
+setInterval(() => { $("navJob").style.display = autoJob ? "" : "none"; }, 1500);
+
+(function init() {
+  { const n = new Date(), p1 = new Date(n.getFullYear(), n.getMonth() - 1, 1), p2 = new Date(n.getFullYear(), n.getMonth(), 0);
+    const ymd = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    $("aFrom").value = ymd(p1); $("aTo").value = ymd(p2); }
+  refreshBrowser();
+  const now = new Date(), first = new Date(now.getFullYear(), now.getMonth() - 1, 1), last = new Date(now.getFullYear(), now.getMonth(), 0);
+  const iso = d => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+  $("dFrom").value = iso(first); $("dTo").value = iso(last);
+  loadCaptcha(); loadSessions(); loadCompanies();
+  api("/api/watcher").then(renderWatcher).catch(() => {});
+})();
+</script>
+</body>
+</html>

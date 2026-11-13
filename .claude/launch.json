@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "hoadon",
+      "runtimeExecutable": "C:\\Users\\Haga\\Desktop\\Phan mem ke toan\\.venv\\Scripts\\python.exe",
+      "runtimeArgs": ["-m", "app.main"],
+      "cwd": "C:\\Users\\Haga\\Desktop\\Phan mem ke toan",
+      "port": 8000
+    }
+  ]
+}
