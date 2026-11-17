@@ -208,6 +208,15 @@ class BrowserWorker:
         p.goto(PORTAL + "/", wait_until="domcontentloaded", timeout=60000)
         return p
 
+    def _logged_page(self):
+        """Tab cổng thuế người dùng đã đăng nhập. Không bao giờ mở tab/trang mới lúc đồng bộ
+        (mở trang cổng lần 2 có thể làm mất phiên đăng nhập)."""
+        p = self._portal_page(create=False)
+        if p is None:
+            raise BrowserAuthError("Không thấy tab cổng thuế đã đăng nhập (tab bị đóng?). "
+                                   "Bấm 'Mở trang hóa đơn điện tử' và đăng nhập lại.")
+        return p
+
     def aux_page(self, key: str):
         """Tab phụ dùng riêng (vd trang tra cứu EasyInvoice). Chỉ gọi bên trong call()."""
         aux = self.__dict__.setdefault("_aux", {})
@@ -280,14 +289,14 @@ class BrowserWorker:
     # ---------- gọi API cổng thuế trong trang ----------
     def fetch(self, path: str, query: str | dict[str, Any] | None = None, action: str | None = None,
               extra_headers: dict[str, str] | None = None, auth: bool = True,
-              timeout: float = 120, raise_401: bool = True) -> FetchResult:
+              timeout: float = 120, raise_401: bool = True, retries: int = 3) -> FetchResult:
         """GET {API}{path}?{query}. query là chuỗi (giữ nguyên như web cổng) hoặc dict (sẽ được mã hóa)."""
         if isinstance(query, dict):
             query = urlencode(query)
         url = API + path + (("?" + query) if query else "")
 
         def run() -> FetchResult:
-            page = self._portal_page()
+            page = self._logged_page()
             headers = {
                 "Accept": "application/json, text/plain, */*",
                 "Accept-Language": "vi",
@@ -303,11 +312,11 @@ class BrowserWorker:
             headers.update(extra_headers or {})
             args = {"url": url, "headers": headers, "timeoutMs": int(timeout * 1000)}
             res: dict[str, Any] = {}
-            for attempt in range(3):
+            for attempt in range(retries):
                 try:
                     res = page.evaluate(_FETCH_JS, args)
                 except Exception as e:  # noqa: BLE001 - trang đang chuyển trang -> chờ rồi thử lại
-                    if attempt == 2:
+                    if attempt == retries - 1:
                         raise BrowserError(f"Lỗi chạy lệnh trong trang: {e}") from e
                     res = {"error": str(e)}
                 if not res.get("error"):
@@ -317,7 +326,7 @@ class BrowserWorker:
                 try:
                     page.wait_for_load_state("domcontentloaded", timeout=15000)
                 except Exception:  # noqa: BLE001
-                    page = self._portal_page()
+                    page = self._logged_page()
             if res.get("error"):
                 raise BrowserError(f"Không gọi được cổng thuế: {res['error']}")
             return FetchResult(res["status"], res["ctype"], base64.b64decode(res["b64"] or ""))
@@ -331,7 +340,7 @@ class BrowserWorker:
                    timeout: float = 120) -> list[FetchResult]:
         """Gọi song song nhiều lệnh GET (path, query, action) trong trang cổng thuế."""
         def run() -> list[FetchResult]:
-            page = self._portal_page()
+            page = self._logged_page()
             token = self._jwt()
             if not token:
                 raise BrowserAuthError("Chưa đăng nhập cổng thuế trên trình duyệt (hoặc phiên đã hết hạn).")

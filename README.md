@@ -1,4 +1,4 @@
-# Phần mềm đồng bộ hóa đơn điện tử
+﻿# AWBook – phần mềm hóa đơn điện tử, sao kê, đối chiếu thuế
 
 Web app chạy trên máy (Python + FastAPI), có các chức năng:
 
@@ -33,6 +33,53 @@ Kết quả lưu tại `OUTPUT_DIR` (mặc định `Documents\HoaDonDienTu`):
 - Chạy lại cùng khoảng tháng: file đã có sẽ được bỏ qua, chỉ tải phần còn thiếu.
 - Hóa đơn chưa có PDF gốc: xem cột "Ghi chú / lỗi" và "Link tra cứu" trong file tổng hợp để tải tay.
 - Luồng này chỉ lưu file trên máy, không cần Supabase.
+
+## Lấy PDF gốc không cần đăng nhập cổng (Chrome chạy ẩn)
+
+Khi tải PDF gốc, ngoài tải HTTP thường và connector riêng (MISA…), phần mềm mở Chrome/Edge **chạy ẩn** (hồ sơ trống, không đụng Chrome của bạn)
+tại link tra cứu in trong XML hoặc trang tra cứu của NCC (`lookup_pages` trong `providers.json`), tự gõ mã tra cứu, bấm Tra cứu và bắt PDF
+(file tải về, ZIP, JSON chứa PDF base64, tab mới, blob). Trang chỉ hiện hóa đơn dạng HTML thì in trang đó ra PDF. PDF phải chứa đúng số hóa đơn
++ ký hiệu/MST người bán mới được nhận. Trang **bắt captcha / kiểm tra chống robot** (EasyInvoice, Thái Sơn, BKAV reCAPTCHA, Cloudflare…) thì
+phần mềm dừng và ghi "cần captcha" – không vượt captcha. Tắt bằng `HEADLESS_PDF=false` trong `.env`.
+
+Trên mục **Tải hóa đơn** có thêm: *Lấy PDF* theo link + mã tra cứu (lưu vào `<nơi lưu>\TraCuuPDF`) và *Lấy bù PDF gốc còn thiếu* cho các tháng đã tải.
+
+## Dự báo thuế GTGT (tờ khai 01/GTGT)
+
+Mục **Dự báo VAT**: chọn MST, kỳ (tháng/quý), nhập **[22]** (số thuế còn được khấu trừ kỳ trước – tự gợi ý từ [43] của kỳ trước đã dự báo),
+bấm **Dự báo VAT**. Phần mềm cộng hóa đơn đã tải (`.dulieu_YYYY-MM.json` + XML) theo từng chỉ tiêu [21]…[43] của mẫu 01/GTGT (TT80/2021):
+bỏ hóa đơn bị thay thế/bị hủy; mua vào chỉ hóa đơn GTGT có thuế suất vào [23]/[24]; bán ra 8% cộng vào [32]/[33] và lập **Phụ lục giảm thuế GTGT**.
+Kết quả lưu ở `<MST>\DuBaoVAT\<kỳ>\`: `ToKhai_01GTGT_*.pdf` (tờ khai, phụ lục 8%, bảng kê mua vào/bán ra, bảng kê chi tiết từng mặt hàng,
+lưu ý), `.xlsx` và `.html` để in.
+
+**Tự động:** từ 00:00 ngày đầu tháng (đầu quý nếu chọn kê khai theo quý), phần mềm tự dự báo kỳ vừa hết và báo lên chuông 🔔 + thông báo Windows.
+Nếu Chrome của phần mềm đang đăng nhập đúng MST, phần mềm tải đủ hóa đơn kỳ đó trước rồi mới dự báo; chưa đăng nhập thì dự báo tạm bằng dữ liệu
+đang có và nhắc đăng nhập (đăng nhập xong sẽ tự tải và dự báo lại). Phần mềm phải đang mở. Đây là **bản dự báo để kiểm tra**, không thay thế tờ khai nộp qua eTax/HTKK.
+
+Mẫu tờ khai tự chọn theo kỳ: trước 01/7/2026 dùng mẫu 01/GTGT theo TT 80/2021; từ kỳ tháng 7/2026 (quý III/2026) dùng mẫu theo
+**TT 89/2026/TT-BTC** (thêm [32b], [34a]; [27]=[29]+[30]+[32]+[32a]−[32b]; [34]=[26]+[27]+[34a]). Mỗi bản in có mục "Căn cứ pháp lý" kèm link.
+
+## Trợ lý AI (bóng chat 💬 góc phải dưới)
+
+- Khách mở là chat được ngay (dùng khóa dựng sẵn `app/ai_builtin.json` của nhà phát hành; bản .exe không hiện phần khóa API).
+- Tra luật trực tuyến: bài mới nhất trên MISA AMIS / MISA SME / meInvoice (API tìm kiếm WordPress công khai) + kho kiến thức
+  `app/ai_luat.md` đã kiểm chứng trên thuvienphapluat.vn (trang này chặn truy cập tự động nên không tra trực tiếp).
+- 👥 Nhóm chat: Kế toán trưởng (Gemini Flash) trả lời + làm việc trên app; Chuyên viên thuế (Gemini Flash-Lite) soát căn cứ;
+  Kiểm soát rủi ro (Gemma 4) nêu rủi ro, việc cần làm. Thêm/bớt thành viên: mục "group" trong `data/ai.json`.
+- Gói Gemini miễn phí: Flash ~20 lượt/ngày; hết lượt app tự chuyển Flash-Lite. Nhiều khách dùng chung nên bật trả phí cho khóa.
+
+## Trợ lý AI – chi tiết cài đặt
+
+Chat tiếng Việt để làm việc trên app ("tải hóa đơn tháng 10 về cho tôi", "dự báo VAT quý 3") và hỏi thuế/luật. Câu hỏi luật được tra
+trên thuvienphapluat.vn, vbpl.vn, chinhphu.vn, gdt.gov.vn, mof.gov.vn… (công cụ web search/fetch của Claude, giới hạn domain) và trả lời
+kèm điều khoản, link. Chọn AI trong ô "Cài đặt AI":
+- **Google Gemini – miễn phí (mặc định):** lấy khóa tại https://aistudio.google.com/apikey (đăng nhập Google, không cần thẻ). Gói free giới
+  hạn số lượt/phút và /ngày; hết lượt model chính thì tự chuyển sang `gemini-flash-lite-latest`. Khóa Gemini cũng dùng để tra cứu luật
+  (Google Search) cho mọi lựa chọn AI miễn phí.
+- **Groq, OpenRouter (model `:free`)** – miễn phí có giới hạn; **Ollama** – chạy trên máy, miễn phí hoàn toàn (cần máy mạnh).
+- **Claude (Anthropic)** – trả phí, mạnh nhất; tra cứu luật bằng web search riêng.
+Khóa lưu ở `data/ai.json` trên máy (hoặc biến `GEMINI_API_KEY`, `GROQ_API_KEY`, `OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY` trong `.env`).
+Trợ lý không nhập mật khẩu và không tự giải captcha.
 
 ## Nguồn dữ liệu hóa đơn
 
@@ -89,3 +136,4 @@ supabase/schema.sql     bảng + bucket
 - **Mẫu URL của các NCC trong `providers.json` đều đang `verified: false`**. Cần thử với hóa đơn thật của từng NCC, rồi sửa mẫu URL hoặc viết connector trong `plugins.py`. Ở mức tối thiểu, phần mềm luôn thử link tra cứu in trong XML và tự dò link PDF trong trang.
 - Trang tra cứu nào **bắt buộc captcha** thì phần mềm không vượt qua. Hóa đơn đó sẽ hiện link "Trang tra cứu" để bạn tải PDF tay rồi bấm "Upload PDF".
 - Phần mềm không lưu mật khẩu cổng thuế. Phiên đăng nhập chỉ nằm trong RAM và mất khi tắt chương trình.
+

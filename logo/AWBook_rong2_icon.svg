@@ -1,0 +1,39 @@
+<svg viewBox="-14 -20 142 128" width="512" height="512" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="hb" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#16489a"/><stop offset="1" stop-color="#051632"/></linearGradient>
+<linearGradient id="hgu" gradientUnits="userSpaceOnUse" x1="0" y1="30" x2="0" y2="80"><stop offset="0" stop-color="#fff3b8"/><stop offset=".5" stop-color="#f4c042"/><stop offset="1" stop-color="#d98c0a"/></linearGradient><linearGradient id="hg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff3b8"/><stop offset=".5" stop-color="#f4c042"/><stop offset="1" stop-color="#d98c0a"/></linearGradient>
+<linearGradient id="hd" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f0b73a"/><stop offset="1" stop-color="#b86f05"/></linearGradient><filter id="gl" filterUnits="userSpaceOnUse" x="-30" y="-30" width="170" height="170"><feDropShadow dx="0" dy="1.2" stdDeviation="1.2" flood-color="#000" flood-opacity=".5"/></filter></defs>
+<polygon points="26,8 74,8 98,50 74,92 26,92 2,50" fill="url(#hb)" stroke="url(#hg)" stroke-width="3.6" stroke-linejoin="round"/>
+<polygon points="29,15 71,15 91,50 71,85 29,85 9,50" fill="none" stroke="#3b6fc4" stroke-width="1" opacity=".5"/>
+
+<g filter="url(#gl)" stroke="url(#hgu)" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <!-- A -->
+  <path d="M10 76 L25 38 L40 76" stroke-width="7"/>
+  <path d="M17 62 L33 62" stroke-width="5"/>
+  <!-- W = thân rồng -->
+  <path d="M45 40 C48 52 50 66 53 76 C56 66 60 54 64 46 C67 54 70 66 74 76 C77 66 80 54 84 44" stroke-width="7"/>
+</g>
+<!-- gai lưng dọc đỉnh W -->
+<g fill="url(#hg)"><path d="M60 46 L64 36 L68 46 Z"/><path d="M41 42 L45 32 L49 42 Z"/></g>
+<!-- đuôi rồng: chân trái A cuộn lại -->
+<path d="M11 74 C7 83 -6 83 -5 72 C-4 65 5 65 6 71" stroke="url(#hg)" stroke-width="5" fill="none" stroke-linecap="round" filter="url(#gl)"/>
+<!-- đầu rồng -->
+<g transform="translate(80 42) rotate(-28) scale(.54)" filter="url(#gl)">
+<!-- sừng gạc + bờm lửa phía sau -->
+<path d="M10 -8 C2 -22 -10 -30 -26 -28 C-16 -25 -8 -18 -4 -8 Z" fill="url(#hg)"/>
+<path d="M-6 -20 C-8 -28 -14 -33 -22 -34 C-17 -30 -14 -26 -13 -21 Z" fill="url(#hg)" opacity=".9"/>
+<path d="M2 -2 C-8 -8 -18 -6 -28 -14 C-20 -4 -14 2 -8 4 C-16 4 -24 8 -32 6 C-22 12 -12 12 -4 10 Z" fill="url(#hd)"/>
+<!-- hàm dưới -->
+<path d="M6 10 C14 10 24 9 34 8 C40 8 46 8 50 5 C48 12 42 15 34 16 C24 18 12 20 4 16 Z" fill="url(#hd)"/>
+<!-- đầu + hàm trên -->
+<path d="M-2 6 C-4 -4 4 -12 16 -13 C26 -14 34 -12 42 -9 C46 -14 52 -13 54 -9 C56 -5 52 -2 48 -1 C44 0 40 2 34 3 C26 4 18 6 12 8 C6 10 0 10 -2 6 Z" fill="url(#hg)"/>
+<!-- miệng mở -->
+<path d="M14 7 C22 4 34 3 46 0 C40 4 30 8 18 9 Z" fill="#051632"/>
+<path d="M30 3.500 L32 8 L34 3 Z M40 1 L41.500 5 L43.500 .5 Z" fill="#fff6d0"/>
+<!-- mắt -->
+<path d="M17 -5 C21 -10 29 -9 32 -5 C28 -2 21 -2 17 -5 Z" fill="#fff"/>
+<circle cx="26" cy="-5.500" r="2.600" fill="#051632"/><circle cx="26.800" cy="-6.300" r=".9" fill="#fff"/>
+<path d="M14 -9 C20 -13 30 -12 36 -8" fill="none" stroke="#a86300" stroke-width="1.8" stroke-linecap="round"/>
+<circle cx="49" cy="-7" r="1.3" fill="#7a4a00"/>
+<!-- râu + ria -->
+<path d="M46 -2 C56 -6 62 2 72 -3 C77 -6 77 1 72 2" fill="none" stroke="url(#hg)" stroke-width="2.2" stroke-linecap="round"/>
+<path d="M34 16 C34 26 26 30 18 27" fill="none" stroke="url(#hg)" stroke-width="2.2" stroke-linecap="round"/>
+</g></svg>

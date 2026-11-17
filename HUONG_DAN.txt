@@ -1,0 +1,27 @@
+﻿AWBook - BAN DESKTOP (Hoa don dien tu, sao ke, doi chieu thue)
+==========================================
+
+CACH DUNG
+  1. Giai nen ca thu muc (neu nhan file .zip), de o bat ky dau (Desktop, o D...). KHONG chay trong file zip.
+  2. Bam dup AWBook.exe -> cua so phan mem hien ra. Dong cua so -> phan mem tu thoat.
+  3. Trang "Tai hoa don": bam "1. Mo trang hoa don dien tu" -> dang nhap cong thue tren cua so Chrome vua mo
+     (tu nhap mat khau + captcha) -> chon ngay, loai hoa don -> "Bat dau tai".
+
+YEU CAU MAY
+  - Windows 10/11 (64 bit) co Google Chrome hoac Microsoft Edge (Windows 10/11 deu co san Edge).
+  - Khong can cai Python, khong can cai them gi.
+  - Doc hoa don/sao ke scan (OCR): dung bo OCR co san cua Windows. De doc co dau tieng Viet, mo PowerShell
+    quyen Administrator va chay:  Add-WindowsCapability -Online -Name "Language.OCR~~~vi-VN~0.0.1.0"
+
+NOI LUU DU LIEU
+  - Hoa don tai ve: Documents\HoaDonDienTu\<MST>\<thang>\...   (doi duoc bang OUTPUT_DIR trong file .env)
+  - Cau hinh, lich tu dong, ho so dang nhap Chrome, log: thu muc "data" canh file exe.
+    (Thu muc "data" chua phien dang nhap cong thue: KHONG gui cho nguoi khac.)
+  - Muon dung kho Supabase / TConnect: copy .env.example thanh .env (canh file exe) roi dien khoa. Khong bat buoc.
+
+LUU Y
+  - Lan dau chay, Windows SmartScreen co the canh bao vi ung dung chua co chu ky so:
+    chon "More info" -> "Run anyway".
+  - Neu phan mem bao cong 8000 ban, no tu dung cong khac.
+  - Loi xem trong file data\app.log.
+

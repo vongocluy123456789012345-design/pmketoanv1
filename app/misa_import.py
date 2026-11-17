@@ -1,0 +1,725 @@
+"""Chuyển hàng loạt hóa đơn (PDF / XML / ZIP / ảnh) vào FILE MẪU NHẬP KHẨU của MISA (mua vào hoặc bán ra).
+
+Mỗi hóa đơn lấy dữ liệu theo thứ tự chính xác -> nhanh:
+  1. XML hóa đơn (file tải lên, hoặc XML/JSON chi tiết đã tải từ cổng có trên máy) – chính xác 100%.
+  2. PDF có lớp chữ: đọc phần đầu hóa đơn + bảng hàng hóa; chỉ nhận khi tổng các dòng KHỚP tổng tiền hàng.
+  3. Còn lại (PDF bố cục lạ, scan/ảnh): AI đọc thông minh (Gemini, chạy song song) -> kiểm tra lại tổng.
+Rồi ghép từng dòng hàng vào đúng cột của file mẫu (tự nhận cột theo tên tiêu đề; cột lạ nhờ AI đoán 1 lần).
+"""
+from __future__ import annotations
+
+import io
+import json
+import re
+import threading
+import uuid
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+from .config import settings
+from .docreader import fold, iter_files, parse_pdf_text, pdf_text, vn_num
+
+# ------------------------------------------------------------------ nhận cột của file mẫu
+# khóa -> các cụm từ (đã bỏ dấu, chữ thường) có thể xuất hiện trong tiêu đề cột của mẫu MISA
+FIELDS: dict[str, list[str]] = {
+    "ngay_hach_toan": ["ngay hach toan"],
+    "ngay_chung_tu": ["ngay chung tu", "ngay phieu", "ngay nhap", "ngay xuat"],
+    "so_chung_tu": ["so chung tu", "so phieu nhap", "so phieu xuat", "so phieu"],
+    "ngay_hoa_don": ["ngay hoa don", "ngay hd"],
+    "mau_so": ["mau so hoa don", "mau so hd", "ky hieu mau", "mau so"],
+    "ky_hieu": ["ky hieu hoa don", "ky hieu hd", "ky hieu"],
+    "so_hoa_don": ["so hoa don", "so hd"],
+    "ma_doi_tuong": ["ma nha cung cap", "ma ncc", "ma khach hang", "ma kh", "ma doi tuong"],
+    "ten_doi_tuong": ["ten nha cung cap", "ten ncc", "ten khach hang", "ten kh", "ten doi tuong", "nha cung cap",
+                      "khach hang", "don vi ban", "don vi mua"],
+    "dia_chi": ["dia chi"],
+    "mst": ["ma so thue", "mst"],
+    "nguoi_giao_nhan": ["nguoi giao hang", "nguoi nhan hang", "nguoi mua hang", "nguoi giao", "nguoi nhan"],
+    "dien_giai": ["dien giai", "ly do", "noi dung"],
+    "ma_hang": ["ma hang", "ma vat tu", "ma hhdv", "ma san pham"],
+    "ten_hang": ["ten hang", "ten vat tu", "ten hhdv", "ten san pham", "dien giai hang", "ten hang hoa"],
+    "dvt": ["don vi tinh", "dvt"],
+    "so_luong": ["so luong"],
+    "don_gia": ["don gia"],
+    "thanh_tien": ["thanh tien", "tien hang"],
+    "ty_le_ck": ["ty le ck", "ty le chiet khau", "% ck", "% chiet khau", "tl ck"],
+    "tien_ck": ["tien chiet khau", "tien ck"],
+    "thue_suat": ["% thue gtgt", "thue suat", "% thue", "ty le thue"],
+    "tien_thue": ["tien thue gtgt", "tien thue", "thue gtgt"],
+    "tong_tt": ["tong tien thanh toan", "tong thanh toan", "tong cong"],
+    "tk_no": ["tk no"],
+    "tk_co": ["tk co"],
+    "tk_kho": ["tk kho", "tk chi phi"],
+    "tk_cong_no": ["tk cong no", "tk phai tra", "tk phai thu"],
+    "tk_doanh_thu": ["tk doanh thu"],
+    "tk_thue": ["tk thue gtgt", "tk thue"],
+    "ma_kho": ["ma kho", "kho"],
+    "loai_tien": ["loai tien"],
+    "ty_gia": ["ty gia"],
+    "hinh_thuc_tt": ["hinh thuc thanh toan", "phuong thuc thanh toan"],
+    "ma_cqt": ["ma cqt", "ma co quan thue"],
+    "ma_tra_cuu": ["ma tra cuu"],
+    "nhom_hhdv": ["nhom hhdv", "nhom hang hoa dich vu mua vao"],
+}
+ACCOUNTS = {"purchase": {"tk_kho": "1561", "tk_cong_no": "331", "tk_thue": "1331"},
+            "sold": {"tk_doanh_thu": "5111", "tk_cong_no": "131", "tk_thue": "33311", "tk_gia_von": "632", "tk_kho": "1561"}}
+
+
+def _norm(s: Any) -> str:
+    s = fold(str(s or "")).lower().replace("(*)", "").replace("*", "")
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9%/ ]", " ", s)).strip()
+
+
+def map_header(title: str) -> str | None:
+    t = _norm(title)
+    if not t:
+        return None
+    best, blen = None, 0
+    for key, pats in FIELDS.items():
+        for p in pats:
+            if (t == p or re.search(rf"(^| ){re.escape(p)}( |$)", t)) and len(p) > blen:
+                # tránh nhầm: "thanh tien" trong "thanh tien quy doi", "don gia" trong "don gia sau thue"
+                if key in ("thanh_tien", "don_gia") and re.search(r"quy doi|sau thue|thue", t.replace(p, "")):
+                    continue
+                best, blen = key, len(p)
+    return best
+
+
+# ------------------------------------------------------------------ mở file mẫu ở mọi định dạng
+def _sheet_title(name: Any, used: set[str]) -> str:
+    t = re.sub(r"[\[\]\*\?/\\:]", " ", str(name or "Sheet")).strip()[:31] or "Sheet"
+    base, i = t, 2
+    while t in used:
+        t = f"{base[:27]} ({i})"
+        i += 1
+    used.add(t)
+    return t
+
+
+def _book_from_tables(tables: list[tuple[str, list[list[Any]]]]):
+    from openpyxl import Workbook
+    wb = Workbook()
+    wb.remove(wb.active)
+    used: set[str] = set()
+    for name, rows in tables or [("Sheet1", [])]:
+        ws = wb.create_sheet(_sheet_title(name, used))
+        for r, row in enumerate(rows, 1):
+            for c, v in enumerate(row, 1):
+                if v not in (None, ""):
+                    ws.cell(r, c, v)
+    return wb
+
+
+def _xls_tables(data: bytes):
+    import xlrd
+    book = xlrd.open_workbook(file_contents=data)
+    out = []
+    for sh in book.sheets():
+        rows = []
+        for r in range(sh.nrows):
+            row = []
+            for c in range(sh.ncols):
+                cell = sh.cell(r, c)
+                v = cell.value
+                if cell.ctype == xlrd.XL_CELL_DATE:
+                    try:
+                        v = xlrd.xldate.xldate_as_datetime(v, book.datemode)
+                    except Exception:  # noqa: BLE001
+                        pass
+                elif cell.ctype == xlrd.XL_CELL_NUMBER and float(v).is_integer():
+                    v = int(v)
+                row.append(v)
+            rows.append(row)
+        out.append((sh.name, rows))
+    return out
+
+
+def _ods_tables(data: bytes):
+    import zipfile
+    import xml.etree.ElementTree as ET
+    ns = {"table": "urn:oasis:names:tc:opendocument:xmlns:table:1.0",
+          "office": "urn:oasis:names:tc:opendocument:xmlns:office:1.0",
+          "text": "urn:oasis:names:tc:opendocument:xmlns:text:1.0"}
+    q = lambda p, n: f"{{{ns[p]}}}{n}"  # noqa: E731
+    root = ET.fromstring(zipfile.ZipFile(io.BytesIO(data)).read("content.xml"))
+    out = []
+    for t in root.iter(q("table", "table")):
+        rows = []
+        for tr in t.iter(q("table", "table-row")):
+            row: list[Any] = []
+            for tc in tr:
+                if tc.tag not in (q("table", "table-cell"), q("table", "covered-table-cell")):
+                    continue
+                typ = tc.get(q("office", "value-type"))
+                if typ in ("float", "percentage", "currency"):
+                    v: Any = float(tc.get(q("office", "value")) or 0)
+                    v = int(v) if v.is_integer() else v
+                elif typ == "date":
+                    v = tc.get(q("office", "date-value"))
+                else:
+                    v = "\n".join("".join(p.itertext()) for p in tc.iter(q("text", "p"))) or None
+                n = int(tc.get(q("table", "number-columns-repeated")) or 1)
+                row += [v] * (n if v not in (None, "") else min(n, 1))
+            n = int(tr.get(q("table", "number-rows-repeated")) or 1)
+            rows += [row] * (n if any(x not in (None, "") for x in row) else min(n, 1))
+        while rows and not any(x not in (None, "") for x in rows[-1]):
+            rows.pop()
+        out.append((t.get(q("table", "name")) or "Sheet", rows))
+    return out
+
+
+def _spreadsheetml_tables(text: str):
+    """File "XML Spreadsheet 2003" (nhiều phần mềm xuất ra với đuôi .xls)."""
+    import xml.etree.ElementTree as ET
+    ss = "urn:schemas-microsoft-com:office:spreadsheet"
+    root = ET.fromstring(re.sub(r"^\s*<\?xml[^>]*\?>", "", text))  # đã giải mã sẵn -> bỏ khai báo encoding
+    out = []
+    for w in root.iter(f"{{{ss}}}Worksheet"):
+        rows = []
+        for r in w.iter(f"{{{ss}}}Row"):
+            ri = r.get(f"{{{ss}}}Index")
+            while ri and len(rows) < int(ri) - 1:
+                rows.append([])
+            row: list[Any] = []
+            for c in r.iter(f"{{{ss}}}Cell"):
+                ci = c.get(f"{{{ss}}}Index")
+                while ci and len(row) < int(ci) - 1:
+                    row.append(None)
+                d = c.find(f"{{{ss}}}Data")
+                v: Any = "".join(d.itertext()) if d is not None else None
+                if d is not None and d.get(f"{{{ss}}}Type") == "Number":
+                    try:
+                        v = float(v)
+                        v = int(v) if v.is_integer() else v
+                    except (TypeError, ValueError):
+                        pass
+                row.append(v)
+            rows.append(row)
+        out.append((w.get(f"{{{ss}}}Name") or "Sheet", rows))
+    return out
+
+
+def _html_tables(text: str):
+    """File "xls" thật ra là bảng HTML (MISA, phần mềm khác hay xuất kiểu này)."""
+    import lxml.html
+    doc = lxml.html.fromstring(text)
+    out = []
+    for i, t in enumerate(doc.iter("table"), 1):
+        rows = []
+        for tr in t.iter("tr"):
+            row: list[Any] = []
+            for td in tr:
+                if td.tag not in ("td", "th"):
+                    continue
+                v = " ".join(td.text_content().split()) or None
+                row += [v] * max(1, int(td.get("colspan") or 1) if str(td.get("colspan") or "1").isdigit() else 1)
+            rows.append(row)
+        if rows:
+            out.append((f"Sheet{i}", rows))
+    return out
+
+
+def _csv_tables(text: str):
+    import csv
+    sample = text[:20000]
+    try:
+        dialect = csv.Sniffer().sniff(sample, delimiters=",;\t|")
+    except csv.Error:
+        dialect = csv.excel_tab if sample.count("\t") > sample.count(",") else csv.excel
+    rows = [list(r) for r in csv.reader(io.StringIO(text), dialect)]
+    return [("Sheet1", rows)]
+
+
+def _decode(data: bytes) -> str:
+    if data[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        return data.decode("utf-16")
+    for enc in ("utf-8-sig", "cp1258", "cp1252"):
+        try:
+            return data.decode(enc)
+        except UnicodeDecodeError:
+            continue
+    return data.decode("latin-1")
+
+
+def load_any_workbook(data: bytes):
+    """Mở file mẫu ở BẤT KỲ định dạng bảng tính thường gặp -> workbook openpyxl:
+    .xlsx/.xlsm/.xltx/.xltm, .xls (Excel 97-2003), .ods (LibreOffice/OpenOffice), .csv/.txt,
+    và file "xls" thực chất là HTML hoặc XML Spreadsheet 2003."""
+    from openpyxl import load_workbook
+    if not data:
+        raise ValueError("File mẫu rỗng")
+    if data[:2] == b"PK":
+        import zipfile
+        try:
+            names = zipfile.ZipFile(io.BytesIO(data)).namelist()
+        except zipfile.BadZipFile:
+            names = []
+        if "content.xml" in names and not any(n.startswith("xl/") for n in names):
+            return _book_from_tables(_ods_tables(data))
+        wb = load_workbook(io.BytesIO(data))
+        if wb.template:  # .xltx/.xltm -> lưu ra dạng sổ thường
+            wb.template = False
+        return wb
+    if data[:8] == b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1":
+        try:
+            return _book_from_tables(_xls_tables(data))
+        except Exception as e:  # noqa: BLE001
+            raise ValueError(f"Không đọc được file Excel .xls: {e}") from e
+    text = _decode(data)
+    head = text[:3000].lower()
+    if "urn:schemas-microsoft-com:office:spreadsheet" in head:
+        return _book_from_tables(_spreadsheetml_tables(text))
+    if "<table" in text[:200000].lower() or "<html" in head:
+        tables = _html_tables(text)
+        if tables:
+            return _book_from_tables(tables)
+    if "\x00" in text[:1000]:
+        raise ValueError("Không nhận ra định dạng file mẫu (hỗ trợ .xlsx, .xlsm, .xls, .ods, .csv, .txt, .xml, .html)")
+    return _book_from_tables(_csv_tables(text))
+
+
+def read_template(data: bytes):
+    """-> (workbook, sheet, dòng tiêu đề, {cột: khóa}, [tiêu đề chưa nhận được])"""
+    wb = load_any_workbook(data)
+    best = None
+    for ws in wb.worksheets:
+        for r in range(1, min(ws.max_row, 20) + 1):
+            cols = {c.column: map_header(c.value) for c in ws[r] if isinstance(c.value, str) and c.value.strip()}
+            hits = sum(1 for v in cols.values() if v)
+            if hits >= 3 and (best is None or hits > best[0]):
+                best = (hits, ws, r, cols)
+    if not best:
+        raise ValueError("Không nhận ra dòng tiêu đề cột trong file mẫu (cần các cột như Ngày hóa đơn, Số hóa đơn, "
+                         "Tên hàng, Số lượng, Đơn giá, Thành tiền…)")
+    _, ws, hr, cols = best
+    unknown = [ws.cell(hr, c).value for c, k in cols.items() if not k]
+    return wb, ws, hr, {c: k for c, k in cols.items() if k}, unknown
+
+
+# ------------------------------------------------------------------ đọc hóa đơn
+def _num(v: Any) -> float:
+    try:
+        return float(v or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _rate_pct(ts: Any) -> float | None:
+    m = re.search(r"(\d+(?:[.,]\d+)?)", str(ts or ""))
+    if not m:
+        return None
+    v = float(m.group(1).replace(",", "."))
+    return v * 100 if v < 1 and "%" not in str(ts) and v else v
+
+
+def from_xml(data: bytes) -> dict[str, Any]:
+    from .gdt.xml_parser import parse_invoice_xml
+    p = parse_invoice_xml(data)
+    nb, nm = p.get("nguoi_ban") or {}, p.get("nguoi_mua") or {}
+    items = []
+    for h in p.get("hang_hoa") or []:
+        tc = str(h.get("tinh_chat") or "1")
+        if tc == "4":
+            continue
+        tt = _num(h.get("thanh_tien")) * (-1 if tc == "3" else 1)
+        pct = _rate_pct(h.get("thue_suat"))
+        items.append({"ma": h.get("ma"), "ten": h.get("ten"), "dvt": h.get("dvt"), "sl": h.get("so_luong"),
+                      "dg": h.get("don_gia"), "tt": tt, "ck": h.get("chiet_khau"), "ts": h.get("thue_suat"),
+                      "thue": round(tt * pct / 100) if pct is not None else 0})
+    return {"khmshdon": p.get("khmshdon"), "khhdon": p.get("khhdon"), "shdon": str(int(p["shdon"])) if str(p.get("shdon") or "").isdigit() else p.get("shdon"),
+            "ngay_lap": (p.get("ngay_lap") or "")[:10], "nbmst": nb.get("mst"), "nbten": nb.get("ten"), "nbdchi": nb.get("dia_chi"),
+            "nmmst": nm.get("mst"), "nmten": nm.get("ten") or nm.get("ho_ten_nguoi_mua"), "nmdchi": nm.get("dia_chi"),
+            "tgtcthue": p.get("tong_chua_thue"), "tgtthue": p.get("tong_thue"), "tgtttbso": p.get("tong_thanh_toan"),
+            "htttoan": p.get("htttoan"), "mccqt": p.get("mccqt"), "ma_tra_cuu": p.get("lookup_code"), "items": items,
+            "nguon": "XML"}
+
+
+def from_portal_json(d: dict[str, Any]) -> dict[str, Any]:
+    items = []
+    for h in d.get("hdhhdvu") or []:
+        if h.get("tchat") == 4:
+            continue
+        tt = _num(h.get("thtien")) * (-1 if h.get("tchat") == 3 else 1)
+        items.append({"ma": h.get("mhhdvu"), "ten": h.get("ten"), "dvt": h.get("dvtinh"), "sl": h.get("sluong"),
+                      "dg": h.get("dgia"), "tt": tt, "ck": h.get("stckhau"), "ts": h.get("ltsuat") or h.get("tsuat"),
+                      "thue": _num(h.get("tthue")) if h.get("tthue") is not None else 0})
+    return {"items": items, "nbdchi": d.get("nbdchi"), "nmdchi": d.get("nmdchi"), "htttoan": d.get("thtttoan")}
+
+
+_ITEM_COLS = {"ten": ["ten hang", "ten hhdv", "ten hang hoa", "hang hoa", "dien giai", "description", "ten san pham",
+                      "noi dung"],
+              "dvt": ["don vi tinh", "dvt", "unit"], "sl": ["so luong", "quantity", "sl"],
+              "dg": ["don gia", "unit price", "price"], "tt": ["thanh tien", "amount", "tien hang"],
+              "ts": ["thue suat", "% thue", "vat rate", "ts"], "thue": ["tien thue", "vat amount"],
+              "ma": ["ma hang", "ma hhdv", "ma sp", "code"], "ck": ["chiet khau", "discount"]}
+
+
+def items_from_pdf_tables(data: bytes) -> list[dict[str, Any]]:
+    """Đọc bảng hàng hóa trong PDF có lớp chữ (theo dòng tiêu đề bảng: Tên hàng, ĐVT, Số lượng, Đơn giá, Thành tiền…)."""
+    import pdfplumber
+    items: list[dict[str, Any]] = []
+    with pdfplumber.open(io.BytesIO(data)) as pdf:
+        for page in pdf.pages[:4]:
+            for tb in page.extract_tables() or []:
+                hdr_i, cmap = None, {}
+                for i, row in enumerate(tb[:6]):
+                    m = {}
+                    for j, cell in enumerate(row):
+                        t = _norm(cell)
+                        for k, pats in _ITEM_COLS.items():
+                            if k not in m.values() and any(p == t or t.startswith(p) or f" {p}" in f" {t}" for p in pats):
+                                m[j] = k
+                                break
+                    if "ten" in m.values() and "tt" in m.values():
+                        hdr_i, cmap = i, m
+                        break
+                if hdr_i is None:
+                    continue
+                for row in tb[hdr_i + 1:]:
+                    rec = {k: (row[j] if j < len(row) else None) for j, k in cmap.items()}
+                    name = re.sub(r"\s+", " ", str(rec.get("ten") or "")).strip()
+                    tt = vn_num(rec.get("tt"))
+                    if not name or tt is None or re.fullmatch(r"[\d\s()=x+\-*/.,ABC]*", name):
+                        continue  # dòng số thứ tự cột (1)(2)(3)… hoặc dòng trống
+                    if re.match(r"(?i)(cong tien|tong cong|tong tien|thue suat|tien thue)", fold(name)):
+                        continue
+                    ts = rec.get("ts")
+                    items.append({"ma": rec.get("ma"), "ten": name, "dvt": rec.get("dvt"), "sl": vn_num(rec.get("sl")),
+                                  "dg": vn_num(rec.get("dg")), "tt": tt, "ck": vn_num(rec.get("ck")),
+                                  "ts": (str(ts).strip() if ts else None), "thue": vn_num(rec.get("thue"))})
+    return items
+
+
+def items_ok(inv: dict[str, Any]) -> bool:
+    """Tổng thành tiền các dòng phải khớp tổng tiền hàng của hóa đơn (sai số 0,5% hoặc 1.000đ)."""
+    items, total = inv.get("items") or [], inv.get("tgtcthue")
+    if not items or total is None:
+        return False
+    s = sum(_num(i.get("tt")) for i in items)
+    return abs(s - float(total)) <= max(1000, abs(float(total)) * 0.005)
+
+
+AI_PROMPT = """Bạn trích xuất dữ liệu hóa đơn GTGT Việt Nam từ văn bản (đọc từ PDF/ảnh). Trả về DUY NHẤT 1 JSON:
+{"khmshdon":"1","khhdon":"C26TAA","shdon":"123","ngay_lap":"YYYY-MM-DD","nbmst":"","nbten":"","nbdchi":"","nmmst":"","nmten":"",
+"nmdchi":"","htttoan":"","tgtcthue":0,"tgtthue":0,"tgtttbso":0,"mccqt":"","ma_tra_cuu":"",
+"items":[{"ma":"","ten":"","dvt":"","sl":0,"dg":0,"tt":0,"ck":0,"ts":"10%","thue":0}]}
+Quy tắc: số tiền là số (không dấu chấm phân cách nghìn); tt = thành tiền chưa thuế từng dòng; ts dạng "8%", "10%",
+"5%", "0%", "KCT" hoặc "KKKNT"; dòng chiết khấu thương mại ghi tt âm; bỏ dòng tổng cộng; không bịa – thiếu thì để rỗng/0."""
+
+
+def ai_extract(text: str) -> dict[str, Any]:
+    from . import assistant
+    if not (assistant.key_for("gemini") or assistant.provider() != "gemini"):
+        raise RuntimeError("Chưa có khóa AI")
+    p = "gemini" if assistant.key_for("gemini") else assistant.provider()
+    models = ["gemini-flash-lite-latest", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-flash-latest"] \
+        if p == "gemini" else [assistant.model_for(p)]
+    last = None
+    for m in models:
+        try:
+            out = assistant._post_plain(p, m, [{"role": "system", "content": AI_PROMPT},
+                                               {"role": "user", "content": text[:14000]}])
+            js = re.search(r"\{.*\}", out, re.S)
+            if js:
+                d = json.loads(js.group(0))
+                d["nguon"] = f"AI ({m})"
+                return d
+        except Exception as e:  # noqa: BLE001 - hết lượt / quá tải -> model kế tiếp
+            last = e
+    raise RuntimeError(f"AI không đọc được: {last}")
+
+
+def local_index() -> dict[tuple[str, str, str], Path]:
+    """Hóa đơn đã tải từ cổng trên máy: (MST bán, ký hiệu, số) -> file XML/JSON chi tiết."""
+    idx: dict[tuple[str, str, str], Path] = {}
+    base = Path(settings.output_dir)
+    for f in list(base.glob("*/*/*/XML/*.xml")) + list(base.glob("*/*/*/XML/*.json")):
+        m = re.match(r"(\d)?([CK]\d{2}[A-Z0-9]{3})_0*(\d+)_(.+)$", f.stem)
+        if m:
+            k = (m.group(4).replace("-", ""), m.group(2), m.group(3))
+            if k not in idx or f.suffix == ".xml":
+                idx[k] = f
+    return idx
+
+
+def read_one(name: str, data: bytes, idx: dict) -> dict[str, Any]:
+    """Đọc 1 hóa đơn KHÔNG dùng AI. Trả về dict có 'items' (có thể rỗng nếu cần AI) + '_text' để AI đọc tiếp."""
+    low = name.lower()
+    inv: dict[str, Any] = {"file": name}
+    if low.endswith(".xml") or data.lstrip()[:5] in (b"<?xml", b"<HDon"):
+        return inv | from_xml(data)
+    if low.endswith(".pdf") or data[:5] == b"%PDF-":
+        text = pdf_text(data)
+        if len(text.strip()) < 40:
+            from . import ocr
+            text, src = ocr.ocr_pdf(data, max_pages=3), "OCR"
+        else:
+            src = "PDF"
+    else:
+        from . import ocr
+        if not ocr.is_image(name, data):
+            return inv | {"loi": "Định dạng chưa hỗ trợ", "items": []}
+        text, src = ocr.ocr_image(data), "OCR"
+    inv.update(parse_pdf_text(text, src))
+    inv["_text"] = text
+    # đã có XML/chi tiết của hóa đơn này trên máy (tải từ cổng) -> dùng dòng hàng chính xác
+    k = (str(inv.get("nbmst") or "").replace("-", ""), str(inv.get("khhdon") or "").upper(),
+         str(inv.get("shdon") or "").lstrip("0"))
+    f = idx.get(k)
+    if f:
+        if f.suffix == ".xml":
+            x = from_xml(f.read_bytes())
+            return inv | {k2: v for k2, v in x.items() if v not in (None, "", [])} | {"nguon": "XML trên máy"}
+        d = from_portal_json(json.loads(f.read_text(encoding="utf-8")))
+        if d["items"]:
+            return inv | {k2: v for k2, v in d.items() if v} | {"nguon": "Dữ liệu cổng trên máy"}
+    if src == "PDF":
+        try:
+            inv["items"] = items_from_pdf_tables(data)
+        except Exception:  # noqa: BLE001
+            inv["items"] = []
+        if items_ok(inv):
+            inv["nguon"] = "PDF (bảng hàng hóa)"
+            return inv
+    inv["items"] = []
+    return inv
+
+
+# ------------------------------------------------------------------ ghi vào mẫu
+def build_rows(inv: dict[str, Any], direction: str, seq: int, acc: dict[str, str]) -> list[dict[str, Any]]:
+    from datetime import date
+    purchase = direction == "purchase"
+    partner = {"mst": inv.get("nbmst"), "ten": inv.get("nbten"), "dchi": inv.get("nbdchi")} if purchase else \
+        {"mst": inv.get("nmmst"), "ten": inv.get("nmten"), "dchi": inv.get("nmdchi")}
+    ngay = inv.get("ngay_lap") or ""
+    try:
+        d = date.fromisoformat(ngay)
+        ngay_vn = d
+    except ValueError:
+        ngay_vn = ngay
+    so_ct = f"{'NK' if purchase else 'BH'}{seq:05d}"
+    dien_giai = (f"Mua hàng của {partner['ten'] or ''} theo HĐ {inv.get('khhdon') or ''}-{inv.get('shdon') or ''}"
+                 if purchase else f"Bán hàng cho {partner['ten'] or ''} theo HĐ {inv.get('khhdon') or ''}-{inv.get('shdon') or ''}")
+    items = inv.get("items") or [{"ten": dien_giai, "tt": inv.get("tgtcthue"), "thue": inv.get("tgtthue"),
+                                  "ts": inv.get("thue_suat")}]
+    a = ACCOUNTS[direction] | {k: v for k, v in (acc or {}).items() if v}
+    # thuế suất chung của hóa đơn (PDF 1 thuế suất thường chỉ ghi ở cuối): theo nhãn, hoặc suy ra thuế / tiền hàng
+    inv_pct = _rate_pct(inv.get("thue_suat")) if re.fullmatch(r"\s*\d+(?:[.,]\d+)?\s*%?\s*", str(inv.get("thue_suat") or "x")) else None
+    if inv_pct is None and _num(inv.get("tgtcthue")):
+        r = round(_num(inv.get("tgtthue")) / _num(inv.get("tgtcthue")) * 100, 1)
+        inv_pct = next((p for p in (0, 5, 8, 10) if abs(r - p) <= 0.15), None)
+    taxes = []
+    for it in items:
+        pct = _rate_pct(it.get("ts"))
+        if pct is None and not str(it.get("ts") or "").strip():
+            pct = inv_pct
+        tt = _num(it.get("tt"))
+        thue = it.get("thue")
+        if thue in (None, "") or (not thue and pct):
+            thue = round(tt * pct / 100) if pct is not None else 0
+        taxes.append([it, pct, tt, thue])
+    # làm tròn: tổng thuế các dòng phải bằng tổng thuế trên hóa đơn
+    diff = round(_num(inv.get("tgtthue")) - sum(_num(x[3]) for x in taxes)) if inv.get("tgtthue") is not None else 0
+    if taxes and diff and abs(diff) <= max(10, len(taxes) * 2):
+        max(taxes, key=lambda x: abs(x[2]))[3] += diff
+    rows = []
+    for it, pct, tt, thue in taxes:
+        rows.append({
+            "ngay_hach_toan": ngay_vn, "ngay_chung_tu": ngay_vn, "so_chung_tu": so_ct, "ngay_hoa_don": ngay_vn,
+            "mau_so": inv.get("khmshdon") or "1", "ky_hieu": inv.get("khhdon"), "so_hoa_don": inv.get("shdon"),
+            "ma_doi_tuong": partner["mst"], "ten_doi_tuong": partner["ten"], "dia_chi": partner["dchi"],
+            "mst": partner["mst"], "dien_giai": dien_giai, "ma_hang": it.get("ma"), "ten_hang": it.get("ten"),
+            "dvt": it.get("dvt"), "so_luong": it.get("sl"), "don_gia": it.get("dg"), "thanh_tien": tt,
+            "tien_ck": it.get("ck") or None, "thue_suat": (f"{pct:g}%" if pct is not None else (it.get("ts") or "")),
+            "tien_thue": thue, "tong_tt": inv.get("tgtttbso"),
+            "tk_no": a["tk_kho"] if purchase else a["tk_cong_no"], "tk_co": a["tk_cong_no"] if purchase else a["tk_doanh_thu"],
+            "tk_kho": a.get("tk_kho"), "tk_cong_no": a["tk_cong_no"], "tk_doanh_thu": a.get("tk_doanh_thu"),
+            "tk_thue": a["tk_thue"], "loai_tien": "VND", "ty_gia": 1, "hinh_thuc_tt": inv.get("htttoan"),
+            "ma_cqt": inv.get("mccqt"), "ma_tra_cuu": inv.get("ma_tra_cuu"), "nhom_hhdv": "1" if purchase else None,
+        })
+    return rows
+
+
+def write_template(tpl: bytes, rows: list[dict[str, Any]], colmap: dict[int, str] | None = None):
+    wb, ws, hr, cols, _unknown = read_template(tpl)
+    cols = colmap or cols
+    # xóa dòng ví dụ có sẵn dưới tiêu đề (giữ định dạng)
+    for r in range(hr + 1, ws.max_row + 1):
+        for c in cols:
+            ws.cell(r, c).value = None
+    for i, row in enumerate(rows, hr + 1):
+        for c, key in cols.items():
+            v = row.get(key)
+            cell = ws.cell(i, c, v)
+            if key in ("thanh_tien", "tien_thue", "don_gia", "tong_tt", "tien_ck"):
+                cell.number_format = "#,##0.##"
+            elif key.startswith("ngay"):
+                cell.number_format = "dd/mm/yyyy"
+    return wb
+
+
+BASIC_COLS = {
+    "purchase": ["Ngày hạch toán (*)", "Ngày chứng từ (*)", "Số chứng từ (*)", "Mã nhà cung cấp", "Tên nhà cung cấp",
+                 "Địa chỉ", "Mã số thuế", "Diễn giải", "Ngày hóa đơn", "Ký hiệu HĐ", "Số hóa đơn", "Mã hàng (*)",
+                 "Tên hàng", "Kho", "TK kho (Nợ)", "TK công nợ (Có)", "ĐVT", "Số lượng", "Đơn giá", "Thành tiền",
+                 "Tiền chiết khấu", "% thuế GTGT", "Tiền thuế GTGT", "TK thuế GTGT", "Nhóm HHDV mua vào"],
+    "sold": ["Ngày hạch toán (*)", "Ngày chứng từ (*)", "Số chứng từ (*)", "Mã khách hàng", "Tên khách hàng", "Địa chỉ",
+             "Mã số thuế", "Diễn giải", "Ngày hóa đơn", "Ký hiệu HĐ", "Số hóa đơn", "Mã hàng (*)", "Tên hàng", "ĐVT",
+             "Số lượng", "Đơn giá", "Thành tiền", "Tiền chiết khấu", "TK nợ", "TK có", "% thuế GTGT", "Tiền thuế GTGT",
+             "TK thuế GTGT"],
+}
+
+
+def basic_template(direction: str) -> bytes:
+    """Mẫu cơ bản theo các cột thường gặp của mẫu nhập khẩu MISA (dùng khi khách chưa có file mẫu riêng)."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Mua hang" if direction == "purchase" else "Ban hang"
+    for i, c in enumerate(BASIC_COLS[direction], 1):
+        cell = ws.cell(1, i, c)
+        cell.font, cell.fill = Font(bold=True), PatternFill("solid", fgColor="DDEBF7")
+        ws.column_dimensions[cell.column_letter].width = max(12, len(c) + 2)
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+# ------------------------------------------------------------------ chạy hàng loạt
+@dataclass
+class Job:
+    id: str
+    status: str = "running"
+    total: int = 0
+    done: int = 0
+    ai: int = 0
+    log: list[str] = field(default_factory=list)
+    results: list[dict[str, Any]] = field(default_factory=list)
+    file: str = ""
+    cancel: bool = False
+
+    def say(self, m: str) -> None:
+        self.log.append(f"{datetime.now():%H:%M:%S} {m}")
+        self.log = self.log[-200:]
+
+    def public(self) -> dict[str, Any]:
+        return {"id": self.id, "status": self.status, "total": self.total, "done": self.done, "ai": self.ai,
+                "log": self.log[-60:], "file": self.file, "results": self.results[:500]}
+
+
+JOBS: dict[str, Job] = {}
+
+
+def _read_tuple(args):
+    name, data, idx = args
+    try:
+        return read_one(name, data, idx)
+    except Exception as e:  # noqa: BLE001
+        return {"file": name, "loi": f"Lỗi đọc: {e}", "items": []}
+
+
+def run(job: Job, files: list[tuple[str, bytes]], tpl: bytes, direction: str, own_mst: str, acc: dict[str, str],
+        tpl_name: str = "") -> None:
+    from . import fill_template as ft
+    try:
+        kind, ext = ft.kind_of(tpl), ft.out_ext(tpl, tpl_name)
+        use_excel = kind in ("xls", "ods", "html", "xml2003") and ft.excel_available()
+        if use_excel:  # đọc tiêu đề đúng như Excel thấy, rồi Excel tự điền vào chính file mẫu
+            job.say(f"File mẫu {ext}: dùng Excel trên máy để điền dữ liệu, giữ nguyên định dạng")
+            wb, ws, hr, cols, unknown = read_template(ft.probe_with_excel(tpl, ext))
+        else:
+            wb, ws, hr, cols, unknown = read_template(tpl)
+        sheet_index = wb.worksheets.index(ws) + 1
+        job.say(f"File mẫu: sheet '{ws.title}', tiêu đề ở dòng {hr}, nhận được {len(cols)} cột"
+                + (f"; chưa nhận: {', '.join(map(str, unknown[:8]))}" if unknown else ""))
+        items = [(n, d) for name, data in files for n, d in iter_files(name, data)
+                 if n.lower().endswith((".xml", ".pdf", ".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"))]
+        job.total = len(items)
+        idx = local_index()
+        job.say(f"Đọc {len(items)} hóa đơn (dùng XML/dữ liệu cổng trên máy nếu có – {len(idx)} hóa đơn đã tải)")
+        invs: list[dict[str, Any]] = [None] * len(items)  # type: ignore[list-item]
+        import os
+        from concurrent.futures import ProcessPoolExecutor
+        workers = max(2, min(8, (os.cpu_count() or 4) - 1))
+        # bước 1: đọc nhanh không cần AI – nhiều tiến trình song song (đọc PDF tốn CPU)
+        pool = ProcessPoolExecutor(workers) if len(items) >= 4 else ThreadPoolExecutor(2)
+        with pool as ex:
+            for i, inv in enumerate(ex.map(_read_tuple, [(n, d, idx) for n, d in items], chunksize=2)):
+                invs[i] = inv
+                if inv.get("items") or inv.get("loi"):
+                    job.done += 1
+                if (i + 1) % 20 == 0:
+                    job.say(f"Đã đọc {i + 1}/{len(items)} hóa đơn")
+        need_ai = [i for i, v in enumerate(invs) if not v.get("items") and not v.get("loi")]
+        if need_ai:
+            job.say(f"{len(need_ai)} hóa đơn bố cục lạ / bản scan – AI đang đọc (song song)")
+
+            def ai_one(i: int) -> None:
+                v = invs[i]
+                try:
+                    d = ai_extract(v.get("_text") or "")
+                    keep = {k: v.get(k) for k in ("khhdon", "shdon", "nbmst", "nmmst", "ngay_lap") if v.get(k)}
+                    invs[i] = v | {k: x for k, x in d.items() if x not in (None, "", [])} | keep
+                    if not items_ok(invs[i]):
+                        invs[i]["canh_bao"] = "Tổng dòng hàng AI đọc chưa khớp tổng tiền hàng – kiểm tra lại"
+                    job.ai += 1
+                except Exception as e:  # noqa: BLE001
+                    invs[i]["loi"] = f"{e}"[:200]
+                job.done += 1
+            with ThreadPoolExecutor(4) as ex:
+                list(ex.map(ai_one, need_ai))
+        rows: list[dict[str, Any]] = []
+        seq = 0
+        for v in invs:
+            d = direction
+            if direction == "auto":
+                d = "sold" if own_mst and str(v.get("nbmst")) == own_mst else "purchase"
+            if v.get("loi") and not v.get("shdon"):
+                job.results.append({"file": v["file"], "loi": v["loi"]})
+                continue
+            seq += 1
+            r = build_rows(v, d, seq, acc)
+            rows += r
+            job.results.append({"file": v["file"], "hd": f"{v.get('khhdon') or ''}-{v.get('shdon') or ''}",
+                                "ngay": v.get("ngay_lap"), "doi_tac": v.get("nbten") if d == "purchase" else v.get("nmten"),
+                                "dong": len(r), "tong": v.get("tgtttbso"), "nguon": v.get("nguon"),
+                                "huong": "Mua vào" if d == "purchase" else "Bán ra",
+                                "loi": v.get("loi") or v.get("canh_bao") or ""})
+        # Điền vào CHÍNH file mẫu, giữ nguyên định dạng, cùng loại file với mẫu
+        if kind == "ooxml":
+            data = ft.fill_ooxml(tpl, ws.title, hr, cols, rows)
+        elif kind == "text":
+            data = ft.fill_text(tpl, hr, cols, rows)
+        elif use_excel:
+            data = ft.fill_with_excel(tpl, ext, sheet_index, hr, cols, rows)
+        else:
+            job.say(f"Máy không có Microsoft Excel nên không ghi được thẳng vào file mẫu {ext} – "
+                    "xuất .xlsx theo đúng cột của mẫu (định dạng ô có thể khác mẫu)")
+            buf = io.BytesIO()
+            write_template(tpl, rows).save(buf)
+            data, ext = buf.getvalue(), ".xlsx"
+        out = Path(settings.output_dir) / "ChuyenMISA"
+        out.mkdir(parents=True, exist_ok=True)
+        stem = Path(tpl_name).stem if tpl_name else ("MISA_" + ("MuaVao" if direction == "purchase" else
+                                                               "BanRa" if direction == "sold" else "HoaDon"))
+        dest = out / f"{stem}_{datetime.now():%Y%m%d_%H%M%S}{ext}"
+        dest.write_bytes(data)
+        job.file = str(dest)
+        job.status = "done"
+        job.say(f"Xong: {seq} hóa đơn → {len(rows)} dòng trong file mẫu ({job.ai} hóa đơn AI đọc)")
+    except Exception as e:  # noqa: BLE001
+        job.status = "error"
+        job.say(f"LỖI {e}")
+
+
+def start(files: list[tuple[str, bytes]], tpl: bytes, direction: str, own_mst: str = "",
+          acc: dict[str, str] | None = None, tpl_name: str = "") -> Job:
+    job = Job(uuid.uuid4().hex)
+    JOBS[job.id] = job
+    threading.Thread(target=run, args=(job, files, tpl, direction, own_mst, acc or {}, tpl_name), daemon=True,
+                     name="misa").start()
+    return job

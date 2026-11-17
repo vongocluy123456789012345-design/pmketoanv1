@@ -14,7 +14,10 @@ SKIP_SUBTREES = {"DSCKS", "Signature", "CKS"}
 LOOKUP_CODE_KEYS = (
     "matracuu", "matra cuu", "macuutra", "mtc", "tracuu", "fkey", "searchkey", "keysearch",
     "lookupcode", "transactionid", "sobaomat", "mabaomat", "secretcode", "invoicekey",
+    "reservationcode", "masobimat",
 )
+# Khóa ngắn phải khớp nguyên văn (vd "Mã TC" -> "matc"), tránh khớp nhầm trường khác.
+LOOKUP_CODE_EXACT = ("matc", "mtc", "mabm")
 LOOKUP_URL_KEYS = ("link", "url", "website", "trangtracuu", "portal", "tracuutai", "diachitracuu")
 
 
@@ -138,7 +141,8 @@ def parse_invoice_xml(data: bytes) -> dict[str, Any]:
         nk = norm(k)
         if URL_RE.match(v) or any(x in nk for x in LOOKUP_URL_KEYS):
             lookup_urls += URL_RE.findall(v)
-        elif lookup_code is None and any(x.replace(" ", "") in nk for x in LOOKUP_CODE_KEYS):
+        elif lookup_code is None and (nk in LOOKUP_CODE_EXACT
+                                      or any(x.replace(" ", "") in nk for x in LOOKUP_CODE_KEYS)):
             lookup_code = v
     for t in _iter_texts(root):
         for u in URL_RE.findall(t):

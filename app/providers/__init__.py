@@ -52,6 +52,8 @@ class Provider:
     pdf_urls: list[str]
     verified: bool = False
     note: str | None = None
+    # Trang tra cứu (gõ mã tra cứu) của NCC – dùng cho bộ tải chạy ẩn khi XML không in link tra cứu.
+    lookup_pages: list[str] = field(default_factory=list)
 
     def match_score(self, ref: InvoiceRef) -> int:
         score = 0
@@ -69,6 +71,7 @@ class PdfResult:
     content: bytes
     source_url: str
     provider_code: str | None
+    printed: bool = False  # in từ trang hiển thị hóa đơn của NCC (NCC không cho tải file PDF)
 
 
 @dataclass
@@ -123,6 +126,9 @@ def pdf_matches_invoice(content: bytes, ref: InvoiceRef) -> bool:
     flat = re.sub(r"\s+", "", text).upper()
     if not flat:
         return False  # PDF ảnh, không kiểm chứng được -> không coi là bản gốc
+    if not ref.shdon:  # tra cứu tay chỉ có mã tra cứu: chấp nhận PDF là hóa đơn
+        return any(w in flat for w in ("HÓAĐƠN", "HOÁĐƠN", "HOADON", "INVOICE")) or (
+            bool(ref.lookup_code) and re.sub(r"\s+", "", ref.lookup_code).upper() in flat)
     num = (ref.shdon or "").lstrip("0") or "0"
     has_num = re.search(rf"(?<!\d)0*{re.escape(num)}(?!\d)", re.sub(r"\s+", " ", text)) is not None
     has_sym = bool(ref.khhdon) and ref.khhdon.upper() in flat
@@ -174,6 +180,18 @@ def fetch_pdf_from_url(http: httpx.Client, url: str, depth: int = 1,
     return None
 
 
+def headless_pages(ref: InvoiceRef, provider: Provider | None) -> list[str]:
+    """Các trang tra cứu cho bộ tải chạy ẩn: link in trong XML trước, rồi trang tra cứu của NCC.
+    Bỏ EasyInvoice (luôn bắt captcha – đã có luồng nhập captcha riêng)."""
+    from .easyinvoice import is_easyinvoice
+
+    pages = list(ref.lookup_urls)
+    if provider:
+        pages += [u for u in (_fill(t, ref.vars()) for t in provider.lookup_pages) if u]
+    pages = [u for u in dict.fromkeys(pages) if u.startswith("http") and not is_easyinvoice(u)]
+    return pages[:4]
+
+
 # Hàm tải PDF viết riêng cho từng NCC (khi mẫu URL không đủ, vd cần POST/API riêng).
 # Khai báo trong app/providers/plugins.py:  CUSTOM_FETCHERS["misa"] = my_func
 CustomFetcher = Callable[[httpx.Client, InvoiceRef], "PdfResult | None"]
@@ -189,6 +207,7 @@ def fetch_original_pdf(ref: InvoiceRef, providers: list[Provider] | None = None)
     values = ref.vars()
 
     urls: list[str] = []
+    guesses: set[str] = set()
     if provider:
         urls += [u for u in (_fill(t, values) for t in provider.pdf_urls) if u]
     elif ref.lookup_code:
@@ -196,6 +215,7 @@ def fetch_original_pdf(ref: InvoiceRef, providers: list[Provider] | None = None)
         # thử các mẫu URL chỉ cần mã tra cứu của mọi NCC.
         for p in providers:
             urls += [u for u in (_fill(t, values) for t in p.pdf_urls if "{lookup_url}" not in t) if u]
+        guesses = set(urls)  # đoán mò: trang NCC khác có captcha không có nghĩa hóa đơn này cần captcha
     urls += ref.lookup_urls
     urls = list(dict.fromkeys(urls))
 
@@ -217,7 +237,7 @@ def fetch_original_pdf(ref: InvoiceRef, providers: list[Provider] | None = None)
             try:
                 got = fetch_pdf_from_url(http, url, accept=lambda c: pdf_matches_invoice(c, ref))
             except NeedsCaptcha as e:
-                needs_captcha = True
+                needs_captcha = needs_captcha or url not in guesses
                 attempts.append({"url": url, "error": str(e)})
                 continue
             except httpx.HTTPError as e:
@@ -230,6 +250,53 @@ def fetch_original_pdf(ref: InvoiceRef, providers: list[Provider] | None = None)
                 )
             attempts.append({"url": url, "result": "không tìm thấy PDF khớp hóa đơn"})
 
-    if not urls:
+    # Trang tra cứu là ứng dụng JavaScript -> mở Chrome chạy ẩn, gõ mã tra cứu như người thật.
+    pages = headless_pages(ref, provider)
+    if pages and settings.headless_pdf:
+        from .headless import HEADLESS
+        from .headless import NeedsCaptcha as HNeedsCaptcha
+        log: list[str] = []
+        try:
+            got = HEADLESS.fetch(pages, ref.lookup_code, ref.seller_mst, lambda c: pdf_matches_invoice(c, ref), log.append)
+        except HNeedsCaptcha as e:
+            needs_captcha = True
+            got = None
+            attempts.append({"step": "chrome-an", "error": str(e)})
+        except Exception as e:  # noqa: BLE001 - thiếu Chrome, trang lỗi...
+            got = None
+            attempts.append({"step": "chrome-an", "error": str(e)[:300]})
+        if got:
+            return FetchOutcome(PdfResult(got.content, got.url, provider.code if provider else None, got.printed),
+                                provider, attempts)
+        attempts.append({"step": "chrome-an", "result": "; ".join(log)[:300] or "không thấy PDF trên trang tra cứu"})
+
+    if not urls and not pages:
         attempts.append({"error": "XML không có link/mã tra cứu và NCC chưa có mẫu URL phù hợp"})
     return FetchOutcome(None, provider, attempts, needs_captcha)
+
+
+def lookup_host(ref: InvoiceRef) -> str:
+    """Tên miền trang tra cứu của hóa đơn (để gom các hóa đơn cùng trang -> nhập captcha 1 lần)."""
+    from .headless import host_of
+    pages = headless_pages(ref, detect_provider(ref, load_providers()))
+    return host_of(pages[0]) if pages else ""
+
+
+def fetch_with_captcha(ref: InvoiceRef, ask: Callable[[str, str], str]) -> FetchOutcome:
+    """Mở trang tra cứu bằng Chrome chạy ẩn; trang bắt captcha thì chụp ảnh để NGƯỜI DÙNG nhập (ask)."""
+    from .headless import HEADLESS
+    from .headless import NeedsCaptcha as HNeedsCaptcha
+    provider = detect_provider(ref, load_providers())
+    pages = headless_pages(ref, provider)
+    if not pages:
+        return FetchOutcome(None, provider, [{"error": "không có trang tra cứu"}])
+    log: list[str] = []
+    try:
+        got = HEADLESS.fetch(pages, ref.lookup_code, ref.seller_mst, lambda c: pdf_matches_invoice(c, ref),
+                             log.append, ask=ask)
+    except HNeedsCaptcha as e:
+        return FetchOutcome(None, provider, [{"step": "captcha", "error": str(e)}], True)
+    if got:
+        return FetchOutcome(PdfResult(got.content, got.url, provider.code if provider else None, got.printed),
+                            provider, [])
+    return FetchOutcome(None, provider, [{"step": "captcha", "result": "; ".join(log)[:300] or "không thấy PDF"}])

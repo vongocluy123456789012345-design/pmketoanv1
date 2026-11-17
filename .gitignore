@@ -1,5 +1,13 @@
 .env
 data/
 .venv/
+.venv_*/
 __pycache__/
 *.pyc
+release/
+build/
+dist/
+*.spec
+HoaDonDienTu*.zip
+app/ai_builtin.json
+.claude/settings.local.json

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Đồng bộ hóa đơn điện tử</title>
+<title>AWBook</title>
 <style>
   :root { --b:#d0d7de; --bg:#f6f8fa; --pri:#0b5cad; --ok:#1a7f37; --warn:#9a6700; --err:#cf222e; }
   * { box-sizing: border-box; }
@@ -45,12 +45,79 @@
   .page { display: none; gap: 16px; }
   .page.active { display: grid; }
   .page-intro { margin: 0 0 4px; color: #57606a; }
+  header { display: flex; align-items: center; gap: 10px; }
+  #bell { margin-left: auto; position: relative; background: transparent; border: 1px solid rgba(255,255,255,.5); font-size: 15px; padding: 4px 10px; }
+  #bellN { position: absolute; top: -7px; right: -7px; background: var(--err); color: #fff; border-radius: 10px; font-size: 11px; padding: 0 6px; display: none; }
+  #notiPanel { display: none; position: fixed; right: 16px; top: 52px; width: min(520px, calc(100vw - 32px)); max-height: 70vh; overflow: auto;
+    background: #fff; border: 1px solid var(--b); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.18); z-index: 20; color: #1f2328; font-size: 13px; font-weight: 400; }
+  .noti { padding: 10px 12px; border-bottom: 1px solid var(--b); }
+  .noti.unread { background: #f1f8ff; }
+  .noti b { display: block; margin-bottom: 3px; }
+  .noti ul { margin: 4px 0 0; padding-left: 18px; color: var(--warn); }
+  #notiToast { display: none; position: fixed; right: 16px; bottom: 84px; width: min(440px, calc(100vw - 32px)); background: #fff; border: 2px solid var(--pri);
+    border-radius: 8px; padding: 12px 14px; box-shadow: 0 8px 24px rgba(0,0,0,.2); z-index: 30; }
+  .kpi { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; margin-top: 10px; }
+  .kpi div { border: 1px solid var(--b); border-radius: 8px; padding: 8px 10px; background: var(--bg); }
+  .kpi span { display: block; font-size: 12px; color: #57606a; }
+  .kpi b { font-size: 17px; }
+  .kpi .big { border-color: var(--pri); background: #eef6ff; }
+  .kpi .big b { font-size: 20px; color: var(--pri); }
+  /* ---- bóng chat Trợ lý AI ---- */
+  #aiFab { position: fixed; right: 20px; bottom: 20px; z-index: 40; display: flex; align-items: center; gap: 8px; padding: 12px 18px 12px 14px;
+    border-radius: 999px; border: 0; background: linear-gradient(135deg, #0b5cad, #2f80ed); color: #fff; font-weight: 600;
+    box-shadow: 0 6px 20px rgba(11,92,173,.45); transition: transform .15s; }
+  #aiFab:hover { transform: translateY(-2px); }
+  #aiFab .ico { font-size: 20px; line-height: 1; }
+  #aiDot { display: none; width: 10px; height: 10px; border-radius: 50%; background: #ff5a5f; border: 2px solid #fff; margin-left: -4px; }
+  #aiPanel { position: fixed; right: 20px; bottom: 20px; z-index: 41; width: min(400px, calc(100vw - 24px)); height: min(640px, calc(100vh - 40px));
+    background: #fff; border-radius: 14px; box-shadow: 0 12px 40px rgba(0,0,0,.25); display: none; flex-direction: column; overflow: hidden;
+    border: 1px solid var(--b); }
+  #aiPanel.open { display: flex; animation: aiIn .18s ease-out; }
+  #aiPanel.max { width: min(760px, calc(100vw - 24px)); height: calc(100vh - 40px); }
+  @keyframes aiIn { from { opacity: 0; transform: translateY(16px) scale(.98); } to { opacity: 1; transform: none; } }
+  .aiHead { display: flex; align-items: center; gap: 8px; padding: 10px 10px 10px 12px; background: linear-gradient(135deg, #0b5cad, #2f80ed); color: #fff; }
+  .aiAva { width: 34px; height: 34px; border-radius: 50%; background: rgba(255,255,255,.2); display: grid; place-items: center; font-weight: 700; font-size: 13px; }
+  #aiSub { font-size: 12px; opacity: .85; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .aiIco { background: transparent; border: 0; color: #fff; padding: 4px 7px; font-size: 15px; border-radius: 6px; }
+  .aiIco:hover { background: rgba(255,255,255,.18); }
+  .aiIco.on { background: rgba(255,255,255,.3); box-shadow: inset 0 0 0 1px rgba(255,255,255,.6); }
+  .aiWho { display: flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 600; margin: 8px 0 -2px 2px; color: #57606a; }
+  .aiWho i { width: 18px; height: 18px; border-radius: 50%; display: inline-grid; place-items: center; color: #fff; font-style: normal; font-size: 10px; }
+  #aiCfg { display: none; padding: 10px 12px; border-bottom: 1px solid var(--b); max-height: 55%; overflow: auto; background: #fbfcfd; }
+  #aiCfg.show { display: block; }
+  #aiLog { flex: 1; overflow: auto; padding: 12px; background: var(--bg); }
+  .aiMsg { margin: 6px 0; padding: 8px 11px; border-radius: 12px; max-width: 88%; font-size: 13.5px; line-height: 1.5; word-wrap: break-word; }
+  .aiMsg.me { margin-left: auto; background: var(--pri); color: #fff; border-bottom-right-radius: 4px; }
+  .aiMsg.bot { background: #fff; border: 1px solid var(--b); border-bottom-left-radius: 4px; }
+  .aiMsg.me a { color: #fff; }
+  #aiChips { display: flex; gap: 6px; overflow-x: auto; padding: 6px 10px; border-top: 1px solid var(--b); }
+  .aiChip { flex: 0 0 auto; background: #eef6ff; color: var(--pri); border: 1px solid #cfe3fb; border-radius: 999px; padding: 4px 10px; font-size: 12px; }
+  .aiInput { display: flex; gap: 6px; padding: 8px 10px 10px; border-top: 1px solid var(--b); }
+  .aiInput textarea { flex: 1; resize: none; max-height: 120px; padding: 8px 10px; border: 1px solid var(--b); border-radius: 18px; font: inherit; }
+  .aiInput button { border-radius: 50%; width: 40px; height: 40px; padding: 0; font-size: 16px; }
+  .aiTyping span { display: inline-block; width: 6px; height: 6px; margin: 0 1px; border-radius: 50%; background: #8c959f; animation: aiB 1s infinite; }
+  .aiTyping span:nth-child(2) { animation-delay: .15s; } .aiTyping span:nth-child(3) { animation-delay: .3s; }
+  @keyframes aiB { 0%, 80%, 100% { opacity: .3; } 40% { opacity: 1; } }
+  #vatTable td.code { color: #57606a; white-space: nowrap; }
+  #vatTable tr.h td { font-weight: 600; background: var(--bg); }
+  #vatTable tr.bb td { font-weight: 600; }
 </style>
 </head>
 <body>
-<header>Đồng bộ hóa đơn điện tử – Cổng thuế &amp; PDF gốc</header>
+<header><b>AWBook</b> <span style="font-weight:400;font-size:14px;opacity:.9">– Hóa đơn điện tử · Sao kê · Đối chiếu thuế</span>
+  <button id="bell" title="Thông báo">🔔 Thông báo<span id="bellN"></span></button></header>
+<div id="notiPanel">
+  <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;border-bottom:1px solid var(--b)">
+    <b>Thông báo</b> <a href="#" id="notiAll">Đánh dấu đã đọc tất cả</a></div>
+  <div id="notiList"></div>
+</div>
+<div id="notiToast"><div style="display:flex;justify-content:space-between;gap:8px"><b id="ntTitle"></b>
+  <a href="#" id="ntClose" title="Đóng">✕</a></div><div id="ntBody" class="muted" style="margin-top:4px;font-size:13px"></div>
+  <div style="margin-top:8px"><button id="ntOpen">Xem chi tiết</button></div></div>
 <nav>
   <a href="#tai" data-page="tai">Tải hóa đơn <span id="navJob" class="badge original" style="display:none">đang chạy</span></a>
+  <a href="#vat" data-page="vat">Dự báo VAT</a>
+  <a href="#misa" data-page="misa">Chuyển dữ liệu MISA</a>
   <a href="#chungtu" data-page="chungtu">Sao kê &amp; chứng từ</a>
   <a href="#doichieu" data-page="doichieu">Đối chiếu tờ khai</a>
   <a href="#lich" data-page="lich">Lịch tự động</a>
@@ -82,9 +149,12 @@
         <label style="display:inline;margin-right:10px"><input id="aExcel" type="checkbox" checked style="width:auto"> Bảng kê Excel</label>
         <label style="display:inline;margin-right:10px"><input id="aXml" type="checkbox" checked style="width:auto"> XML</label>
         <label style="display:inline;margin-right:10px"><input id="aPdf" type="checkbox" checked style="width:auto"> PDF gốc</label>
-        <label style="display:inline" title="Hóa đơn mua vào của người bán dùng EasyInvoice: trang tra cứu bắt captcha từng hóa đơn. Tắt thì dùng bản in từ trang hddt."><input id="aEasyCap" type="checkbox" style="width:auto"> PDF gốc EasyInvoice của người bán (nhập captcha)</label>
+        <label style="display:inline" title="Trang tra cứu có captcha: mặc định mỗi trang chỉ hỏi bạn nhập captcha 1 lần, phần mềm tự tải các hóa đơn còn lại của trang đó. Bật mục này để lấy PDF gốc cả ở các trang bắt captcha cho MỖI lần tra cứu (EasyInvoice...) – sẽ hỏi từng hóa đơn. Phần mềm không tự đọc captcha."><input id="aEasyCap" type="checkbox" style="width:auto"> Hỏi captcha từng hóa đơn (trang bắt nhập mỗi lần, vd EasyInvoice)</label>
         <div class="muted">* Hóa đơn máy tính tiền: cổng bắt nhập captcha khi tra cứu, phần mềm sẽ hiện ô để bạn nhập.
-          Lưu tại: <a href="#" id="aFolder"></a></div>
+          Lưu tại: <a href="#" id="aFolder"></a> <span id="aFolderTag" class="badge pending"></span>
+          <button id="btnDir" class="sec" style="padding:2px 9px;font-size:12px" title="Chọn thư mục khác để lưu hóa đơn, bảng kê, XML, PDF">Đổi nơi lưu…</button>
+          <button id="btnDirReset" class="sec" style="padding:2px 9px;font-size:12px" title="Quay về thư mục Documents mặc định">Mặc định</button>
+          <span id="aFolderMsg" class="msg" style="margin:0 0 0 6px"></span></div>
       </div>
       <div style="flex:0 0 auto"><button id="btnAuto" disabled>2. Bắt đầu tải</button></div>
       <div style="flex:0 0 auto"><button id="btnStop" class="sec" disabled>Dừng</button></div>
@@ -106,12 +176,172 @@
   </section>
 
   <section class="card">
+    <h2>Lấy PDF gốc từ trang tra cứu – không cần đăng nhập cổng thuế</h2>
+    <p class="page-intro">Phần mềm mở Chrome <b>chạy ẩn</b>, vào trang tra cứu của nhà cung cấp hóa đơn (VNPT, Viettel, MISA, BKAV, FPT,
+      M-Invoice, trang riêng của người bán…), tự gõ mã tra cứu, bấm Tra cứu và bắt file PDF (tải về, mở tab mới, hoặc in trang hóa đơn).
+      Trang nào <b>bắt buộc captcha / kiểm tra chống robot</b> thì phần mềm dừng và báo để bạn tải tay (không vượt captcha).</p>
+    <div class="inline">
+      <div style="flex:3"><label>Link trang tra cứu (in trên hóa đơn / email)</label><input id="lkUrl" placeholder="vd https://0101234567-tt78.vnpt-invoice.com.vn"></div>
+      <div style="flex:2"><label>Mã tra cứu</label><input id="lkCode" placeholder="Mã tra cứu / mã bảo mật"></div>
+    </div>
+    <div class="inline">
+      <div><label>MST người bán (để kiểm tra đúng HĐ – tùy chọn)</label><input id="lkMst"></div>
+      <div><label>Ký hiệu (tùy chọn)</label><input id="lkKh" placeholder="C26TAA"></div>
+      <div><label>Số hóa đơn (tùy chọn)</label><input id="lkSo"></div>
+      <div style="flex:0 0 auto"><button id="btnLk">Lấy PDF</button></div>
+    </div>
+    <div id="lkMsg" class="msg"></div>
+    <hr style="border:0;border-top:1px solid var(--b);margin:12px 0">
+    <b>Lấy bù PDF gốc còn thiếu cho hóa đơn đã tải</b>
+    <span class="muted">– đọc mã/link tra cứu trong XML đã lưu, hóa đơn nào chưa có PDF gốc (kể cả đang dùng bản in từ cổng) thì lấy ngầm.</span>
+    <div class="inline" style="margin-top:6px">
+      <div><label>MST</label><select id="fmMst"></select></div>
+      <div><label>Từ tháng</label><input id="fmFrom" type="month"></div>
+      <div><label>Đến tháng</label><input id="fmTo" type="month"></div>
+      <div style="flex:0 0 auto"><button id="btnFm">Lấy bù PDF</button> <button id="btnFmStop" class="sec" disabled>Dừng</button></div>
+    </div>
+    <div id="fmText" class="muted" style="margin-top:6px"></div>
+    <div id="fmLog" style="background:#0d1117;color:#c9d1d9;font:12px Consolas,monospace;padding:8px;max-height:150px;overflow:auto;border-radius:6px;white-space:pre-wrap;margin-top:6px;display:none"></div>
+  </section>
+
+  <section class="card">
     <h2>Mỗi tháng tải xong, trong thư mục tháng có</h2>
     <ul class="muted" style="margin:0;padding-left:18px;line-height:1.7">
       <li><b>TongHop_YYYY-MM.xlsx</b> – danh sách hóa đơn, link mở XML/PDF, trang <b>"Can chu y"</b> (HĐ thay thế, điều chỉnh, bị hủy, thiếu XML/PDF)</li>
       <li><b>XuatPMKT_YYYY-MM.xlsx</b> – chi tiết từng dòng hàng (sheet Mua vào / Bán ra) để nhập phần mềm kế toán</li>
       <li>Thư mục từng loại: <b>BangKe_*.xlsx</b>, <b>XML\</b>, <b>PDF\</b> (bản gốc; bản in từ cổng có đuôi <b>_hddt.pdf</b>)</li>
     </ul>
+  </section>
+ </div>
+
+ <!-- Trợ lý AI: bóng chat nổi góc phải dưới, bấm mở khung chat (luôn có mặt trên mọi màn hình) -->
+ <button id="aiFab" title="Trợ lý AI AWBook"><span class="ico">💬</span><span class="lbl">Trợ lý AI</span><span id="aiDot"></span></button>
+ <div id="aiPanel" role="dialog" aria-label="Trợ lý AI">
+  <div class="aiHead">
+    <div class="aiAva">AW</div>
+    <div style="flex:1;min-width:0"><b>Trợ lý AWBook</b><div id="aiSub">Làm việc trên app · tư vấn thuế, kế toán</div></div>
+    <button class="aiIco" id="aiGroup" title="Nhóm chat: nhiều AI cùng làm việc và soát câu trả lời">👥</button>
+    <button class="aiIco" id="aiGear" title="Cài đặt AI (nhà phát hành)" style="display:none">⚙</button>
+    <button class="aiIco" id="btnAiNew" title="Hội thoại mới">↺</button>
+    <button class="aiIco" id="aiMax" title="Phóng to / thu nhỏ">⤢</button>
+    <button class="aiIco" id="aiClose" title="Thu gọn">✕</button>
+  </div>
+  <div id="aiCfg">
+    <div class="muted" id="aiCfgSum"></div>
+    <label>Chọn AI</label><select id="aiProv"></select>
+    <label>Khóa API <a href="#" id="aiKeyLink" target="_blank" rel="noopener noreferrer">(lấy khóa miễn phí ở đây)</a></label>
+    <input id="aiKey" type="password" autocomplete="off" placeholder="Dán khóa API – lưu trên máy này (data/ai.json)">
+    <label>Model <a href="#" id="aiModelsLoad">(tải danh sách)</a></label><input id="aiModel" list="aiModelList"><datalist id="aiModelList"></datalist>
+    <div style="margin-top:8px"><button id="btnAiKey">Lưu</button> <button id="btnAiKeyDel" class="sec">Xóa khóa của tôi</button></div>
+    <div class="muted" id="aiProvHint" style="margin-top:6px"></div>
+    <div id="aiBuiltinBox" style="display:none;margin-top:8px;padding:8px;border:1px dashed var(--warn);border-radius:6px">
+      <b>Nhà phát hành: gắn sẵn khóa cho khách</b>
+      <div class="muted">Khóa này được đóng gói vào AWBook.exe khi chạy build_exe.bat, khách mở là dùng được ngay, không phải lấy khóa.
+        Khóa chỉ được làm rối, ai có file exe vẫn lấy ra được – chỉ dùng khóa riêng cho phần mềm, đặt giới hạn chi tiêu/hạn mức.</div>
+      <input id="aiBuiltinKey" type="password" autocomplete="off" placeholder="Khóa dựng sẵn cho nhà cung cấp đang chọn" style="margin-top:4px">
+      <div style="margin-top:4px"><button id="btnAiBuiltin" class="sec">Lưu khóa dựng sẵn</button></div>
+    </div>
+    <div id="aiKeyMsg" class="msg"></div>
+  </div>
+  <div id="aiLog"></div>
+  <div id="aiChips">
+    <button class="aiChip">Tải hóa đơn tháng trước về cho tôi</button>
+    <button class="aiChip">Dự báo VAT tháng trước</button>
+    <button class="aiChip">Tháng trước mua vào, bán ra bao nhiêu?</button>
+    <button class="aiChip">Mua hàng từ 5 triệu trả tiền mặt có được khấu trừ không?</button>
+    <button class="aiChip">Màn hình này dùng thế nào?</button>
+  </div>
+  <div class="aiInput">
+    <textarea id="aiText" rows="1" placeholder="Nhập yêu cầu hoặc câu hỏi…"></textarea>
+    <button id="btnAi" title="Gửi">➤</button>
+  </div>
+ </div>
+
+ <div class="page" id="page-misa">
+  <section class="card" style="border-color:var(--pri)">
+    <h2>Chuyển hóa đơn vào file mẫu nhập khẩu MISA</h2>
+    <p class="page-intro">Kéo thả nhiều hóa đơn (PDF, XML, ZIP, ảnh chụp/scan) và file mẫu nhập khẩu MISA của anh/chị (mẫu chứng từ mua hàng
+      hoặc bán hàng – file Excel bất kỳ: .xlsx, .xls, .xlsm, .ods, .csv…) → bấm <b>Chuyển dữ liệu</b>. Mỗi hóa đơn: dùng XML gốc (file tải lên hoặc đã tải từ cổng trên máy) → đọc bảng hàng hóa trong PDF
+      (chỉ nhận khi tổng các dòng khớp tổng tiền hàng) → bản scan / bố cục lạ thì AI đọc. Từng dòng hàng được điền đúng cột của mẫu
+      (tự nhận cột theo tên tiêu đề), có thuế suất và tiền thuế GTGT.</p>
+    <div class="inline">
+      <div><label>Hóa đơn là</label><select id="mDir"><option value="purchase">Đầu vào (mua hàng)</option>
+        <option value="sold">Đầu ra (bán hàng)</option><option value="auto">Tự nhận theo MST của tôi</option></select></div>
+      <div><label>MST doanh nghiệp (cho chế độ tự nhận)</label><input id="mMst" placeholder="vd 0319124899"></div>
+      <div style="flex:2"><label>File mẫu MISA (.xlsx, .xls, .xlsm, .ods, .csv… đều được) – bỏ trống thì dùng mẫu cơ bản
+        (<a href="/api/misa-template/purchase">tải mẫu mua hàng</a> · <a href="/api/misa-template/sold">mẫu bán hàng</a>)</label>
+        <input type="file" id="mTpl" accept=".xlsx,.xlsm,.xltx,.xltm,.xls,.ods,.csv,.txt,.xml,.htm,.html"></div>
+    </div>
+    <details style="margin-top:6px"><summary class="muted">Tài khoản mặc định (mua: 1561/331/1331 · bán: 131/5111/33311)</summary>
+      <div class="inline">
+        <div><label>TK kho / chi phí (mua)</label><input id="mTkKho" placeholder="1561"></div>
+        <div><label>TK công nợ</label><input id="mTkCn" placeholder="331 hoặc 131"></div>
+        <div><label>TK doanh thu (bán)</label><input id="mTkDt" placeholder="5111"></div>
+        <div><label>TK thuế GTGT</label><input id="mTkThue" placeholder="1331 hoặc 33311"></div>
+      </div></details>
+    <div id="dropMisa" style="margin-top:10px;border:2px dashed var(--b);border-radius:8px;padding:22px;text-align:center;cursor:pointer;background:var(--bg)">
+      <b>Kéo thả hóa đơn vào đây</b> (nhiều file / thư mục nén .zip) hoặc bấm để chọn<br><span class="muted" id="dropMisaInfo">Chưa chọn file</span></div>
+    <input type="file" id="misaFiles" multiple accept=".pdf,.xml,.zip,.jpg,.jpeg,.png,.tif,.tiff,.bmp,.webp" hidden>
+    <div style="margin-top:10px"><button id="btnMisa" style="padding:9px 18px;font-size:15px">Chuyển dữ liệu</button>
+      <span id="misaMsg" class="msg"></span></div>
+    <progress id="misaProg" value="0" max="1" style="display:none;margin-top:8px"></progress>
+    <div id="misaLog" class="muted" style="margin-top:6px;white-space:pre-wrap"></div>
+    <div class="tablewrap" style="margin-top:8px;max-height:45vh"><table><tbody id="misaRows"></tbody></table></div>
+  </section>
+ </div>
+
+ <div class="page" id="page-vat">
+  <section class="card" style="border-color:var(--pri)">
+    <h2>Dự báo thuế GTGT – Tờ khai 01/GTGT (TT80/2021, phương pháp khấu trừ)</h2>
+    <p class="page-intro">Cộng hóa đơn <b>mua vào / bán ra</b> đã tải từ hoadondientu theo đúng từng chỉ tiêu của tờ khai 01/GTGT, ra số
+      <b>thuế phải nộp</b> hoặc <b>số còn được khấu trừ chuyển kỳ sau</b>; in tờ khai, phụ lục giảm thuế 8% (nếu có), bảng kê hóa đơn và
+      bảng kê chi tiết từng mặt hàng. <b>Tự động:</b> đúng 00:00 ngày đầu tháng (hoặc đầu quý) sau, phần mềm tự dự báo kỳ vừa kết thúc và
+      báo lên chuông thông báo (phần mềm phải đang mở; Chrome đăng nhập đúng MST thì tự tải đủ hóa đơn trước khi dự báo).</p>
+    <div class="inline">
+      <div><label>MST</label><select id="vMst"></select></div>
+      <div><label>Kỳ kê khai</label><select id="vKieu"><option value="M">Theo tháng</option><option value="Q">Theo quý</option></select></div>
+      <div id="vMonthBox"><label>Tháng</label><input id="vMonth" type="month"></div>
+      <div id="vQBox" style="display:none"><label>Quý</label><select id="vQ"><option>1</option><option>2</option><option>3</option><option>4</option></select></div>
+      <div id="vYBox" style="display:none"><label>Năm</label><input id="vY" type="number" min="2020" max="2100"></div>
+      <div style="flex:0 0 auto"><label><input type="checkbox" id="vAuto" style="width:auto"> Tự dự báo đầu kỳ sau (00:00)</label>
+        <button id="btnVCfg" class="sec" style="padding:3px 9px;font-size:12px">Lưu cài đặt</button></div>
+    </div>
+    <div class="inline" style="margin-top:6px">
+      <div style="flex:2"><label>[22] Thuế GTGT còn được khấu trừ kỳ trước chuyển sang (đ)</label><input id="v22" inputmode="numeric" class="vnum">
+        <span class="muted" id="v22Hint"></span></div>
+      <div style="flex:0 0 auto"><button id="btnVat" style="padding:9px 18px;font-size:15px">Dự báo VAT</button>
+        <button id="btnVatQuick" class="sec" title="Chưa tải hóa đơn? Đăng nhập cổng hóa đơn điện tử (mục Tải hóa đơn) rồi bấm – đọc danh sách hóa đơn kỳ này trong vài giây và dự báo ngay">⚡ Đọc nhanh từ cổng</button></div>
+    </div>
+    <details style="margin-top:6px"><summary class="muted">Chỉ tiêu khác (nhập khẩu, không được khấu trừ, điều chỉnh, hoàn thuế…)</summary>
+      <div class="inline">
+        <div><label>[23a] Giá trị HHDV nhập khẩu</label><input id="v23a" class="vnum"></div>
+        <div><label>[24a] Thuế GTGT hàng nhập khẩu</label><input id="v24a" class="vnum"></div>
+        <div><label>Thuế đầu vào KHÔNG được khấu trừ (trừ khỏi [25])</label><input id="vKhongKt" class="vnum"></div>
+      </div>
+      <div class="inline">
+        <div><label>[32b] HHDV bán ra không tính vào giá tính thuế (TT89, từ kỳ 7/2026)</label><input id="v32b" class="vnum"></div>
+        <div><label>[34a] HHDV bán ra không thuộc phạm vi Luật GTGT (TT89)</label><input id="v34a" class="vnum"></div>
+      </div>
+      <div class="inline">
+        <div><label>[37] Điều chỉnh giảm</label><input id="v37" class="vnum"></div>
+        <div><label>[38] Điều chỉnh tăng</label><input id="v38" class="vnum"></div>
+        <div><label>[39a] Nhận bàn giao được khấu trừ</label><input id="v39a" class="vnum"></div>
+        <div><label>[40b] Dự án đầu tư bù trừ</label><input id="v40b" class="vnum"></div>
+        <div><label>[42] Đề nghị hoàn</label><input id="v42" class="vnum"></div>
+      </div>
+    </details>
+    <div id="vMsg" class="msg"></div>
+  </section>
+  <section class="card" id="vRes" style="display:none">
+    <h2 id="vResTitle"></h2>
+    <div class="kpi" id="vKpi"></div>
+    <div id="vFiles" style="margin-top:10px"></div>
+    <ul id="vWarn" style="margin:10px 0 0;padding-left:18px;color:var(--warn)"></ul>
+    <div class="tablewrap" style="margin-top:10px;max-height:none"><table id="vatTable"><tbody></tbody></table></div>
+  </section>
+  <section class="card">
+    <h2>Các kỳ đã dự báo</h2>
+    <table><tbody id="vHist"></tbody></table>
   </section>
  </div>
 
@@ -132,13 +362,44 @@
     <h2>Đối chiếu sao kê ngân hàng ↔ hóa đơn</h2>
     <p class="page-intro">Kéo thả file sao kê (Excel, CSV, PDF, hoặc bản scan / ảnh chụp – Vietcombank, Techcombank, MB, ACB, VietinBank, BIDV, Agribank, VPBank…).
       Bản scan đọc bằng OCR theo từng dòng; chiều tiền vào/ra xác định theo biến động số dư.
-      Phần mềm tự nhận cột, rồi ghép từng giao dịch với hóa đơn đã tải trong khoảng ngày sao kê theo số tiền, số hóa đơn / MST / tên đối tác
-      trong nội dung. Kết quả: giao dịch đã khớp, hóa đơn chưa thấy thanh toán, giao dịch chưa có hóa đơn (tô vàng khoản chi từ 20 triệu).</p>
+      Phần mềm tự nhận cột, lấy thêm hóa đơn mua vào / bán ra <b>các tháng trước</b> trên trang HĐĐT đang đăng nhập,
+      rồi ghép từng giao dịch với hóa đơn: đúng 1 HĐ, trả gộp nhiều HĐ cùng đối tác, thanh toán 1 phần, theo số HĐ ghi trong nội dung.
+      Kết quả ghi rõ <b>tiền nhận từ HĐ nào / thanh toán cho HĐ nào</b>, kèm chứng từ hạch toán Nợ/Có và file nhập khẩu
+      <b>MISA</b> (Thu tiền gửi, Chi tiền gửi) và <b>EasyBooks</b> (Báo có, Báo nợ). Dòng tô vàng là chứng từ cần kiểm tra lại.</p>
+    <div class="row" style="gap:14px;flex-wrap:wrap;margin-bottom:8px">
+      <label>Lấy thêm hóa đơn <input type="number" id="bkMonths" value="6" min="0" max="24" style="width:56px"> tháng trước</label>
+      <label><input type="checkbox" id="bkPortal" checked> Lấy hóa đơn từ cổng HĐĐT (cần đăng nhập Chrome)</label>
+      <label>Chế độ kế toán <select id="bkCheDo"><option value="TT200">TT200</option><option value="TT133">TT133</option></select></label>
+      <label>Số CT bắt đầu <input type="number" id="bkStart" value="1" min="1" style="width:70px"></label>
+    </div>
     <div class="drop" id="dropBank" style="border:2px dashed var(--b);border-radius:8px;padding:18px;text-align:center;cursor:pointer;background:var(--bg)">
       <b>Kéo thả file sao kê vào đây</b> hoặc bấm để chọn<br><span class="muted" id="dropBankInfo">Chưa chọn file</span></div>
     <input type="file" id="bankFiles" multiple accept=".xlsx,.xls,.csv,.pdf,.jpg,.jpeg,.png,.tif,.tiff,.bmp,.webp" hidden>
     <div style="margin-top:10px"><button id="btnBank">Đối chiếu sao kê</button> <span id="bankMsg" class="msg"></span></div>
     <div id="bankResult" style="margin-top:8px"></div>
+  </section>
+
+  <section class="card">
+    <h2>Đối chiếu sao kê gốc với sổ trên phần mềm kế toán</h2>
+    <p class="muted">Bên trái: sao kê <b>gốc</b> của ngân hàng (PDF / Excel). Bên phải: sổ đã nhập trên phần mềm kế toán
+      (MISA, EasyBooks, Fast… xuất ra Excel / PDF: Sổ tiền gửi ngân hàng, Sổ chi tiết TK 112, hoặc file Thu/Chi tiền gửi).
+      Phần mềm so từng giao dịch: <b>khớp</b>, <b>khớp nhưng lệch ngày</b>, <b>gộp/tách dòng</b>, <b>lệch số tiền</b>,
+      <b>sai chiều thu/chi</b>, <b>có trên sao kê nhưng chưa hạch toán</b>, <b>có trên sổ nhưng không có trên sao kê</b>;
+      so cả tổng thu, tổng chi, số dư đầu/cuối kỳ.</p>
+    <div class="row" style="gap:12px;flex-wrap:wrap">
+      <div style="flex:1;min-width:260px">
+        <div class="drop" id="dropBkStmt" style="border:2px dashed var(--b);border-radius:8px;padding:16px;text-align:center;cursor:pointer;background:var(--bg)">
+          <b>1. Sao kê gốc ngân hàng</b><br>kéo thả hoặc bấm để chọn<br><span class="muted" id="dropBkStmtInfo">Chưa chọn file</span></div>
+        <input type="file" id="bkStmtFiles" multiple accept=".pdf,.xlsx,.xls,.csv" hidden>
+      </div>
+      <div style="flex:1;min-width:260px">
+        <div class="drop" id="dropBkBook" style="border:2px dashed var(--b);border-radius:8px;padding:16px;text-align:center;cursor:pointer;background:var(--bg)">
+          <b>2. Sổ trên phần mềm kế toán</b><br>kéo thả hoặc bấm để chọn<br><span class="muted" id="dropBkBookInfo">Chưa chọn file</span></div>
+        <input type="file" id="bkBookFiles" multiple accept=".xlsx,.xls,.xlsm,.csv,.ods,.pdf,.xml,.htm,.html" hidden>
+      </div>
+    </div>
+    <div style="margin-top:10px"><button id="btnBkBook">Đối chiếu sao kê với sổ</button> <span id="bkBookMsg" class="msg"></span></div>
+    <div id="bkBookResult" style="margin-top:8px"></div>
   </section>
  </div>
 
@@ -313,7 +574,9 @@ const STATUS = {original:"PDF gốc", manual:"Upload tay", rendered:"Dựng từ
 let captchaKey = null, pollTimer = null, uploadFor = null;
 
 async function api(url, opts = {}) {
-  const r = await fetch(url, opts);
+  let r;
+  try { r = await fetch(url, opts); }
+  catch (e) { throw new Error("Không kết nối được phần mềm (cửa sổ chạy phần mềm đã tắt hoặc đang khởi động lại). Mở lại phần mềm rồi thử lại."); }
   const ct = r.headers.get("content-type") || "";
   const data = ct.includes("json") ? await r.json() : await r.text();
   if (!r.ok) throw new Error((data && data.detail) ? (typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail)) : r.statusText);
@@ -467,7 +730,7 @@ async function loadInvoices() {
     const {items} = await api("/api/invoices?" + p);
     $("rows").innerHTML = items.map(r => `
       <tr>
-        <td>${esc((r.tdlap || "").slice(0, 10))}</td>
+        <td>${esc(r.tdlap ? new Date(r.tdlap).toLocaleDateString("sv-SE", {timeZone: "Asia/Ho_Chi_Minh"}) : "")}</td>
         <td>${esc(r.khmshdon)}${esc(r.khhdon)}<br><b>${esc(r.shdon)}</b></td>
         <td>${esc(r.nbten)}<br><span class="muted">${esc(r.nbmst)}</span></td>
         <td>${esc(r.nmten)}<br><span class="muted">${esc(r.nmmst)}</span></td>
@@ -529,6 +792,29 @@ $("btnOpen").onclick = async () => {
   try { await api("/api/browser/open", {method: "POST"}); } catch (e) { alert(e.message); }
   $("btnOpen").disabled = false; refreshBrowser();
 };
+// ----- nơi lưu: mặc định Documents của máy, người dùng đổi được -----
+function renderDir(s) {
+  outDir = s.output_dir; $("aFolder").textContent = s.output_dir;
+  $("aFolderTag").textContent = s.custom ? "tự chọn" : s.from_env ? "theo .env" : "mặc định";
+  $("aFolderTag").className = "badge " + (s.custom ? "original" : "pending");
+  $("btnDirReset").style.display = s.custom ? "" : "none";
+}
+async function setDir(path) {
+  try {
+    const s = await api("/api/settings/output-dir", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({path})});
+    renderDir(s); msg($("aFolderMsg"), path ? "Đã đổi nơi lưu. Dữ liệu cũ không tự chuyển." : "Đã về mặc định.", true);
+  } catch (e) { msg($("aFolderMsg"), e.message); }
+}
+$("btnDir").onclick = async () => {
+  $("btnDir").disabled = true; msg($("aFolderMsg"), "Đang mở hộp chọn thư mục… (xem cửa sổ vừa hiện trên màn hình)", true);
+  try {
+    const r = await api("/api/settings/pick-folder", {method: "POST"});
+    if (r.path) await setDir(r.path); else msg($("aFolderMsg"), "Đã hủy, giữ nguyên nơi lưu cũ.", true);
+  } catch (e) { msg($("aFolderMsg"), e.message); }
+  $("btnDir").disabled = false;
+};
+$("btnDirReset").onclick = () => setDir(null);
+api("/api/settings").then(renderDir).catch(() => {});
 $("aFolder").onclick = e => { e.preventDefault(); api("/api/open-folder", {method: "POST"}).catch(err => alert(err.message)); };
 // ----- Âm thanh "ting-ting" như tin nhắn + thông báo Windows -----
 let audioCtx = null;
@@ -624,6 +910,7 @@ function watchAuto(id) {
   }, 1500);
 }
 setInterval(refreshBrowser, 3000);
+setInterval(() => fetch("/api/ping").catch(() => {}), 5000); fetch("/api/ping").catch(() => {});  // báo cho bản desktop biết cửa sổ còn mở
 
 // ----- đối chiếu tờ khai -----
 $("btnTk").onclick = async () => {
@@ -660,8 +947,335 @@ $("btnScNow").onclick = async () => { unlockAlerts(); try { renderSchedule(await
 api("/api/schedule").then(renderSchedule).catch(() => {});
 setInterval(() => api("/api/schedule").then(s => { if (document.activeElement.closest && !document.activeElement.closest("#scOn,#scDay,#scHour,.scKind")) renderSchedule(s); }).catch(() => {}), 10000);
 
-// ----- chuyển trang theo menu (#tai, #doichieu, #lich, #nhapfile, #dulieu) -----
-const PAGES = ["tai", "chungtu", "doichieu", "lich", "nhapfile", "dulieu"];
+// ----- số tiền: gõ 1234567 -> hiện 1.234.567 -----
+const parseVn = s => Number(String(s || "").replace(/[^\d-]/g, "")) || 0;
+document.querySelectorAll(".vnum").forEach(el => {
+  el.setAttribute("inputmode", "numeric"); el.placeholder = el.placeholder || "0";
+  el.addEventListener("input", () => { const n = parseVn(el.value); el.value = n ? n.toLocaleString("vi-VN") : (el.value.trim() === "-" ? "-" : ""); });
+});
+const setVn = (id, v) => { $(id).value = v ? Number(v).toLocaleString("vi-VN") : ""; };
+
+// ----- Dự báo VAT -----
+let vatForm = [], vatMsts = [];
+const VAT_INPUTS = {ct22: "v22", ct23a: "v23a", ct24a: "v24a", khong_kt: "vKhongKt", ct32b: "v32b", ct34a: "v34a", ct37: "v37", ct38: "v38", ct39a: "v39a", ct40b: "v40b", ct42: "v42"};
+function vatPeriod() {
+  const kieu = $("vKieu").value;
+  if (kieu === "Q") return {kieu, ky: +$("vQ").value, nam: +$("vY").value};
+  const [y, m] = ($("vMonth").value || "").split("-").map(Number);
+  return {kieu, ky: m, nam: y};
+}
+function vatSetKieu(k) {
+  $("vKieu").value = k; $("vMonthBox").style.display = k === "M" ? "" : "none";
+  $("vQBox").style.display = $("vYBox").style.display = k === "Q" ? "" : "none";
+}
+async function loadVatMsts() {
+  try {
+    const r = await api("/api/vat/msts"); vatMsts = r.items;
+    const opts = r.items.map(x => `<option value="${esc(x.mst)}">${esc(x.mst)}</option>`).join("") || `<option value="">(chưa có dữ liệu hóa đơn)</option>`;
+    ["vMst", "fmMst"].forEach(id => { const cur = $(id).value; $(id).innerHTML = opts;
+      if (cur && r.items.some(x => x.mst === cur)) $(id).value = cur; else if (r.current && r.items.some(x => x.mst === r.current)) $(id).value = r.current; });
+    const c = vatMsts.find(x => x.mst === $("vMst").value); if (c) { vatSetKieu(c.kieu); $("vAuto").checked = c.auto; }
+  } catch (e) {}
+}
+async function loadVatInfo() {
+  const p = vatPeriod(); if (!$("vMst").value || !p.ky || !p.nam) return;
+  try {
+    const r = await api(`/api/vat/info?mst=${encodeURIComponent($("vMst").value)}&kieu=${p.kieu}&ky=${p.ky}&nam=${p.nam}`);
+    vatForm = r.form; $("vAuto").checked = r.cfg.auto;
+    Object.entries(VAT_INPUTS).forEach(([k, id]) => setVn(id, r.inputs[k]));
+    if (!("ct22" in r.inputs)) setVn("v22", r.ct22.value);
+    $("v22Hint").textContent = r.ct22.source ? `Gợi ý: ${Number(r.ct22.value).toLocaleString("vi-VN")} đ (${r.ct22.source})` : "Kỳ trước chưa dự báo – nhập số dư khấu trừ kỳ trước nếu có";
+    if (r.result) renderVat(r.result); else $("vRes").style.display = "none";
+    $("vHist").innerHTML = r.history.map(h => `<tr><td><a href="#" data-vkey="${esc(h.key)}">${esc(h.label)}</a></td>
+      <td class="r">${h.phai_nop > 0 ? "Phải nộp <b>" + money(h.phai_nop) + "</b>" : "Chuyển kỳ sau <b>" + money(h.chuyen_ky_sau) + "</b>"}</td>
+      <td class="muted">${esc((h.created || "").replace("T", " "))} ${h.source && h.source.startsWith("auto") ? "· tự động" : ""}</td>
+      <td>${h.files && h.files.pdf ? `<a href="#" data-open="${esc(h.files.pdf)}">PDF</a> · ` : ""}${h.files && h.files.xlsx ? `<a href="#" data-open="${esc(h.files.xlsx)}">Excel</a>` : ""}</td></tr>`).join("")
+      || `<tr><td class="muted">Chưa dự báo kỳ nào</td></tr>`;
+  } catch (e) { msg($("vMsg"), e.message); }
+}
+function renderVat(s) {
+  const ct = s.ct, dl = s.deadline.split("-").reverse().join("/");
+  $("vRes").style.display = "";
+  $("vResTitle").textContent = `Kết quả dự báo ${s.label} – ${s.company.ten || ""} (MST ${s.mst})`;
+  $("vKpi").innerHTML = [
+    ct["40"] > 0 ? `<div class="big"><span>[40] Thuế GTGT còn phải nộp</span><b>${money(ct["40"])} đ</b><span>hạn nộp ${dl}</span></div>`
+                 : `<div class="big"><span>[43] Còn được khấu trừ chuyển kỳ sau</span><b>${money(ct["43"])} đ</b><span>không phát sinh số phải nộp</span></div>`,
+    `<div><span>[34] Doanh thu bán ra (${s.stat.ban_ra} HĐ)</span><b>${money(ct["34"])}</b></div>`,
+    `<div><span>[35] Thuế GTGT đầu ra</span><b>${money(ct["35"])}</b></div>`,
+    `<div><span>[23] Giá trị mua vào (${s.stat.mua_vao} HĐ)</span><b>${money(ct["23"])}</b></div>`,
+    `<div><span>[25] Thuế đầu vào được khấu trừ</span><b>${money(ct["25"])}</b></div>`,
+    `<div><span>[36] Thuế phát sinh trong kỳ</span><b>${money(ct["36"])}</b></div>`,
+    `<div><span>[22] Kỳ trước chuyển sang</span><b>${money(ct["22"])}</b></div>`,
+    s.pl8.n ? `<div><span>Bán ra 8%: giảm thuế (phụ lục)</span><b>${money(s.pl8.giam)}</b></div>` : ""].join("");
+  const f = s.files || {};
+  $("vFiles").innerHTML = [f.pdf ? `<button class="sec" data-open="${esc(f.pdf)}">Mở PDF tờ khai + bảng kê</button>` : "",
+    f.xlsx ? `<button class="sec" data-open="${esc(f.xlsx)}">Mở Excel</button>` : "",
+    `<button class="sec" id="vPrint">In (mở bản HTML)</button>`,
+    f.pdf_error ? `<span class="msg err">Không in được PDF: ${esc(f.pdf_error)} – dùng bản HTML để in.</span>` : "",
+    `<span class="muted"> Lập lúc ${esc((s.created || "").replace("T", " "))}${s.source && s.source.startsWith("auto") ? " (tự động)" : ""}</span>`].join(" ");
+  $("vPrint").onclick = () => window.open(`/api/vat/print?mst=${encodeURIComponent(s.mst)}&key=${encodeURIComponent(s.key)}`, "_blank");
+  $("vWarn").innerHTML = (s.warnings || []).map(w => `<li>${esc(w)}</li>`).join("") +
+    ((s.legal || []).length ? `<li style="color:#1f2328;list-style:none;margin-left:-18px;margin-top:6px"><b>Căn cứ pháp lý (${esc(s.mau === "TT89" ? "mẫu 01/GTGT theo TT 89/2026" : "mẫu 01/GTGT theo TT 80/2021")}):</b><ul style="color:#1f2328">` +
+      s.legal.map(l => `<li>${esc(l.text)} – <a href="${esc(l.url)}" target="_blank" rel="noopener noreferrer">xem</a></li>`).join("") + `</ul></li>` : "");
+  const row = ([stt, text, cv, cx, kind]) => `<tr class="${kind === "h" ? "h" : kind === "b" ? "bb" : ""}"><td>${esc(stt)}</td><td>${esc(text)}</td>
+    <td class="code">${cv ? "[" + cv + "]" : ""}</td><td class="r">${kind === "chk" ? (s.ct21 ? "X" : "") : cv ? money(ct[cv]) : ""}</td>
+    <td class="code">${cx ? "[" + cx + "]" : ""}</td><td class="r">${cx ? money(ct[cx]) : ""}</td></tr>`;
+  $("vatTable").querySelector("tbody").innerHTML = `<tr><th>STT</th><th>Chỉ tiêu</th><th colspan="2" class="r">Giá trị HHDV (chưa thuế)</th><th colspan="2" class="r">Thuế GTGT</th></tr>` + vatForm.map(row).join("");
+}
+document.addEventListener("click", e => {
+  const a = e.target.closest("[data-open]"); if (a) { e.preventDefault(); openFile(a.dataset.open); return; }
+  const k = e.target.closest("[data-vkey]");
+  if (k) { e.preventDefault(); const key = k.dataset.vkey, q = key.match(/^(\d{4})-Q(\d)$/);
+    if (q) { vatSetKieu("Q"); $("vQ").value = q[2]; $("vY").value = q[1]; } else { vatSetKieu("M"); $("vMonth").value = key; }
+    loadVatInfo(); window.scrollTo(0, 0); }
+});
+$("vKieu").onchange = () => { vatSetKieu($("vKieu").value); loadVatInfo(); };
+["vMonth", "vQ", "vY"].forEach(id => $(id).addEventListener("change", loadVatInfo));
+$("vMst").onchange = () => { const c = vatMsts.find(x => x.mst === $("vMst").value); if (c) vatSetKieu(c.kieu); loadVatInfo(); };
+$("btnVCfg").onclick = async () => {
+  try { await api("/api/vat/config", {method: "POST", headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({mst: $("vMst").value, kieu: $("vKieu").value, auto: $("vAuto").checked})});
+        msg($("vMsg"), `Đã lưu: kê khai theo ${$("vKieu").value === "Q" ? "quý" : "tháng"}, ${$("vAuto").checked ? "tự dự báo lúc 00:00 ngày đầu kỳ sau" : "không tự dự báo"}`, true);
+        loadVatMsts(); } catch (e) { msg($("vMsg"), e.message); }
+};
+$("btnVat").onclick = async () => {
+  const p = vatPeriod(); if (!p.ky || !p.nam) return msg($("vMsg"), "Chọn kỳ tính thuế");
+  const inputs = {}; Object.entries(VAT_INPUTS).forEach(([k, id]) => inputs[k] = parseVn($(id).value));
+  $("btnVat").disabled = true; msg($("vMsg"), "Đang cộng hóa đơn, lập tờ khai, bảng kê và in PDF…", true);
+  try {
+    const s = await api("/api/vat/forecast", {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({mst: $("vMst").value, ...p, inputs})});
+    msg($("vMsg"), `Xong – ${s.rows} hóa đơn trong kỳ.` + (s.missing.length ? ` Chưa có dữ liệu tháng ${s.missing.join(", ")}.` : ""), !s.missing.length);
+    await loadVatInfo(); renderVat(s); loadNoti();
+  } catch (e) { msg($("vMsg"), e.message); }
+  $("btnVat").disabled = false;
+};
+
+$("btnVatQuick").onclick = async () => {
+  const p = vatPeriod(); if (!p.ky || !p.nam) return msg($("vMsg"), "Chọn kỳ tính thuế");
+  $("btnVatQuick").disabled = true; msg($("vMsg"), "Đang đọc danh sách hóa đơn trên cổng thuế…", true);
+  try {
+    const st = await api("/api/vat/quick-read", {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({mst: $("vMst").value, ...p, inputs: {}})});
+    msg($("vMsg"), `Đã đọc ${st.mua_vao} HĐ mua vào, ${st.ban_ra} HĐ bán ra trong ${st.giay} giây. Đang lấy chi tiết từng mặt hàng để lập bảng kê đầy đủ…`, true);
+    $("btnVat").click();  // dự báo ngay bằng số liệu vừa đọc
+    const mst = $("vMst").value, timer = setInterval(async () => {
+      let s; try { s = await api("/api/vat/quick-read/" + mst); } catch (e) { return; }
+      if (s.status === "running") msg($("vMsg"), `Đang lấy chi tiết mặt hàng ${s.done}/${s.total} hóa đơn…`, true);
+      else { clearInterval(timer); msg($("vMsg"), s.status === "done" ? "Xong – tờ khai và bảng kê chi tiết đầy đủ đã lập (xem nút Mở PDF / Excel)." : "Lấy chi tiết bị dừng: " + s.status, s.status === "done"); loadVatInfo(); }
+    }, 2000);
+  } catch (e) { msg($("vMsg"), e.message + (e.message.includes("đăng nhập") ? " (vào mục Tải hóa đơn → 1. Mở trang hóa đơn điện tử)" : "")); }
+  $("btnVatQuick").disabled = false;
+};
+
+// ----- Thông báo (chuông) -----
+let notiSeen = null, notiTop = null;
+async function loadNoti() {
+  let r; try { r = await api("/api/notifications"); } catch (e) { return; }
+  $("bellN").textContent = r.unread; $("bellN").style.display = r.unread ? "" : "none";
+  $("notiList").innerHTML = r.items.map(n => `<div class="noti ${n.read ? "" : "unread"}">
+    <b>${n.level === "warn" ? "⚠️ " : n.level === "ok" ? "✅ " : "ℹ️ "}${esc(n.title)}</b><div>${esc(n.body)}</div>
+    ${(n.warnings || []).length ? `<ul>${n.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}
+    <div class="muted" style="margin-top:4px">${esc(n.time.replace("T", " "))}
+      ${n.kind === "vat" ? ` · <a href="#" data-nvat="${esc(n.mst)}|${esc(n.key)}">Xem dự báo</a>` : ""}
+      ${n.files && n.files.pdf ? ` · <a href="#" data-open="${esc(n.files.pdf)}">PDF</a>` : ""}
+      ${n.files && n.files.xlsx ? ` · <a href="#" data-open="${esc(n.files.xlsx)}">Excel</a>` : ""}</div></div>`).join("")
+    || `<div class="noti muted">Chưa có thông báo</div>`;
+  const newest = r.items.find(n => !n.read);
+  if (notiSeen === null) notiSeen = new Set(r.items.map(n => n.id));   // lần đầu mở app: chỉ hiện popup thông báo chưa đọc mới nhất
+  if (newest && !notiSeen.has(newest.id) || (newest && notiTop === null && !newest.read)) {
+    notiTop = newest; notiSeen.add(newest.id);
+    $("ntTitle").textContent = newest.title; $("ntBody").textContent = newest.body; $("notiToast").style.display = "";
+    notifyUser(newest.title, newest.body);
+  }
+  r.items.forEach(n => notiSeen.add(n.id));
+}
+function openVatFromNoti(mst, key) {
+  location.hash = "vat"; $("vMst").value = mst;
+  const q = key.match(/^(\d{4})-Q(\d)$/);
+  if (q) { vatSetKieu("Q"); $("vQ").value = q[2]; $("vY").value = q[1]; } else { vatSetKieu("M"); $("vMonth").value = key; }
+  loadVatInfo();
+}
+$("bell").onclick = e => { e.stopPropagation(); const p = $("notiPanel"); p.style.display = p.style.display === "block" ? "none" : "block"; };
+document.addEventListener("click", e => { if (!e.target.closest("#notiPanel,#bell")) $("notiPanel").style.display = "none"; });
+$("notiAll").onclick = async e => { e.preventDefault(); await api("/api/notifications/read", {method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"}); loadNoti(); };
+$("notiList").addEventListener("click", e => { const a = e.target.closest("[data-nvat]"); if (!a) return; e.preventDefault();
+  const [m, k] = a.dataset.nvat.split("|"); openVatFromNoti(m, k); $("notiPanel").style.display = "none"; });
+$("ntClose").onclick = async e => { e.preventDefault(); $("notiToast").style.display = "none";
+  if (notiTop) await api("/api/notifications/read", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({ids: [notiTop.id]})}).catch(() => {}); loadNoti(); };
+$("ntOpen").onclick = async () => { $("notiToast").style.display = "none";
+  if (notiTop) { if (notiTop.kind === "vat" || notiTop.kind === "vat-info") openVatFromNoti(notiTop.mst, notiTop.key); else $("notiPanel").style.display = "block";
+    await api("/api/notifications/read", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({ids: [notiTop.id]})}).catch(() => {}); loadNoti(); } };
+setInterval(loadNoti, 10000);
+
+// ----- Lấy PDF theo link + mã tra cứu / lấy bù hàng loạt -----
+$("btnLk").onclick = async () => {
+  $("btnLk").disabled = true; msg($("lkMsg"), "Đang mở trang tra cứu (Chrome chạy ẩn)… có thể mất 10–60 giây", true);
+  try {
+    const r = await api("/api/pdf/lookup", {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({url: $("lkUrl").value, code: $("lkCode").value, seller_mst: $("lkMst").value, khhdon: $("lkKh").value, shdon: $("lkSo").value})});
+    if (r.ok) { msg($("lkMsg"), `Đã lấy PDF${r.printed ? " (in từ trang hóa đơn của NCC)" : ""}${r.provider ? " – " + r.provider : ""}. `, true);
+      $("lkMsg").insertAdjacentHTML("beforeend", `<a href="#" data-open="${esc(r.file)}">Mở file</a>`); }
+    else msg($("lkMsg"), (r.needs_captcha ? "Trang tra cứu bắt nhập captcha / kiểm tra chống robot – hãy mở link để tải tay. " : "Chưa lấy được PDF. ")
+      + (r.attempts || []).slice(-3).join(" | "));
+  } catch (e) { msg($("lkMsg"), e.message); }
+  $("btnLk").disabled = false;
+};
+let fmJob = null, fmTimer = null;
+$("btnFm").onclick = async () => {
+  try {
+    const j = await api("/api/pdf/fill-missing", {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({mst: $("fmMst").value, month_from: $("fmFrom").value, month_to: $("fmTo").value || $("fmFrom").value})});
+    fmJob = j.id; $("btnFm").disabled = true; $("btnFmStop").disabled = false; $("fmLog").style.display = "";
+    clearInterval(fmTimer);
+    fmTimer = setInterval(async () => {
+      let s; try { s = await api("/api/pdf/fill-missing/" + fmJob); } catch (e) { return; }
+      $("fmText").textContent = `${s.done}/${s.total} hóa đơn – lấy được ${s.ok} PDF gốc, ${s.captcha} cần captcha`;
+      $("fmLog").textContent = s.log.join("\n"); $("fmLog").scrollTop = 1e9;
+      if (s.status !== "running") { clearInterval(fmTimer); $("btnFm").disabled = false; $("btnFmStop").disabled = true; }
+    }, 2000);
+  } catch (e) { $("fmText").textContent = e.message; }
+};
+$("btnFmStop").onclick = () => fmJob && api(`/api/pdf/fill-missing/${fmJob}/stop`, {method: "POST"});
+
+// ----- Trợ lý AI -----
+let aiChat = null;
+function mdLite(s) {  // hiển thị markdown đơn giản an toàn: **đậm**, link, gạch đầu dòng, xuống dòng
+  return esc(s).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>")
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
+    .replace(/(^|[\s(])(https?:\/\/[^\s<)]+)/g, '$1<a href="$2" target="_blank" rel="noopener noreferrer">$2</a>')
+    .replace(/^#{1,4} (.+)$/gm, "<b>$1</b>").replace(/^-{3,}$/gm, '<hr style="border:0;border-top:1px solid var(--b)">')
+    .replace(/^&gt; ?/gm, "").replace(/^(\s*)[-*] /gm, "$1• ").replace(/\n/g, "<br>").replace(/(<hr[^>]*>)<br>/g, "$1");
+}
+function aiAdd(who, html, name, color) {
+  if (name) { const w = document.createElement("div"); w.className = "aiWho";
+    w.innerHTML = `<i style="background:${esc(color || "#0b5cad")}">${esc(name.split(" ").map(x => x[0]).join("").slice(0, 2))}</i>${esc(name)}`;
+    $("aiLog").appendChild(w); }
+  const d = document.createElement("div");
+  d.className = "aiMsg " + who;
+  d.innerHTML = html; $("aiLog").appendChild(d); $("aiLog").scrollTop = 1e9; return d;
+}
+let aiGroupOn = false;
+try { aiGroupOn = localStorage.getItem("aiGroup") === "1"; } catch (e) {}
+function aiGroupUi() {
+  $("aiGroup").classList.toggle("on", aiGroupOn);
+  $("aiSub").textContent = aiGroupOn ? "Nhóm 3 AI: Kế toán trưởng · Chuyên viên thuế · Kiểm soát rủi ro" : "Làm việc trên app · tư vấn thuế, kế toán";
+}
+$("aiGroup").onclick = () => { aiGroupOn = !aiGroupOn; try { localStorage.setItem("aiGroup", aiGroupOn ? "1" : ""); } catch (e) {}
+  aiGroupUi(); aiAdd("bot", aiGroupOn ? "👥 Đã bật <b>nhóm chat</b>: Kế toán trưởng trả lời và làm việc trên app, Chuyên viên thuế soát căn cứ pháp lý, Kiểm soát rủi ro nêu rủi ro và việc cần làm. Trả lời sẽ lâu hơn một chút." : "Đã tắt nhóm chat – chỉ một trợ lý trả lời."); };
+// Mở / đóng bóng chat (nhớ trạng thái trong phiên)
+function aiOpen(on) {
+  $("aiPanel").classList.toggle("open", on); $("aiFab").style.display = on ? "none" : "";
+  if (on) { $("aiDot").style.display = "none"; if (!$("aiLog").children.length) aiWelcome(); setTimeout(() => $("aiText").focus(), 50); }
+  try { sessionStorage.setItem("aiOpen", on ? "1" : ""); } catch (e) {}
+}
+function aiWelcome() {
+  aiAdd("bot", "Xin chào anh/chị! Em là trợ lý AWBook. Em có thể <b>làm việc trên app</b> (tải hóa đơn, dự báo VAT, lấy PDF, tìm hóa đơn, mở đúng màn hình) và <b>tư vấn thuế, kế toán</b> có dẫn văn bản pháp luật. Anh/chị cứ gõ yêu cầu nhé.");
+}
+$("aiFab").onclick = () => aiOpen(true);
+$("aiClose").onclick = () => aiOpen(false);
+$("aiMax").onclick = () => $("aiPanel").classList.toggle("max");
+$("aiGear").onclick = () => $("aiCfg").classList.toggle("show");
+try { if (sessionStorage.getItem("aiOpen")) aiOpen(true); } catch (e) {}
+// Ngữ cảnh màn hình gửi kèm mỗi câu: trang đang mở + trạng thái chính, để AI hiểu "cái này", "nút này"
+function aiContext() {
+  const page = (location.hash.slice(1) || "tai");
+  const title = (document.querySelector(`nav a[data-page="${page}"]`) || {}).textContent || page;
+  const parts = [`trang "${title.trim()}" (mã ${page})`, `trình duyệt cổng thuế: ${$("bState").textContent}`];
+  if (autoJob) parts.push(`lượt tải đang chạy: ${$("aText").textContent}`);
+  if (page === "vat") parts.push(`đang xem dự báo MST ${$("vMst").value}, kỳ ${$("vKieu").value === "Q" ? "quý " + $("vQ").value + "/" + $("vY").value : $("vMonth").value}` +
+    ($("vRes").style.display !== "none" ? `; kết quả: ${$("vResTitle").textContent} – ${$("vKpi").innerText.replace(/\n/g, " ").slice(0, 300)}` : ""));
+  if (page === "tai") parts.push(`khoảng ngày ${$("aFrom").value} → ${$("aTo").value}`);
+  const err = [...document.querySelectorAll(`#page-${page} .msg.err`)].map(e => e.textContent).filter(Boolean).join(" | ");
+  if (err) parts.push(`lỗi đang hiện: ${err.slice(0, 300)}`);
+  return parts.join("; ");
+}
+function aiDoUi(list) {  // trợ lý yêu cầu mở màn hình / mở file
+  (list || []).forEach(u => {
+    if (u.type === "file") openFile(u.path);
+    if (u.type === "page") {
+      location.hash = u.page;
+      if (u.page === "vat" && u.mst) { if (u.key) openVatFromNoti(u.mst, u.key); else { $("vMst").value = u.mst; loadVatInfo(); } }
+    }
+  });
+}
+let aiSt = null;
+const AI_HINT = {
+  gemini: "Miễn phí: đăng nhập Google tại aistudio.google.com/apikey → Create API key → dán vào đây. Không cần thẻ. Gói free giới hạn số lượt mỗi phút/ngày; khóa Gemini cũng dùng để tra cứu luật (Google Search).",
+  groq: "Miễn phí có giới hạn lượt: console.groq.com/keys. Tra cứu luật cần thêm khóa Gemini (miễn phí).",
+  openrouter: "Chỉ dùng model có đuôi :free (giới hạn lượt/ngày): openrouter.ai/settings/keys. Tra cứu luật cần thêm khóa Gemini.",
+  ollama: "Chạy AI ngay trên máy, miễn phí hoàn toàn: cài Ollama (ollama.com/download), mở cửa sổ lệnh chạy: ollama pull qwen3:8b (máy nên có từ 16 GB RAM). Không cần khóa. Tra cứu luật cần thêm khóa Gemini.",
+  claude: "Trả phí theo lượt dùng, thông minh nhất: console.anthropic.com → Settings → API Keys.",
+};
+function aiFillProv() {
+  const p = $("aiProv").value, c = aiSt.providers[p];
+  $("aiKeyLink").href = c.key_url; $("aiModel").value = c.model; $("aiModelList").innerHTML = "";
+  $("aiKey").placeholder = c.has_key ? "Đã có khóa – để trống nếu không đổi" : (p === "ollama" ? "Không cần khóa" : "Dán khóa API – lưu trên máy này (data/ai.json)");
+  $("aiProvHint").textContent = AI_HINT[p] || "";
+}
+async function aiStatus() {
+  try { const s = aiSt = await api("/api/ai/status");
+    $("aiProv").innerHTML = Object.entries(s.providers).map(([k, v]) => `<option value="${k}">${esc(v.name)}${v.has_key ? " ✓" : ""}</option>`).join("");
+    $("aiProv").value = s.provider; aiFillProv();
+    $("aiCfgSum").textContent = s.configured ? `Đang dùng: ${s.providers[s.provider].name} · ${s.hint || ""} · model ${s.model}${s.law_search ? "" : " · ⚠️ chưa tra cứu luật được (cần khóa Gemini miễn phí)"}` : "⚠️ Chưa cài AI – chọn AI miễn phí và dán khóa";
+    aiGroupUi();
+    // Khách (bản đóng gói) không thấy phần khóa API: dùng khóa dựng sẵn của nhà phát hành, mở là chat được
+    $("aiGear").style.display = s.can_set_builtin ? "" : "none";
+    $("aiBuiltinBox").style.display = s.can_set_builtin ? "" : "none";
+    if (!s.configured && s.can_set_builtin) $("aiCfg").classList.add("show");
+    if (!s.configured && !s.can_set_builtin) $("aiSub").textContent = "Trợ lý chưa được kích hoạt – liên hệ nhà cung cấp phần mềm"; } catch (e) {}
+}
+$("btnAiBuiltin").onclick = async () => {
+  try { await api("/api/ai/builtin", {method: "POST", headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({provider: $("aiProv").value, key: $("aiBuiltinKey").value.trim()})});
+        $("aiBuiltinKey").value = ""; msg($("aiKeyMsg"), "Đã lưu khóa dựng sẵn (app/ai_builtin.json) – chạy build_exe.bat để đóng gói kèm bản cho khách", true); aiStatus(); }
+  catch (e) { msg($("aiKeyMsg"), e.message); }
+};
+$("aiProv").onchange = aiFillProv;
+$("aiModelsLoad").onclick = async e => { e.preventDefault();
+  try { const r = await api("/api/ai/models?provider=" + $("aiProv").value);
+        $("aiModelList").innerHTML = r.items.map(m => `<option value="${esc(m)}">`).join(""); msg($("aiKeyMsg"), `${r.items.length} model – bấm vào ô Model để chọn`, true); }
+  catch (err) { msg($("aiKeyMsg"), err.message + " (lưu khóa trước rồi tải danh sách)"); } };
+async function aiSend(text) {
+  text = (text || $("aiText").value).trim(); if (!text) return;
+  aiOpen(true);
+  $("aiText").value = ""; $("aiText").style.height = ""; aiAdd("me", esc(text)); $("btnAi").disabled = true;
+  const wait = aiAdd("bot", `<span class="aiTyping"><span></span><span></span><span></span></span> <span class="muted">${aiGroupOn ? "nhóm AI đang làm việc…" : "đang xử lý…"}</span>`,
+    aiGroupOn ? "Kế toán trưởng" : null, "#0b5cad");
+  try {
+    const r = await api("/api/ai/chat", {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({chat_id: aiChat, text, context: aiContext(), group: aiGroupOn})});
+    aiChat = r.chat_id;
+    aiDoUi(r.ui);
+    if (!$("aiPanel").classList.contains("open")) $("aiDot").style.display = "inline-block";
+    wait.innerHTML = mdLite(r.reply || "(không có nội dung)") +
+      (r.actions.length ? `<details style="margin-top:6px"><summary class="muted">Đã thực hiện ${r.actions.length} bước</summary><div class="muted">${r.actions.map(esc).join("<br>")}</div></details>` : "") +
+      (r.sources.length ? `<div class="muted" style="margin-top:6px"><b>Nguồn đã tra:</b><br>${r.sources.map(s => `<a href="${esc(s.url)}" target="_blank" rel="noopener noreferrer">${esc(s.title || s.url)}</a>`).join("<br>")}</div>` : "");
+    (r.group || []).forEach(g => aiAdd("bot", mdLite(g.text), g.name, g.color));
+    if (aiGroupOn && r.group && !r.group.length) aiAdd("bot", `<span class="muted">Các thành viên khác trong nhóm đang bận (hết lượt / quá tải) – chỉ có câu trả lời của Kế toán trưởng.</span>`);
+    if (r.actions.some(a => a.includes("start_download"))) refreshBrowser();
+    loadNoti();
+  } catch (e) { wait.innerHTML = `<span class="msg err">${esc(e.message)}</span>`; aiStatus(); }
+  $("btnAi").disabled = false; $("aiText").focus();
+}
+$("btnAi").onclick = () => aiSend();
+$("aiText").addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); aiSend(); } });
+$("aiText").addEventListener("input", () => { const t = $("aiText"); t.style.height = ""; t.style.height = Math.min(t.scrollHeight, 120) + "px"; });
+document.querySelectorAll(".aiChip").forEach(b => b.onclick = () => aiSend(b.textContent));
+$("btnAiNew").onclick = () => { aiChat = null; $("aiLog").innerHTML = ""; aiWelcome(); };
+$("btnAiKey").onclick = async () => {
+  const key = $("aiKey").value.trim();
+  try { await api("/api/ai/key", {method: "POST", headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({provider: $("aiProv").value, key: key || null, model: $("aiModel").value})});
+        $("aiKey").value = ""; msg($("aiKeyMsg"), "Đã lưu cài đặt AI", true); aiChat = null; aiStatus(); } catch (e) { msg($("aiKeyMsg"), e.message); }
+};
+$("btnAiKeyDel").onclick = async () => { await api("/api/ai/key", {method: "POST", headers: {"Content-Type": "application/json"},
+  body: JSON.stringify({provider: $("aiProv").value, key: ""})}); msg($("aiKeyMsg"), "Đã xóa khóa đã lưu", true); aiStatus(); };
+aiStatus();
+
+// ----- chuyển trang theo menu (#tai, #vat, #doichieu, #lich, #nhapfile, #dulieu); #ai = mở bóng chat -----
+const PAGES = ["tai", "vat", "misa", "chungtu", "doichieu", "lich", "nhapfile", "dulieu"];
+window.addEventListener("hashchange", () => { if (location.hash === "#ai") { aiOpen(true); history.replaceState(null, "", "#tai"); showPage(); } });
 
 // ----- trang Sao kê & chứng từ -----
 function dropZone(zoneId, inputId, infoId) {
@@ -684,6 +1298,40 @@ api("/api/ocr/status").then(s => {
 }).catch(() => {});
 const openFile = p => api("/api/open-folder?path=" + encodeURIComponent(p), {method: "POST"}).catch(e => alert(e.message));
 const invZone = dropZone("dropInv", "invFiles", "dropInvInfo"), bankZone = dropZone("dropBank", "bankFiles", "dropBankInfo");
+// ----- chuyển dữ liệu MISA -----
+const misaZone = dropZone("dropMisa", "misaFiles", "dropMisaInfo");
+$("btnMisa").onclick = async () => {
+  if (!misaZone.files.length) return msg($("misaMsg"), "Chọn hóa đơn trước");
+  const fd = new FormData(); misaZone.files.forEach(f => fd.append("files", f));
+  if ($("mTpl").files[0]) fd.append("template", $("mTpl").files[0]);
+  fd.append("direction", $("mDir").value); fd.append("mst", $("mMst").value.trim());
+  const d = $("mDir").value === "sold";
+  fd.append("accounts", JSON.stringify({tk_kho: $("mTkKho").value.trim(), tk_cong_no: $("mTkCn").value.trim(),
+    tk_doanh_thu: $("mTkDt").value.trim(), tk_thue: $("mTkThue").value.trim()}));
+  $("btnMisa").disabled = true; msg($("misaMsg"), `Đang tải ${misaZone.files.length} file lên…`, true); $("misaRows").innerHTML = "";
+  try {
+    const j = await api("/api/misa/convert", {method: "POST", body: fd});
+    $("misaProg").style.display = "";
+    const timer = setInterval(async () => {
+      let s; try { s = await api("/api/misa/" + j.id); } catch (e) { return; }
+      $("misaProg").max = Math.max(s.total, 1); $("misaProg").value = s.done;
+      msg($("misaMsg"), `${s.done}/${s.total} hóa đơn` + (s.ai ? ` (AI đọc ${s.ai})` : ""), true);
+      $("misaLog").textContent = s.log.slice(-5).join("\n");
+      if (s.status !== "running") {
+        clearInterval(timer); $("btnMisa").disabled = false;
+        if (s.status === "done") {
+          msg($("misaMsg"), "Xong – ", true);
+          $("misaMsg").insertAdjacentHTML("beforeend", `<a href="#" id="misaOpen">Mở file đã điền dữ liệu</a>`);
+          $("misaOpen").onclick = e => { e.preventDefault(); openFile(s.file); };
+        } else msg($("misaMsg"), "Lỗi – xem nhật ký");
+        $("misaRows").innerHTML = `<tr><th>File</th><th>Hóa đơn</th><th>Ngày</th><th>Đối tác</th><th class="r">Dòng</th><th class="r">Tổng TT</th><th>Lấy từ</th><th>Ghi chú</th></tr>` +
+          s.results.map(r => `<tr><td>${esc(r.file)}</td><td>${esc(r.hd || "")}</td><td>${esc(r.ngay || "")}</td><td>${esc(r.doi_tac || "")}</td>
+            <td class="r">${r.dong ?? ""}</td><td class="r">${money(r.tong)}</td><td>${esc(r.nguon || "")}</td>
+            <td>${r.loi ? `<span class="badge failed">${esc(r.loi)}</span>` : `<span class="badge original">OK</span>`}</td></tr>`).join("");
+      }
+    }, 1500);
+  } catch (e) { msg($("misaMsg"), e.message); $("btnMisa").disabled = false; }
+};
 $("btnInvRead").onclick = async () => {
   if (!invZone.files.length) return msg($("invMsg"), "Chọn file trước");
   const fd = new FormData(); invZone.files.forEach(f => fd.append("files", f));
@@ -700,22 +1348,69 @@ $("btnInvRead").onclick = async () => {
   } catch (e) { msg($("invMsg"), e.message); }
   $("btnInvRead").disabled = false;
 };
+const bkStmtZone = dropZone("dropBkStmt", "bkStmtFiles", "dropBkStmtInfo"),
+      bkBookZone = dropZone("dropBkBook", "bkBookFiles", "dropBkBookInfo");
+$("btnBkBook").onclick = async () => {
+  if (!bkStmtZone.files.length) return msg($("bkBookMsg"), "Chọn file sao kê gốc của ngân hàng");
+  if (!bkBookZone.files.length) return msg($("bkBookMsg"), "Chọn file sổ xuất từ phần mềm kế toán");
+  const fd = new FormData();
+  bkStmtZone.files.forEach(f => fd.append("stmt", f)); bkBookZone.files.forEach(f => fd.append("book", f));
+  $("btnBkBook").disabled = true; msg($("bkBookMsg"), "Đang đọc sao kê, đọc sổ và đối chiếu từng giao dịch...", true);
+  $("bkBookResult").innerHTML = "";
+  try {
+    const r = await api("/api/docs/bank-book", {method: "POST", body: fd});
+    const s = r.tong_hop, n = v => v == null ? "–" : Number(v).toLocaleString("vi-VN"), d = s.dem;
+    const diff = (a, b) => (a == null || b == null) ? "–" : `<b style="color:var(${Math.abs(a - b) > 0.5 ? "--err" : "--ok"})">${n(a - b)}</b>`;
+    msg($("bkBookMsg"), s.lech ? `Có ${s.lech} chỗ lệch cần xử lý (${s.tu} → ${s.den})`
+                               : `Khớp hết: ${r.so_sk} giao dịch sao kê khớp với sổ (${s.tu} → ${s.den})`, !s.lech);
+    $("bkBookResult").innerHTML =
+      `<table class="tbl"><tr><th></th><th class="r">Sao kê ngân hàng</th><th class="r">Sổ kế toán</th><th class="r">Chênh lệch</th></tr>
+        <tr><td>Tổng tiền vào</td><td class="r">${n(s.sk_vao)}</td><td class="r">${n(s.so_vao)}</td><td class="r">${diff(s.sk_vao, s.so_vao)}</td></tr>
+        <tr><td>Tổng tiền ra</td><td class="r">${n(s.sk_ra)}</td><td class="r">${n(s.so_ra)}</td><td class="r">${diff(s.sk_ra, s.so_ra)}</td></tr>
+        <tr><td>Số dư đầu kỳ</td><td class="r">${n(s.sk_dau_ky)}</td><td class="r">${n(s.so_dau_ky)}</td><td class="r">${diff(s.sk_dau_ky, s.so_dau_ky)}</td></tr>
+        <tr><td>Số dư cuối kỳ</td><td class="r">${n(s.sk_cuoi_ky)}</td><td class="r">${n(s.so_cuoi_ky)}</td><td class="r">${diff(s.sk_cuoi_ky, s.so_cuoi_ky)}</td></tr></table>` +
+      `<div style="margin:6px 0">${["Khớp", "Khớp gộp", "Khớp – lệch ngày", "Lệch số tiền", "Sai chiều thu/chi", "Chỉ có trên sao kê", "Chỉ có trên sổ"]
+          .map(k => `<span class="badge ${k.startsWith("Khớp") ? "original" : "failed"}">${k}: ${d[k] || 0}</span>`).join(" ")}
+        ${s.ngoai_ky ? `<span class="muted"> · ${s.ngoai_ky} dòng sổ ngoài kỳ sao kê (không đối chiếu)</span>` : ""}</div>` +
+      (r.can_xu_ly.length ? `<table class="tbl"><tr><th>Trạng thái</th><th>Ngày</th><th>Sao kê</th><th>Sổ kế toán</th><th>Ghi chú</th></tr>` +
+        r.can_xu_ly.slice(0, 60).map(x => `<tr><td>${esc(x.trang_thai)}</td><td>${esc(x.ngay)}</td><td>${esc(x.sk)}</td>
+          <td>${esc(x.so)}</td><td>${esc(x.ghi_chu)}</td></tr>`).join("") + `</table>` : "") +
+      (r.errors.length ? `<div class="msg err">${r.errors.map(esc).join("<br>")}</div>` : "") +
+      `<div style="margin-top:6px"><a href="#" id="bkBookOpen">Mở file đối chiếu Excel (Tổng hợp / Cần xử lý / Tất cả)</a></div>`;
+    $("bkBookOpen").onclick = e => { e.preventDefault(); openFile(r.file); };
+  } catch (e) { msg($("bkBookMsg"), e.message); }
+  $("btnBkBook").disabled = false;
+};
 $("btnBank").onclick = async () => {
   if (!bankZone.files.length) return msg($("bankMsg"), "Chọn file sao kê trước");
   const fd = new FormData(); bankZone.files.forEach(f => fd.append("files", f));
-  $("btnBank").disabled = true; msg($("bankMsg"), "Đang đọc và đối chiếu...", true); $("bankResult").innerHTML = "";
+  fd.append("months_back", $("bkMonths").value || "0"); fd.append("lay_cong", $("bkPortal").checked ? "true" : "false");
+  fd.append("che_do", $("bkCheDo").value); fd.append("so_ct_bat_dau", $("bkStart").value || "1");
+  $("btnBank").disabled = true;
+  msg($("bankMsg"), $("bkPortal").checked ? "Đang đọc sao kê, lấy hóa đơn các tháng trước trên cổng HĐĐT và đối chiếu..." : "Đang đọc và đối chiếu...", true);
+  $("bankResult").innerHTML = "";
   try {
     const r = await api("/api/docs/bank", {method: "POST", body: fd});
-    msg($("bankMsg"), `Sao kê ${r.from} → ${r.to}: ${r.txns} giao dịch`, true);
+    const tk = r.tai_khoan || {};
+    msg($("bankMsg"), `Sao kê ${tk.so_tk ? "TK " + tk.so_tk + " " + (tk.ngan_hang || "") + " – " : ""}${r.from} → ${r.to}: ${r.txns} giao dịch`, true);
+    const links = [["bankOpen", "File đối chiếu (theo giao dịch / theo hóa đơn / hạch toán)", r.file]]
+      .concat(r.misa.map((p, i) => ["bankMisa" + i, "MISA – " + p.split(/[\\/]/).pop(), p]))
+      .concat(r.easybooks.map((p, i) => ["bankEasy" + i, "EasyBooks – " + p.split(/[\\/]/).pop(), p]));
     $("bankResult").innerHTML = `<table>
       <tr><td>Tiền vào (ghi có)</td><td class="r"><b>${money(r.tien_vao)}</b></td><td>Tiền ra (ghi nợ)</td><td class="r"><b>${money(r.tien_ra)}</b></td></tr>
-      <tr><td>Hóa đơn trong kỳ để ghép</td><td class="r">${r.invoices}</td><td><span class="badge original">Đã khớp</span></td><td class="r">${r.matched}</td></tr>
-      <tr><td><span class="badge rendered">Hóa đơn chưa thấy thanh toán</span></td><td class="r">${r.unpaid}</td>
-          <td><span class="badge failed">Giao dịch chưa có hóa đơn</span></td><td class="r">${r.unmatched}</td></tr></table>` +
-      (r.invoices ? "" : `<div class="msg err">Chưa có dữ liệu hóa đơn đã tải cho khoảng ngày này – hãy tải hóa đơn các tháng đó trước.</div>`) +
+      <tr><td>Hóa đơn dùng để ghép (máy + cổng)</td><td class="r">${r.invoices}</td><td><span class="badge original">Giao dịch đã gán HĐ</span></td><td class="r">${r.matched}</td></tr>
+      <tr><td><span class="badge rendered">Hóa đơn trong kỳ còn nợ</span></td><td class="r">${r.unpaid}</td>
+          <td><span class="badge failed">Giao dịch chưa có hóa đơn</span></td><td class="r">${r.unmatched}</td></tr>
+      <tr><td colspan="3">Chứng từ cần kiểm tra lại (tô vàng trong file)</td><td class="r">${r.kiem_tra}</td></tr></table>` +
+      (r.note ? `<div class="muted">${esc(r.note)}</div>` : "") +
+      (r.invoices ? "" : `<div class="msg err">Không có hóa đơn nào để ghép – hãy đăng nhập cổng HĐĐT trên Chrome hoặc tải hóa đơn các tháng đó trước.</div>`) +
       (r.errors.length ? `<div class="msg err">${r.errors.map(esc).join("<br>")}</div>` : "") +
-      `<div style="margin-top:6px"><a href="#" id="bankOpen">Mở file đối chiếu Excel</a></div>`;
-    $("bankOpen").onclick = e => { e.preventDefault(); openFile(r.file); };
+      `<div style="margin-top:6px;line-height:1.8">${links.map(([id, t]) => `<a href="#" id="${id}">${esc(t)}</a>`).join("<br>")}</div>` +
+      `<div class="muted" style="margin-top:6px">Muốn file nhập khẩu đúng y mẫu phần mềm của bạn: tải file mẫu Thu tiền gửi / Chi tiền gửi (MISA) hoặc Báo có / Báo nợ (EasyBooks)
+        từ phần mềm, đặt tên có chữ <b>MISA_Thu</b>, <b>MISA_Chi</b>, <b>EasyBooks_Co</b>, <b>EasyBooks_No</b> và bỏ vào
+        <a href="#" id="bankTpl">thư mục MauNhapKhau</a> (thêm file <b>MaDoiTuong.xlsx</b> 2 cột MST | Mã đối tượng nếu mã khác MST).</div>`;
+    links.forEach(([id, , p]) => { $(id).onclick = e => { e.preventDefault(); openFile(p); }; });
+    $("bankTpl").onclick = e => { e.preventDefault(); openFile(r.mau_nhap_khau); };
   } catch (e) { msg($("bankMsg"), e.message); }
   $("btnBank").disabled = false;
 };
@@ -724,6 +1419,7 @@ function showPage() {
   document.querySelectorAll(".page").forEach(el => el.classList.toggle("active", el.id === "page-" + p));
   document.querySelectorAll("nav a").forEach(a => a.classList.toggle("active", a.dataset.page === p));
   if (p === "dulieu" && !window.__dulieuLoaded) { window.__dulieuLoaded = true; loadInvoices(); }
+  if (p === "vat") loadVatMsts().then(loadVatInfo);
 }
 window.addEventListener("hashchange", showPage);
 showPage();
@@ -732,7 +1428,10 @@ setInterval(() => { $("navJob").style.display = autoJob ? "" : "none"; }, 1500);
 (function init() {
   { const n = new Date(), p1 = new Date(n.getFullYear(), n.getMonth() - 1, 1), p2 = new Date(n.getFullYear(), n.getMonth(), 0);
     const ymd = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-    $("aFrom").value = ymd(p1); $("aTo").value = ymd(p2); }
+    $("aFrom").value = ymd(p1); $("aTo").value = ymd(p2);
+    const ym = ymd(p1).slice(0, 7); $("vMonth").value = ym; $("fmFrom").value = ym; $("fmTo").value = ym;
+    const q = Math.floor(n.getMonth() / 3); $("vQ").value = q === 0 ? 4 : q; $("vY").value = q === 0 ? n.getFullYear() - 1 : n.getFullYear(); }
+  loadVatMsts().then(loadVatInfo); loadNoti();
   refreshBrowser();
   const now = new Date(), first = new Date(now.getFullYear(), now.getMonth() - 1, 1), last = new Date(now.getFullYear(), now.getMonth(), 0);
   const iso = d => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);

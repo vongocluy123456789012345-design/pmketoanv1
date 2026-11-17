@@ -57,6 +57,7 @@ class Scheduler:
         self.next_try = 0.0
         self.message = ""
         self.job_id: str | None = None
+        self.vat_error = ""
         self._force = False
         self._thread: threading.Thread | None = None
         self._load()
@@ -108,11 +109,17 @@ class Scheduler:
                 and (now.day > self.day or (now.day == self.day and now.hour >= self.hour)))
 
     def _loop(self) -> None:
+        from . import vat
         while True:
             try:
                 self._tick()
             except Exception as e:  # noqa: BLE001
                 self.message = f"Lỗi bộ chạy tự động: {e}"
+            try:  # dự báo thuế GTGT ngay từ 00:00 ngày đầu kỳ sau
+                vat.auto_tick()
+                self.vat_error = ""
+            except Exception as e:  # noqa: BLE001
+                self.vat_error = f"Lỗi dự báo VAT tự động: {e}"
             time.sleep(30)
 
     def _tick(self) -> None:

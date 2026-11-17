@@ -28,7 +28,10 @@ COLS: list[tuple[str, tuple[str, ...]]] = [
                     "transactionno", "seqno", "sott")),
     ("so_tien", ("sotien", "amount")),  # 1 cột số tiền có dấu +/- (một số ngân hàng)
     ("loai", ("loaigiaodich", "nohayco", "drcr", "type")),
-    ("doi_ung", ("tentaikhoandoiung", "doiung", "tennguoichuyen", "tennguoinhan", "beneficiary", "counterparty")),
+    ("doi_ung", ("tentaikhoandoiung", "tendoiung", "tennguoichuyen", "tennguoinhan", "beneficiary",
+                 "counterparty", "remittersaccountname")),
+    ("tk_doi_ung", ("sotaikhoandoiung", "taikhoandoiung", "tkdoiung", "remittersaccountnumber")),
+    ("nh_doi_ung", ("nganhangdoiung", "remittersbank", "nganhangnhan", "nganhangchuyen")),
 ]
 
 
@@ -93,10 +96,37 @@ def _rows_to_txns(rows: list[list[Any]]) -> list[dict[str, Any]]:
                 no, co = 0.0, amt
         if not no and not co:
             continue
+        txt = lambda f: re.sub(r"\s+", " ", str(get(f) or "")).strip()  # noqa: E731
         last = {"ngay": d, "mo_ta": desc, "no": abs(no), "co": abs(co), "so_du": vn_num(get("so_du")),
-                "tham_chieu": str(get("tham_chieu") or "").strip(), "doi_ung": str(get("doi_ung") or "").strip()}
+                # số bút toán / số tài khoản bị xuống dòng trong ô PDF -> nối liền lại
+                "tham_chieu": txt("tham_chieu").replace(" ", ""), "doi_ung": txt("doi_ung"),
+                "tk_doi_ung": txt("tk_doi_ung").replace(" ", ""), "nh_doi_ung": txt("nh_doi_ung")}
         out.append(last)
     return out
+
+
+def _fix_direction(txns: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Kiểm tra Nợ/Có bằng số dư chạy: số dư sau = số dư trước + có - nợ.
+    Tự nhận thứ tự sao kê (cũ -> mới hoặc mới -> cũ); giao dịch nào chỉ khớp khi đảo chiều thì đảo lại."""
+    bal = [t.get("so_du") for t in txns]
+    if sum(b is not None for b in bal) < 3:
+        return txns
+
+    def ok(prev: float, t: dict[str, Any], swap: bool) -> bool:
+        no, co = (t["co"], t["no"]) if swap else (t["no"], t["co"])
+        return abs(prev + co - no - t["so_du"]) <= 1
+
+    def score(seq: list[dict[str, Any]]) -> int:
+        return sum(1 for a, b in zip(seq, seq[1:]) if a.get("so_du") is not None and b.get("so_du") is not None
+                   and ok(a["so_du"], b, False))
+
+    seq = txns if score(txns) >= score(txns[::-1]) else txns[::-1]  # seq: cũ -> mới
+    for a, b in zip(seq, seq[1:]):
+        if a.get("so_du") is None or b.get("so_du") is None:
+            continue
+        if not ok(a["so_du"], b, False) and ok(a["so_du"], b, True):
+            b["no"], b["co"] = b["co"], b["no"]
+    return txns
 
 
 def _excel_rows(data: bytes, name: str) -> list[list[list[Any]]]:
@@ -136,6 +166,66 @@ def _pdf_rows(data: bytes) -> list[list[Any]]:
             for t in p.extract_tables() or []:
                 rows += [[(c or "").replace("\n", " ").strip() for c in r] for r in t]
     return rows
+
+
+def _pdf_grid_rows(data: bytes) -> list[list[Any]]:
+    """Sao kê PDF mà chỉ dòng tiêu đề có khung đủ cột, các dòng giao dịch chỉ có đường kẻ ngang
+    (vd Techcombank): lấy ranh giới cột từ ô tiêu đề, ranh giới dòng từ đường kẻ ngang,
+    rồi xếp từng chữ vào đúng ô -> nội dung nhiều dòng không bị trộn sang cột khác."""
+    import pdfplumber
+    out: list[list[Any]] = []
+    header_done = False
+    with pdfplumber.open(io.BytesIO(data)) as pdf:
+        for p in pdf.pages:
+            head = None
+            for t in p.find_tables():
+                for row in t.rows:
+                    cells = [c for c in row.cells if c]
+                    if len(cells) < 4:
+                        continue
+                    texts = [(p.crop(c).extract_text() or "").replace("\n", " ") for c in cells]
+                    m = _map_header(texts)
+                    if "ngay" in m and "mo_ta" in m and (("no" in m and "co" in m) or "so_tien" in m):
+                        head = (cells, texts, row.bbox[3])
+                        break
+                if head:
+                    break
+            if not head:
+                continue
+            cells, texts, top = head
+            if not header_done:
+                out.append(texts)
+                header_done = True
+            xs = [(c[0], c[2]) for c in cells]
+            x_min, x_max = xs[0][0], xs[-1][1]
+            # Chỉ lấy đường kẻ phủ gần hết bề ngang bảng (đường chia dòng giao dịch),
+            # bỏ khung chân trang / ghi chú để chữ ở đó không lẫn vào giao dịch cuối trang.
+            cover: dict[float, float] = {}
+            for e in p.edges:
+                if e["orientation"] == "h" and e["top"] > top + 2:
+                    a, b = max(e["x0"], x_min), min(e["x1"], x_max)
+                    if b > a:
+                        y = round(e["top"])
+                        cover[y] = cover.get(y, 0.0) + (b - a)
+            bounds = [top] + sorted(y for y, w in cover.items() if w >= 0.9 * (x_max - x_min))
+            if len(bounds) < 2:
+                continue
+            words = [w for w in p.extract_words() if w["top"] > top]
+            grid: dict[tuple[int, int], list[dict]] = {}
+            for w in words:
+                cy, cx = (w["top"] + w["bottom"]) / 2, (w["x0"] + w["x1"]) / 2
+                ri = next((i for i in range(len(bounds) - 1) if bounds[i] <= cy < bounds[i + 1]), None)
+                ci = next((i for i, (a, b) in enumerate(xs) if a <= cx < b), None)
+                if ri is not None and ci is not None:
+                    grid.setdefault((ri, ci), []).append(w)
+            for ri in range(len(bounds) - 1):
+                row = []
+                for ci in range(len(xs)):
+                    ws = sorted(grid.get((ri, ci), []), key=lambda w: (round(w["top"]), w["x0"]))
+                    row.append(" ".join(w["text"] for w in ws))
+                if any(row):
+                    out.append(row)
+    return out
 
 
 _DATE = re.compile(r"(?<!\d)(\d{1,2})\s*[/\-.]\s*(\d{1,2})\s*[/\-.]\s*(20\d{2})(?!\d)")
@@ -199,6 +289,10 @@ def read_statement(name: str, data: bytes) -> tuple[list[dict[str, Any]], str | 
         if name.lower().endswith(".pdf") or data[:5] == b"%PDF-":
             rows = _pdf_rows(data)
             tx = _rows_to_txns(rows) if rows else []
+            grid = _pdf_grid_rows(data)
+            tx_grid = _rows_to_txns(grid) if grid else []
+            if len(tx_grid) > len(tx):  # bảng chỉ có khung tiêu đề -> đọc theo lưới đường kẻ
+                tx = tx_grid
             if not tx:  # không có bảng: thử chữ thuần, rồi OCR nếu là bản scan
                 from .docreader import pdf_text
                 t = pdf_text(data)
@@ -213,6 +307,7 @@ def read_statement(name: str, data: bytes) -> tuple[list[dict[str, Any]], str | 
                 tx += _rows_to_txns(rows)
         if not tx:
             return [], "Không nhận ra bảng giao dịch (không tìm thấy dòng tiêu đề Ngày / Nội dung / Ghi nợ / Ghi có)"
+        tx = _fix_direction(tx)
         for t in tx:
             t["file"] = name
         return tx, None
@@ -315,19 +410,25 @@ def write_report(dest: Path, pairs, unpaid, unmatched, txns, errors: list[str]) 
     for k, e in enumerate(errors, len(lines) + 2):
         ws.cell(k, 1, "Lỗi đọc: " + e)
 
+    # Cột giao dịch dùng chung cho các sheet: diễn giải tách riêng khỏi người/đơn vị đối ứng.
+    TX_COLS = [("Ngày GD", 11), ("Ghi nợ (tiền ra)", 15), ("Ghi có (tiền vào)", 15), ("Diễn giải", 45),
+               ("Tên đối ứng (người chuyển / nhận)", 34), ("Số TK đối ứng", 18), ("Ngân hàng đối ứng", 24),
+               ("Số bút toán", 18), ("File", 18)]
+    N_TX = len(TX_COLS)
+
     def tx_vals(t):
-        return [t["ngay"], t["no"] or None, t["co"] or None, t.get("mo_ta"), t.get("doi_ung"), t.get("tham_chieu"), t.get("file")]
+        return [t["ngay"], t["no"] or None, t["co"] or None, t.get("mo_ta"), t.get("doi_ung"),
+                t.get("tk_doi_ung"), t.get("nh_doi_ung"), t.get("tham_chieu"), t.get("file")]
 
     ws2 = wb.create_sheet("Da khop")
-    _header(ws2, [("Ngày GD", 11), ("Ghi nợ (ra)", 15), ("Ghi có (vào)", 15), ("Nội dung", 50), ("Đối ứng", 25),
-                  ("Tham chiếu", 14), ("File", 18), ("Loại HĐ", 22), ("Ký hiệu", 10), ("Số HĐ", 9), ("Ngày HĐ", 11),
-                  ("Đối tác", 32), ("Tổng TT HĐ", 15), ("Điểm", 7), ("Căn cứ", 40)])
+    _header(ws2, TX_COLS + [("Loại HĐ", 22), ("Ký hiệu", 10), ("Số HĐ", 9), ("Ngày HĐ", 11),
+                            ("Đối tác trên HĐ", 32), ("Tổng TT HĐ", 15), ("Điểm", 7), ("Căn cứ", 40)])
     for r, (inv, t, s, why) in enumerate(pairs, 2):
         partner = inv.get("nbten") if inv.get("huong") == "purchase" else inv.get("nmten")
         for c, v in enumerate(tx_vals(t) + [inv.get("loai"), inv.get("khhdon"), inv.get("shdon"), inv.get("ngay_lap"),
                                              partner, inv.get("tgtttbso"), s, ", ".join(why)], 1):
             cell = ws2.cell(r, c, v)
-            if c in (2, 3, 13):
+            if c in (2, 3, N_TX + 6):
                 cell.number_format = "#,##0"
             if c == 1:
                 cell.number_format = "dd/mm/yyyy"
@@ -345,8 +446,7 @@ def write_report(dest: Path, pairs, unpaid, unmatched, txns, errors: list[str]) 
                 cell.number_format = "#,##0"
 
     ws4 = wb.create_sheet("GD chua co HD")
-    _header(ws4, [("Ngày GD", 11), ("Ghi nợ (ra)", 15), ("Ghi có (vào)", 15), ("Nội dung", 60), ("Đối ứng", 25),
-                  ("Tham chiếu", 14), ("File", 18)])
+    _header(ws4, TX_COLS)
     for r, t in enumerate(unmatched, 2):
         for c, v in enumerate(tx_vals(t), 1):
             cell = ws4.cell(r, c, v)
@@ -358,12 +458,11 @@ def write_report(dest: Path, pairs, unpaid, unmatched, txns, errors: list[str]) 
                 cell.fill = WARN
 
     ws5 = wb.create_sheet("Sao ke chuan hoa")
-    _header(ws5, [("Ngày GD", 11), ("Ghi nợ (ra)", 15), ("Ghi có (vào)", 15), ("Nội dung", 60), ("Đối ứng", 25),
-                  ("Tham chiếu", 14), ("File", 18), ("Số dư", 16)])
+    _header(ws5, TX_COLS + [("Số dư", 16)])
     for r, t in enumerate(txns, 2):
         for c, v in enumerate(tx_vals(t) + [t.get("so_du")], 1):
             cell = ws5.cell(r, c, v)
-            if c in (2, 3, 8):
+            if c in (2, 3, N_TX + 1):
                 cell.number_format = "#,##0"
             if c == 1:
                 cell.number_format = "dd/mm/yyyy"

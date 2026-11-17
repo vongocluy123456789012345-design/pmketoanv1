@@ -111,6 +111,20 @@ def _mgmt_page(mst: str, show: bool = False):
     return p
 
 
+def mgmt_logged_in_quiet(mst: str) -> bool:
+    """Kiểm tra đã đăng nhập trang quản lý EasyInvoice chưa mà KHÔNG mở tab / không đổi trang nào
+    (gửi 1 yêu cầu bằng cookie sẵn có của Chrome phần mềm)."""
+    def run() -> bool:
+        ctx = BROWSER._context()
+        r = ctx.request.get(mgmt_origin(mst) + "/EInvoice/Index?Pagesize=10", max_redirects=0, timeout=20000)
+        loc = r.headers.get("location") or ""
+        return r.status == 200 and "/Account/LogOn" not in r.url and "LogOn" not in loc
+    try:
+        return BROWSER.call(run, 40)
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def mgmt_logged_in(mst: str, show_login: bool = False) -> bool:
     """Đã đăng nhập trang quản lý EasyInvoice trên Chrome của phần mềm chưa."""
     def run() -> bool:

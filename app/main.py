@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import base64
+import os
+import re
 import threading
 from datetime import date
 from pathlib import Path
@@ -18,7 +20,7 @@ from .gdt.client import GDTClient, GDTError
 from .providers import load_providers
 from .sync import DONE_PDF, JOBS, _storage_base, process_pdf, start_job
 
-app = FastAPI(title="Đồng bộ hóa đơn điện tử")
+app = FastAPI(title="AWBook")
 TEMPLATES = Path(__file__).resolve().parent / "templates"
 
 # Phiên đăng nhập cổng thuế chỉ giữ trong RAM (không lưu mật khẩu / token xuống đĩa).
@@ -39,7 +41,20 @@ async def _db_missing(_, exc):  # noqa: ANN001
 
 @app.get("/")
 def index():
-    return FileResponse(TEMPLATES / "index.html")
+    # Không cho cửa sổ phần mềm giữ giao diện cũ trong bộ nhớ đệm (sau khi cập nhật/đóng gói lại vẫn hiện bản mới)
+    return FileResponse(TEMPLATES / "index.html",
+                        headers={"Cache-Control": "no-store, no-cache, must-revalidate", "Pragma": "no-cache"})
+
+
+# Nhịp tim từ giao diện: bản desktop tự tắt khi cửa sổ giao diện đóng (không còn nhịp tim).
+PING = {"last": 0.0}
+
+
+@app.get("/api/ping")
+def ping():
+    import time
+    PING["last"] = time.time()
+    return {"ok": True, "app": "hoadon"}
 
 
 # ---------- đăng nhập cổng thuế ----------
@@ -191,6 +206,52 @@ def auto_stop(job_id: str):
     return {"ok": True}
 
 
+# ---------- nơi lưu hóa đơn ----------
+@app.get("/api/settings")
+def settings_get():
+    from . import config
+    return {"output_dir": settings.output_dir, "default_dir": config._DEFAULT_OUT,
+            "custom": config.custom_output_dir(), "from_env": bool(os.getenv("OUTPUT_DIR"))}
+
+
+class OutDirIn(BaseModel):
+    path: str | None = None  # None / rỗng = về mặc định
+
+
+@app.post("/api/settings/output-dir")
+def settings_output_dir(body: OutDirIn):
+    from . import config
+    from .auto_download import running_job
+    if running_job():
+        raise HTTPException(409, "Đang có một lượt tải chạy, hãy đợi xong hoặc bấm Dừng rồi mới đổi nơi lưu")
+    try:
+        config.set_output_dir((body.path or "").strip().strip('"') or None)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return settings_get()
+
+
+@app.post("/api/settings/pick-folder")
+def settings_pick_folder():
+    """Mở hộp chọn thư mục của Windows (hiện trên màn hình người dùng). Trả về thư mục đã chọn hoặc null nếu bấm Hủy."""
+    import subprocess
+    cur = settings.output_dir.replace("'", "''")
+    ps = ("[Console]::OutputEncoding=[Text.Encoding]::UTF8; Add-Type -AssemblyName System.Windows.Forms; "
+          "$f=New-Object System.Windows.Forms.Form; $f.TopMost=$true; $f.ShowInTaskbar=$false; "
+          "$f.StartPosition='CenterScreen'; $f.Size=New-Object System.Drawing.Size(1,1); $f.Show(); $f.Activate(); "
+          "$d=New-Object System.Windows.Forms.FolderBrowserDialog; "
+          "$d.Description='Chọn thư mục lưu hóa đơn, bảng kê, XML, PDF'; $d.ShowNewFolderButton=$true; "
+          f"if(Test-Path -LiteralPath '{cur}'){{$d.SelectedPath='{cur}'}}; "
+          "if($d.ShowDialog($f) -eq 'OK'){ $d.SelectedPath }; $f.Close()")
+    try:
+        r = subprocess.run(["powershell", "-NoProfile", "-STA", "-Command", ps], capture_output=True, timeout=600,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(500, f"Không mở được hộp chọn thư mục: {e}")
+    path = r.stdout.decode("utf-8", "ignore").strip().splitlines()
+    return {"path": path[-1].strip() if path else None}
+
+
 # ---------- đối chiếu tờ khai 01/GTGT ----------
 @app.post("/api/reconcile")
 async def reconcile(file: UploadFile = File(...), mst: str = Form("")):
@@ -206,7 +267,7 @@ async def reconcile(file: UploadFile = File(...), mst: str = Form("")):
     mst = (mst or BROWSER.status().get("mst") or "").strip()
     base = Path(settings.output_dir)
     if not mst:  # chưa đăng nhập: lấy thư mục MST duy nhất nếu có
-        dirs = [d.name for d in base.iterdir() if d.is_dir()] if base.is_dir() else []
+        dirs = [d.name for d in base.iterdir() if d.is_dir() and d.name[:1].isdigit()] if base.is_dir() else []
         mst = dirs[0] if len(dirs) == 1 else ""
     if not mst:
         raise HTTPException(400, "Không biết MST nào – hãy đăng nhập cổng thuế hoặc nhập MST")
@@ -222,13 +283,304 @@ async def reconcile(file: UploadFile = File(...), mst: str = Form("")):
     return {"file": str(dest), "period": period, "missing_months": missing, "rows": len(rows), "result": result}
 
 
+# ---------- dự báo thuế GTGT (tờ khai 01/GTGT) ----------
+def _vat_mst(mst: str | None) -> str:
+    from .gdt.browser import BROWSER
+    from .vat import _msts
+    mst = (mst or "").strip()
+    if not mst:
+        mst = str(BROWSER.status().get("mst") or "")
+    if not mst:
+        dirs = _msts()
+        mst = dirs[0] if len(dirs) == 1 else ""
+    if not mst:
+        raise HTTPException(400, "Chọn MST cần dự báo")
+    return mst
+
+
+@app.get("/api/vat/msts")
+def vat_msts():
+    from .gdt.browser import BROWSER
+    from .vat import _msts, get_cfg
+    cur = str(BROWSER.status().get("mst") or "")
+    return {"items": [{"mst": m, **{k: v for k, v in get_cfg(m).items() if k in ("kieu", "auto")}} for m in _msts()],
+            "current": cur}
+
+
+@app.get("/api/vat/info")
+def vat_info(mst: str, kieu: Literal["M", "Q"], ky: int, nam: int):
+    from . import vat
+    mst = _vat_mst(mst)
+    key = vat.period_key(kieu, ky, nam)
+    cfg = vat.get_cfg(mst)
+    return {"mst": mst, "cfg": {"kieu": cfg["kieu"], "auto": cfg["auto"]}, "inputs": cfg["inputs"].get(key, {}),
+            "ct22": vat.suggest_ct22(mst, kieu, ky, nam), "result": vat.saved_result(mst, key),
+            "history": vat.history(mst), "deadline": vat.deadline(kieu, ky, nam).isoformat(),
+            "form": vat.form_for("TT89" if vat.uses_tt89(kieu, ky, nam) else "TT80"),
+            "mau": "TT89" if vat.uses_tt89(kieu, ky, nam) else "TT80"}
+
+
+class VatIn(BaseModel):
+    mst: str | None = None
+    kieu: Literal["M", "Q"] = "M"
+    ky: int
+    nam: int
+    inputs: dict[str, float] = {}
+
+
+@app.post("/api/vat/forecast")
+def vat_forecast(body: VatIn):
+    from . import vat
+    if not (1 <= body.ky <= (4 if body.kieu == "Q" else 12)) or not 2020 <= body.nam <= 2100:
+        raise HTTPException(400, "Kỳ tính thuế không hợp lệ")
+    mst = _vat_mst(body.mst)
+    return vat.forecast(mst, body.kieu, body.ky, body.nam, body.inputs, source="manual")
+
+
+@app.post("/api/vat/quick-read")
+def vat_quick_read(body: VatIn):
+    """Đọc nhanh danh sách hóa đơn kỳ này trên cổng (Chrome đã đăng nhập đúng MST) rồi dự báo ngay."""
+    from . import quick_read
+    mst = _vat_mst(body.mst)
+    st = quick_read.read_period(mst, body.kieu, body.ky, body.nam)
+    if st.get("loi"):
+        raise HTTPException(400, st["loi"])
+    return st
+
+
+@app.get("/api/vat/quick-read/{mst}")
+def vat_quick_status(mst: str):
+    from . import quick_read
+    return quick_read.STATE.get(mst) or {}
+
+
+class VatCfgIn(BaseModel):
+    mst: str
+    kieu: Literal["M", "Q"] = "M"
+    auto: bool = True
+
+
+@app.post("/api/vat/config")
+def vat_config(body: VatCfgIn):
+    from . import vat
+    return vat.set_cfg(_vat_mst(body.mst), kieu=body.kieu, auto=body.auto)
+
+
+@app.get("/api/vat/print")
+def vat_print(mst: str, key: str):
+    """Mở bản HTML tờ khai để in (Ctrl+P)."""
+    from fastapi.responses import HTMLResponse
+
+    from . import vat
+    if not re.fullmatch(r"\d{4}-(Q[1-4]|\d{2})", key or ""):
+        raise HTTPException(400, "Kỳ không hợp lệ")
+    res = vat.saved_result(_vat_mst(mst), key)
+    if not res or not res.get("files", {}).get("html"):
+        raise HTTPException(404, "Chưa có bản dự báo kỳ này")
+    return HTMLResponse(Path(res["files"]["html"]).read_text(encoding="utf-8"))
+
+
+@app.get("/api/notifications")
+def notifications_get():
+    from . import vat
+    items = vat.notifications()
+    return {"items": items[:60], "unread": sum(1 for n in items if not n.get("read"))}
+
+
+class ReadIn(BaseModel):
+    ids: list[str] | None = None  # None = đánh dấu tất cả đã đọc
+
+
+@app.post("/api/notifications/read")
+def notifications_read(body: ReadIn):
+    from . import vat
+    vat.mark_read(body.ids)
+    return {"ok": True}
+
+
+# ---------- trợ lý AI ----------
+@app.get("/api/ai/status")
+def ai_status():
+    from . import assistant
+    return assistant.status()
+
+
+class AiKeyIn(BaseModel):
+    provider: str = "gemini"
+    key: str | None = None    # None = giữ khóa cũ; "" = xóa khóa đã lưu
+    model: str | None = None
+
+
+@app.post("/api/ai/key")
+def ai_key(body: AiKeyIn):
+    from . import assistant
+    k = body.key.strip() if body.key is not None else None
+    if k and body.provider == "claude" and not k.startswith("sk-ant-"):
+        raise HTTPException(400, "Khóa API Anthropic phải bắt đầu bằng sk-ant-")
+    try:
+        assistant.configure(body.provider, k, body.model)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return assistant.status()
+
+
+@app.get("/api/ai/models")
+def ai_models(provider: str):
+    from . import assistant
+    if provider not in assistant.PROVIDERS:
+        raise HTTPException(400, "Nhà cung cấp AI không hợp lệ")
+    try:
+        return {"items": assistant.list_models(provider)}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(400, f"Không lấy được danh sách model: {e}")
+
+
+class AiChatIn(BaseModel):
+    chat_id: str | None = None
+    text: str
+    context: str = ""  # trang đang mở + trạng thái màn hình (giao diện gửi kèm)
+    group: bool = False  # nhóm chat nhiều AI cùng soát câu trả lời
+
+
+class AiBuiltinIn(BaseModel):
+    provider: str = "gemini"
+    key: str = ""
+
+
+@app.post("/api/ai/builtin")
+def ai_builtin(body: AiBuiltinIn):
+    """Nhà phát hành gắn sẵn khóa vào bản đóng gói (chỉ ở bản chạy từ mã nguồn)."""
+    from . import assistant
+    from .config import FROZEN
+    if FROZEN:
+        raise HTTPException(403, "Bản đã đóng gói không đổi được khóa dựng sẵn")
+    if body.provider not in assistant.PROVIDERS:
+        raise HTTPException(400, "Nhà cung cấp AI không hợp lệ")
+    assistant.save_builtin(body.provider, body.key.strip())
+    return assistant.status()
+
+
+@app.post("/api/ai/chat")
+def ai_chat(body: AiChatIn):
+    from . import assistant
+    if not body.text.strip():
+        raise HTTPException(400, "Nhập câu hỏi")
+    try:
+        fn = assistant.group_chat if body.group else assistant.chat
+        r = fn(body.chat_id, body.text.strip()[:4000], body.context)
+        r.pop("evidence", None)
+        return r
+    except RuntimeError as e:
+        raise HTTPException(400, str(e))
+
+
+# ---------- lấy PDF gốc từ trang tra cứu (không cần đăng nhập cổng) ----------
+class LookupIn(BaseModel):
+    url: str = ""
+    code: str = ""
+    seller_mst: str = ""
+    khhdon: str = ""
+    shdon: str = ""
+
+
+@app.post("/api/pdf/lookup")
+def pdf_lookup(body: LookupIn):
+    from . import pdf_tools
+    if not body.url.strip() and not body.code.strip():
+        raise HTTPException(400, "Nhập link trang tra cứu và/hoặc mã tra cứu")
+    return pdf_tools.lookup_one(body.url, body.code, body.seller_mst, body.khhdon, body.shdon)
+
+
+class FillIn(BaseModel):
+    mst: str | None = None
+    month_from: str  # YYYY-MM
+    month_to: str
+
+
+@app.post("/api/pdf/fill-missing")
+def pdf_fill(body: FillIn):
+    from . import pdf_tools
+    from .auto_download import month_list
+    if any(j.status == "running" for j in pdf_tools.FILL_JOBS.values()):
+        raise HTTPException(409, "Đang có một lượt lấy bù PDF chạy")
+    try:
+        months = [f"{a:%Y-%m}" for a, _ in month_list(body.month_from, body.month_to)]
+    except ValueError:
+        raise HTTPException(400, "Tháng không hợp lệ")
+    if not months or len(months) > 36:
+        raise HTTPException(400, "Chọn từ 1 đến 36 tháng")
+    return pdf_tools.start_fill(_vat_mst(body.mst), months).public()
+
+
+@app.get("/api/pdf/fill-missing/{job_id}")
+def pdf_fill_status(job_id: str):
+    from . import pdf_tools
+    job = pdf_tools.FILL_JOBS.get(job_id)
+    if not job:
+        raise HTTPException(404, "Không có lượt này")
+    return job.public()
+
+
+@app.post("/api/pdf/fill-missing/{job_id}/stop")
+def pdf_fill_stop(job_id: str):
+    from . import pdf_tools
+    job = pdf_tools.FILL_JOBS.get(job_id)
+    if job:
+        job.cancel = True
+    return {"ok": True}
+
+
+# ---------- chuyển hóa đơn PDF/XML vào file mẫu nhập khẩu MISA ----------
+@app.post("/api/misa/convert")
+async def misa_convert(files: list[UploadFile] = File(...), template: UploadFile | None = File(None),
+                       direction: str = Form("purchase"), mst: str = Form(""), accounts: str = Form("{}")):
+    import json as _json
+
+    from . import misa_import
+    if direction not in ("purchase", "sold", "auto"):
+        raise HTTPException(400, "Chọn hóa đơn đầu vào, đầu ra hoặc tự nhận")
+    payload = await _read_uploads(files)
+    tpl = await template.read() if template is not None else b""
+    tpl_name = (template.filename or "") if template is not None and tpl else ""
+    if not tpl:
+        if direction == "auto":
+            raise HTTPException(400, "Chế độ tự nhận cần file mẫu của anh/chị (mẫu cơ bản chỉ có loại mua hoặc bán)")
+        tpl = misa_import.basic_template(direction)
+    try:
+        misa_import.read_template(tpl)
+        acc = _json.loads(accounts or "{}")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return misa_import.start(payload, tpl, direction, mst.strip(), acc, tpl_name).public()
+
+
+@app.get("/api/misa/{job_id}")
+def misa_status(job_id: str):
+    from . import misa_import
+    job = misa_import.JOBS.get(job_id)
+    if not job:
+        raise HTTPException(404, "Không có lượt chuyển này")
+    return job.public()
+
+
+@app.get("/api/misa-template/{direction}")
+def misa_template(direction: Literal["purchase", "sold"]):
+    from fastapi.responses import Response
+
+    from . import misa_import
+    name = "Mau_MISA_MuaHang.xlsx" if direction == "purchase" else "Mau_MISA_BanHang.xlsx"
+    return Response(misa_import.basic_template(direction),
+                    media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
 # ---------- đọc chứng từ: hóa đơn hàng loạt, sao kê ngân hàng ----------
 def _doc_root(mst: str) -> tuple[str, Path]:
     from .gdt.browser import BROWSER
     base = Path(settings.output_dir)
     mst = (mst or "").strip() or (BROWSER.status().get("mst") or "")
     if not mst and base.is_dir():
-        dirs = [d.name for d in base.iterdir() if d.is_dir()]
+        dirs = [d.name for d in base.iterdir() if d.is_dir() and d.name[:1].isdigit()]  # bỏ MauNhapKhau...
         mst = dirs[0] if len(dirs) == 1 else ""
     if not mst:
         raise HTTPException(400, "Không biết MST nào – hãy đăng nhập cổng thuế hoặc nhập MST")
@@ -276,31 +628,103 @@ async def docs_invoices(files: list[UploadFile] = File(...), mst: str = Form("")
                        for r in recs[:200]]}
 
 
-@app.post("/api/docs/bank")
-async def docs_bank(files: list[UploadFile] = File(...), mst: str = Form("")):
-    """Đọc sao kê (Excel/CSV/PDF) và ghép với hóa đơn đã tải trong khoảng ngày của sao kê."""
+@app.post("/api/docs/bank-book")
+async def docs_bank_book(stmt: list[UploadFile] = File(...), book: list[UploadFile] = File(...), mst: str = Form("")):
+    """Đối chiếu sao kê gốc (PDF/Excel của ngân hàng) với sổ tiền gửi đã nhập trên phần mềm kế toán."""
     from datetime import datetime
 
-    from . import bank
+    from starlette.concurrency import run_in_threadpool
+
+    from . import bank, bank_book
+    mst, root = _doc_root(mst)
+    errors: list[str] = []
+    txns: list[dict] = []
+    for name, data in await _read_uploads(stmt):
+        tx, err = bank.read_statement(name, data)
+        txns += tx
+        if err:
+            errors.append(f"Sao kê {name}: {err}")
+    if not txns:
+        raise HTTPException(400, "Không đọc được giao dịch nào trong sao kê gốc. " + " | ".join(errors))
+    entries: list[dict] = []
+    binfo: dict = {}
+    for name, data in await _read_uploads(book):
+        e, info, err = bank_book.read_book(name, data)
+        entries += e
+        for k, v in info.items():
+            binfo.setdefault(k, v)
+        if err:
+            errors.append(f"Sổ {name}: {err}")
+    if not entries:
+        raise HTTPException(400, "Không đọc được dòng nào trong sổ kế toán. " + " | ".join(errors))
+    res = await run_in_threadpool(bank_book.reconcile, txns, entries)
+    summ = bank_book.summary(res, txns, binfo)
+    dest = bank_book.write_report(
+        root / "DocChungTu" / f"DoiChieu_SaoKe_So_{res['d1']:%Y%m%d}_{res['d2']:%Y%m%d}_{datetime.now():%H%M%S}.xlsx",
+        res, summ, errors)
+    top = [{"trang_thai": r["trang_thai"], "ghi_chu": r["ghi_chu"], "chenh_lech": r["chenh_lech"],
+            "ngay": str(min(x["ngay"] for x in r["sk"] + r["so"])),
+            "sk": "; ".join(f"{x['co'] or -x['no']:,.0f} {x['mo_ta'][:60]}" for x in r["sk"]),
+            "so": "; ".join(f"{x['vao'] or -x['ra']:,.0f} {x['so_ct']} {x['mo_ta'][:60]}" for x in r["so"])}
+           for r in res["rows"] if not r["trang_thai"].startswith("Khớp") or r["trang_thai"] == "Khớp – lệch ngày"][:300]
+    return {"mst": mst, "file": str(dest), "tong_hop": summ, "can_xu_ly": top, "so_sk": len(txns), "so_dong_so": len(entries),
+            "errors": errors}
+
+
+@app.post("/api/docs/bank")
+async def docs_bank(files: list[UploadFile] = File(...), mst: str = Form(""), months_back: int = Form(6),
+                    che_do: str = Form("TT200"), lay_cong: bool = Form(True), so_ct_bat_dau: int = Form(1)):
+    """Đọc sao kê, ghép từng giao dịch với hóa đơn (đã tải + hóa đơn các tháng trước lấy từ cổng HĐĐT),
+    hạch toán Nợ/Có và xuất file nhập khẩu MISA / EasyBooks."""
+    from datetime import datetime, timedelta
+
+    from starlette.concurrency import run_in_threadpool
+
+    from . import bank, bank_post
     mst, root = _doc_root(mst)
     payload = await _read_uploads(files)
-    txns, errors = [], []
+    txns, errors, info = [], [], {}
     for name, data in payload:
         tx, err = bank.read_statement(name, data)
         txns += tx
         if err:
             errors.append(f"{name}: {err}")
+        if tx and not info.get("so_tk"):
+            info = bank_post.statement_info(name, data)
     if not txns:
         raise HTTPException(400, "Không đọc được giao dịch nào. " + " | ".join(errors))
     txns.sort(key=lambda t: t["ngay"])
     d1, d2 = txns[0]["ngay"], txns[-1]["ngay"]
-    invoices = bank.invoices_for_range(root, d1, d2)
-    pairs, unpaid, unmatched = bank.match(invoices, txns)
-    dest = bank.write_report(root / "DocChungTu" / f"DoiChieu_SaoKe_{d1:%Y%m%d}_{d2:%Y%m%d}_{datetime.now():%H%M%S}.xlsx",
-                             pairs, unpaid, unmatched, txns, errors)
+    months_back = max(0, min(int(months_back or 0), 24))
+    start = (d1.replace(day=1) - timedelta(days=31 * months_back)).replace(day=1)
+    local = bank.invoices_for_range(root, start + timedelta(days=62), d2) if months_back >= 2 else \
+        bank.invoices_for_range(root, d1, d2)
+    portal, note = [], ""
+    if lay_cong:
+        portal, perr = await run_in_threadpool(bank_post.portal_invoices, root, start, d2, lambda m: None)
+        if perr:
+            errors.append(perr)
+        note = f"Hóa đơn lấy thêm từ cổng HĐĐT {start:%m/%Y} – {d2:%m/%Y}: {len(portal)}"
+    invoices = bank_post.merge_invoices(local, portal)
+    bank_post.allocate(invoices, txns)
+    vouchers = bank_post.build_vouchers(txns, che_do, info.get("chu_tk", ""), max(1, int(so_ct_bat_dau or 1)))
+
+    tag = f"{d1:%Y%m%d}_{d2:%Y%m%d}_{datetime.now():%H%M%S}"
+    out_dir = root / "DocChungTu"
+    tpl_dir = Path(settings.output_dir) / "MauNhapKhau"
+    tpl_dir.mkdir(parents=True, exist_ok=True)
+    codes = bank_post.load_codes(tpl_dir)
+    dest = bank_post.write_report(out_dir / f"DoiChieu_SaoKe_{tag}.xlsx", txns, invoices, vouchers, info, errors, note)
+    misa = bank_post.export_misa(tpl_dir, out_dir, tag, vouchers, info, codes)
+    easy = bank_post.export_easybooks(tpl_dir, out_dir, tag, vouchers, info, codes)
+    matched = sum(1 for t in txns if t.get("alloc"))
     return {"file": str(dest), "from": d1.isoformat(), "to": d2.isoformat(), "txns": len(txns),
-            "invoices": len(invoices), "matched": len(pairs), "unpaid": len(unpaid), "unmatched": len(unmatched),
-            "tien_vao": sum(t["co"] for t in txns), "tien_ra": sum(t["no"] for t in txns), "errors": errors}
+            "invoices": len(invoices), "matched": matched, "unmatched": len(txns) - matched,
+            "unpaid": sum(1 for i in invoices if i["_con_lai"] > 1 and str(i.get("ngay_lap"))[:10] >= d1.isoformat()),
+            "kiem_tra": sum(1 for v in vouchers if v.get("kiem_tra")),
+            "tien_vao": sum(t["co"] for t in txns), "tien_ra": sum(t["no"] for t in txns), "errors": errors,
+            "note": note, "misa": [str(p) for p in misa], "easybooks": [str(p) for p in easy],
+            "tai_khoan": info, "mau_nhap_khau": str(tpl_dir)}
 
 
 # ---------- chạy tự động theo lịch ----------
@@ -340,7 +764,10 @@ def open_folder(path: str | None = None):
     base = Path(settings.output_dir).resolve()
     if not target.resolve().is_relative_to(base):
         raise HTTPException(400, "Chỉ mở được thư mục lưu hóa đơn")
-    if target.suffix.lower() != ".xlsx":
+    if target.suffix.lower() in (".xlsx", ".pdf", ".html", ".xml"):
+        if not target.is_file():
+            raise HTTPException(404, "Không còn file này")
+    else:
         target.mkdir(parents=True, exist_ok=True)
     os.startfile(target)  # noqa: S606 - app chạy trên máy người dùng
     return {"ok": True}

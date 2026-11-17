@@ -3,6 +3,7 @@
     "Mỗi nhà cung cấp (NCC) hóa đơn điện tử là 1 phần tử trong 'providers'.",
     "mst_tcgp: MST tổ chức cung cấp giải pháp (trường MSTTCGP trong XML / msttcgp trên cổng thuế) - dùng để nhận diện NCC.",
     "domains: tên miền trang tra cứu của NCC - nhận diện qua link tra cứu in trong XML.",
+    "lookup_pages: trang tra cứu (ô nhập mã tra cứu) của NCC – phần mềm mở Chrome chạy ẩn, tự gõ mã và bắt file PDF. Dùng khi XML không in link tra cứu.",
     "pdf_urls: mẫu URL tải PDF. Biến: {lookup_code} {seller_mst} {buyer_mst} {khmshdon} {khhdon} {shdon} {mccqt} {lookup_url}.",
     "   Mẫu thiếu biến (vd hóa đơn không có mã tra cứu) sẽ tự bỏ qua. URL trả về HTML thì phần mềm tự dò link PDF trong trang.",
     "verified=false: mẫu URL chưa được kiểm chứng với hóa đơn thật - cần thử với 1 hóa đơn và sửa lại nếu sai.",
@@ -11,6 +12,7 @@
   "providers": [
     {
       "code": "vnpt",
+      "lookup_pages": ["https://{seller_mst}-tt78.vnpt-invoice.com.vn/"],
       "name": "VNPT Invoice",
       "mst_tcgp": ["0100684378"],
       "domains": ["vnpt-invoice.com.vn"],
@@ -19,6 +21,7 @@
     },
     {
       "code": "viettel",
+      "lookup_pages": ["https://vinvoice.viettel.vn/utilities/invoice-search"],
       "name": "Viettel S-Invoice",
       "mst_tcgp": ["0100109106"],
       "domains": ["vinvoice.viettel.vn", "sinvoice.viettel.vn"],
@@ -28,6 +31,7 @@
     },
     {
       "code": "misa",
+      "lookup_pages": ["https://www.meinvoice.vn/tra-cuu/"],
       "name": "MISA meInvoice",
       "mst_tcgp": ["0101243150"],
       "domains": ["meinvoice.vn"],
@@ -37,6 +41,7 @@
     },
     {
       "code": "bkav",
+      "lookup_pages": ["https://van.ehoadon.vn/TCHD?MTC={lookup_code}"],
       "name": "BKAV eHoadon",
       "mst_tcgp": ["0101360697"],
       "domains": ["ehoadon.vn"],
@@ -61,6 +66,7 @@
     },
     {
       "code": "thaison",
+      "lookup_pages": ["https://einvoice.vn/tra-cuu"],
       "name": "Thái Sơn E-invoice",
       "mst_tcgp": ["0101300842"],
       "domains": ["einvoice.vn"],

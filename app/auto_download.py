@@ -29,6 +29,7 @@ from urllib.parse import urlencode
 
 from .config import settings
 from .gdt.browser import BROWSER, BrowserAuthError, FetchResult
+from .dates import vn_date
 from .gdt.xml_parser import parse_invoice_xml
 
 # Mỗi loại = 1 tab / 1 điều kiện lọc trên trang "Tra cứu hóa đơn" của cổng.
@@ -199,7 +200,8 @@ class Runner:
              what: str) -> FetchResult:
         """Gọi cổng; với loại cần captcha thì kèm ckey/cvalue (ở cả tham số và header như web cổng)."""
         if not kind.get("captcha") or "export-xml" in path:
-            r = BROWSER.fetch(path, query, action)
+            r = BROWSER.fetch(path, query, action, timeout=getattr(self, "timeout", 120),
+                              retries=getattr(self, "retries", 3))
             time.sleep(settings.gdt_delay)
             return _check(r, what)
         last = None
@@ -243,6 +245,7 @@ class Runner:
             page_no += 1
             if self.job.cancel:
                 raise Cancelled()
+            self.last_total = total  # tổng số hóa đơn cổng báo – để đối chiếu không sót
             if one_page:
                 self._page_state = (state if page else None, page_no, total)
                 return rows
@@ -328,25 +331,33 @@ class Runner:
 
 
 # ---------------------------------------------------------------- PDF gốc
-def fetch_pdf(inv: dict[str, Any], parsed: dict[str, Any]) -> tuple[bytes | None, dict[str, Any]]:
-    from .providers import InvoiceRef, fetch_original_pdf
-
-    ref = InvoiceRef(
+def make_ref(inv: dict[str, Any], parsed: dict[str, Any]):
+    from .providers import InvoiceRef
+    return InvoiceRef(
         seller_mst=_s(inv.get("nbmst")), buyer_mst=_s(inv.get("nmmst")) or None,
         khmshdon=_s(inv.get("khmshdon")), khhdon=_s(inv.get("khhdon")), shdon=_s(inv.get("shdon")),
         msttcgp=_s(inv.get("msttcgp")) or parsed.get("msttcgp"),
         mccqt=parsed.get("mccqt") or _s(inv.get("mhdon")) or None,
         lookup_code=parsed.get("lookup_code"), lookup_urls=parsed.get("lookup_urls") or [],
     )
+
+
+def fetch_pdf(inv: dict[str, Any], parsed: dict[str, Any]) -> tuple[bytes | None, dict[str, Any]]:
+    from .providers import fetch_original_pdf
+
+    ref = make_ref(inv, parsed)
     out = fetch_original_pdf(ref)
     info = {"provider": out.provider.name if out.provider else "",
             "lookup_code": ref.lookup_code or "", "lookup_url": (ref.lookup_urls or [""])[0]}
     if out.result:
         info["pdf_source"] = out.result.source_url
+        if out.result.printed:
+            info["pdf_note"] = "PDF in từ trang tra cứu của NCC (NCC không cho tải file)"
         return out.result.content, info
     reason = "; ".join(a.get("error") or a.get("result") or "" for a in out.attempts)[:500]
     if out.needs_captcha:
-        reason = "Trang tra cứu cần captcha – mở link để tải tay. " + reason
+        reason = "Trang tra cứu cần captcha. " + reason
+        info["needs_captcha"] = True
     info["pdf_error"] = reason or "Không tìm thấy PDF gốc"
     return None, info
 
@@ -359,6 +370,8 @@ def run(job: AutoJob) -> None:
         if not st.get("logged_in"):
             raise BrowserAuthError("Chưa đăng nhập cổng thuế trên trình duyệt.")
         job.mst = _s(st.get("mst")) or "chua-ro-MST"
+        from .gdt import portal_pdf
+        portal_pdf.reset()
         root = Path(settings.output_dir) / _safe(job.mst)
         job.out_dir = str(root)
         job.say(f"MST {job.mst} – lưu vào {root}")
@@ -478,6 +491,9 @@ def run_kind(rn: Runner, job: AutoJob, kind: dict[str, Any], d1: date, d2: date,
              listed: tuple[list[dict[str, Any]], Path, bool] | None = None) -> None:
     tag = f"{period(d1, d2)} {kind['label']}"
     rows, dest, excel_done = listed or list_kind(rn, job, kind, d1, d2, folder)
+    if full_month(d1, d2):  # ghi nhận loại hóa đơn này đã được đọc đủ cho tháng (dự báo VAT kiểm tra không sót)
+        from .quick_read import mark_checked
+        mark_checked(folder.parent, d1, kind, len(rows), getattr(rn, "last_total", None) if not kind.get("captcha") else None)
     job.total += len(rows)
     job.say(f"{tag}: {len(rows)} hóa đơn")
     if not rows:
@@ -530,9 +546,10 @@ def has_lookup(parsed: dict[str, Any] | None) -> bool:
     return bool(parsed and (parsed.get("lookup_code") or parsed.get("lookup_urls")))
 
 
-XML_BATCH = 10     # số XML tải song song mỗi lô trong trang cổng thuế
-PDF_WORKERS = 12   # số PDF tải song song từ trang nhà cung cấp
-DETAIL_BATCH = 10  # số "chi tiết hóa đơn" lấy song song trước khi in bản hddt
+XML_BATCH = 20      # số XML tải song song mỗi lô trong trang cổng thuế (tự co lại khi cổng báo quá tải)
+XML_BATCH_MAX = 30
+PDF_WORKERS = 16    # số PDF tải song song từ trang nhà cung cấp
+DETAIL_BATCH = 20   # số "chi tiết hóa đơn" lấy song song trước khi in bản hddt
 
 
 def xml_from_response(r: FetchResult) -> bytes:
@@ -587,36 +604,66 @@ def download_xmls(rn: Runner, job: AutoJob, kind: dict[str, Any], folder: Path,
         job.say(f"{tag}: tải {len(need)} XML (song song {XML_BATCH} file/lần)")
     path, action = f"/{kind['ep']}/invoices/export-xml", f"Xuất xml ({kind['tab']})"
     keys = ("nbmst", "khhdon", "shdon", "khmshdon")
-    failed = []
-    for i in range(0, len(need), XML_BATCH):
+    failed: list[dict[str, Any]] = []
+    later: list[dict[str, Any]] = []  # lỗi tạm thời (429 quá tải, mất kết nối, 5xx) -> nghỉ rồi tải lại, không bỏ
+
+    def get_batch(batch: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], bool]:
+        """Tải 1 lô; trả về (các hóa đơn lỗi tạm thời, cổng có báo quá tải không)."""
+        res = BROWSER.fetch_many([(path, {k: _s(it["inv"].get(k)) for k in keys}, action) for it in batch])
+        retry, busy = [], False
+        for it, r in zip(batch, res):
+            try:
+                xml = xml_from_response(r)
+                it["xml_path"].parent.mkdir(parents=True, exist_ok=True)
+                it["xml_path"].write_bytes(xml)
+                _accept_xml(job, it, xml, on_xml)
+            except Exception as e:  # noqa: BLE001
+                it["xml_err"] = str(e)
+                if r.status in (0, 429) or r.status >= 500:
+                    retry.append(it)
+                    busy = busy or r.status == 429
+                else:
+                    failed.append(it)
+        return retry, busy
+
+    size, i, last_say = XML_BATCH, 0, 0  # lô tự co lại khi cổng báo quá tải (429), tự nới dần khi ổn
+    while i < len(need):
         if job.cancel:
             raise Cancelled()
-        batch = need[i:i + XML_BATCH]
+        batch = need[i:i + size]
+        i += len(batch)
+        busy = False
         for attempt in range(3):
-            res = BROWSER.fetch_many([(path, {k: _s(it["inv"].get(k)) for k in keys}, action) for it in batch])
-            retry = []
-            for it, r in zip(batch, res):
-                try:
-                    xml = xml_from_response(r)
-                    it["xml_path"].parent.mkdir(parents=True, exist_ok=True)
-                    it["xml_path"].write_bytes(xml)
-                    _accept_xml(job, it, xml, on_xml)
-                except Exception as e:  # noqa: BLE001
-                    it["xml_err"] = str(e)
-                    if r.status in (0, 429) or r.status >= 500:
-                        retry.append(it)  # lỗi tạm thời -> thử lại
-                    else:
-                        failed.append(it)
-            time.sleep(settings.gdt_delay)
-            if not retry:
+            batch, b = get_batch(batch)
+            busy = busy or b
+            if not batch:
                 break
-            batch = retry
-            time.sleep(3 * (attempt + 1))
-        else:
-            failed += batch
-        done_n = min(i + XML_BATCH, len(need))
-        if done_n % 60 < XML_BATCH or done_n == len(need):
-            job.say(f"{tag}: đã tải {done_n}/{len(need)} XML")
+            time.sleep((5 if b else 2) * (attempt + 1))
+        later += batch
+        size = max(5, size // 2) if busy else min(XML_BATCH_MAX, size + 5)
+        time.sleep(settings.gdt_delay if not busy else 3)
+        if i - last_say >= 60 or i == len(need):
+            last_say = i
+            job.say(f"{tag}: đã tải {i}/{len(need)} XML")
+
+    for rnd, pause in enumerate((15, 30, 60, 90), 1):  # cổng quá tải -> nghỉ dần lâu hơn, tải lại theo lô nhỏ
+        if not later:
+            break
+        job.say(f"{tag}: cổng báo quá tải – nghỉ {pause} giây rồi tải lại {len(later)} XML (lượt {rnd}/4)")
+        for _ in range(pause):
+            if job.cancel:
+                raise Cancelled()
+            time.sleep(1)
+        todo, later = later, []
+        for k in range(0, len(todo), 5):
+            if job.cancel:
+                raise Cancelled()
+            retry, busy = get_batch(todo[k:k + 5])
+            later += retry
+            time.sleep(3 if busy else settings.gdt_delay)
+        if not later:
+            job.say(f"{tag}: đã tải lại đủ XML")
+    failed += later
 
     for it in failed:  # không có XML -> lưu dữ liệu chi tiết JSON để có dòng hàng hóa
         it["rec"]["ghi_chu"] = f"Không tải được XML: {it.get('xml_err')}"[:300]
@@ -651,11 +698,12 @@ def _collect(job: AutoJob, futs: dict[Any, dict[str, Any]], tag: str, label: str
         if pdf:
             it["pdf_path"].parent.mkdir(parents=True, exist_ok=True)
             it["pdf_path"].write_bytes(pdf)
-            rec["file_pdf"], rec["ghi_chu"] = str(it["pdf_path"]), ""
+            rec["file_pdf"], rec["ghi_chu"] = str(it["pdf_path"]), info.get("pdf_note", "")
             job.pdf_ok += 1
             ok += 1
         else:
             it["pdf_err"] = info.get("pdf_error", "")
+            it["need_captcha"] = bool(info.get("needs_captcha"))
             failed.append(it)
         n += 1
         if n % 25 == 0 or n == len(futs):
@@ -668,18 +716,11 @@ def download_easyinvoice_mgmt(job: AutoJob, items: list[dict[str, Any]], tag: st
     from .providers import easyinvoice
 
     mst = job.mst
-    if not easyinvoice.mgmt_logged_in(mst, show_login=True):
-        job.say(f"{tag}: cần ĐĂNG NHẬP trang quản lý EasyInvoice {easyinvoice.mgmt_origin(mst)} trên cửa sổ Chrome "
-                f"của phần mềm (đã mở sẵn) để tải {len(items)} PDF gốc bán ra. Đang chờ tối đa 5 phút...")
-        for _ in range(60):
-            if job.cancel:
-                raise Cancelled()
-            time.sleep(5)
-            if easyinvoice.mgmt_logged_in(mst):
-                break
-        else:
-            job.err(f"{tag}: chưa đăng nhập trang quản lý EasyInvoice – {len(items)} hóa đơn bán ra sẽ dùng bản in từ cổng")
-            return
+    # KHÔNG bắt đăng nhập, không mở tab, không chờ: đã đăng nhập sẵn thì lấy PDF gốc, chưa thì in từ cổng ngay.
+    if not easyinvoice.mgmt_logged_in_quiet(mst):
+        job.say(f"{tag}: {len(items)} hóa đơn bán ra EasyInvoice – dùng bản in từ cổng (muốn PDF gốc của EasyInvoice: "
+                f"đăng nhập {easyinvoice.mgmt_origin(mst)} trên Chrome của phần mềm trước khi tải)")
+        return
     groups: dict[str, list[dict[str, Any]]] = {}
     for it in items:
         groups.setdefault(f"{_s(it['inv'].get('khmshdon'))}{_s(it['inv'].get('khhdon'))}", []).append(it)
@@ -711,6 +752,88 @@ def download_easyinvoice_mgmt(job: AutoJob, items: list[dict[str, Any]], tag: st
     job.say(f"{tag}: lấy được {ok}/{len(items)} PDF gốc bán ra qua trang quản lý EasyInvoice")
 
 
+def download_captcha_sites(job: AutoJob, items: list[dict[str, Any]], tag: str, ex=None) -> None:
+    """Hóa đơn có trang tra cứu bắt captcha: gom theo trang (tên miền); mỗi trang người dùng nhập captcha 1 LẦN
+    (ảnh captcha hiện trên phần mềm – phần mềm không tự đọc captcha), sau đó phần mềm dùng lại phiên đã xác
+    nhận + mẫu link đã học để tự tải các hóa đơn còn lại của trang đó song song."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    from .providers import fetch_with_captcha, lookup_host
+
+    own_ex = ex is None
+    ex = ex or ThreadPoolExecutor(PDF_WORKERS)
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for it in items:
+        it["_ref"] = make_ref(it["inv"], it.get("parsed") or {})
+        groups.setdefault(lookup_host(it["_ref"]) or "?", []).append(it)
+    job.say(f"{tag}: {len(items)} hóa đơn ở {len(groups)} trang tra cứu có captcha – mỗi trang chỉ cần nhập captcha 1 lần")
+
+    def save(it: dict[str, Any], out) -> None:
+        it["pdf_path"].parent.mkdir(parents=True, exist_ok=True)
+        it["pdf_path"].write_bytes(out.result.content)
+        rec = it["rec"]
+        rec["file_pdf"] = str(it["pdf_path"])
+        rec["ghi_chu"] = "PDF in từ trang tra cứu của NCC" if out.result.printed else ""
+        job.pdf_ok += 1
+
+    def try_captcha(it: dict[str, Any], host: str, reason: str) -> bool:
+        state = {"skip": False}
+
+        def ask(img: str, why: str) -> str:
+            try:
+                return job.prompt_captcha(img, f"{reason} – {why}")
+            except (Skip, Cancelled):
+                state["skip"] = True
+                return ""
+        for _attempt in range(3):  # nhập sai -> trang đổi captcha mới, hỏi lại (tối đa 3 lần)
+            try:
+                out = fetch_with_captcha(it["_ref"], ask)
+            except Exception:  # noqa: BLE001
+                out = None
+            if job.cancel:
+                raise Cancelled()
+            if out and out.result:
+                save(it, out)
+                return True
+            if state["skip"]:
+                return False
+        return False
+
+    try:
+        for host, its in groups.items():
+            if job.cancel:
+                raise Cancelled()
+            first = its[0]
+            label = f"{first['inv'].get('khhdon')}-{first['inv'].get('shdon')}"
+            if not try_captcha(first, host, f"{tag}: trang {host} – nhập 1 lần, phần mềm tự tải {len(its)} hóa đơn (HĐ {label})"):
+                for it in its:
+                    it["pdf_err"] = f"Trang tra cứu {host} cần captcha – chưa nhập / nhập chưa đúng"
+                job.say(f"{tag}: bỏ qua trang {host} ({len(its)} hóa đơn) – dùng bản in từ cổng")
+                continue
+            rest = its[1:]
+            if not rest:
+                continue
+            job.say(f"{tag}: trang {host} – đã xác nhận captcha, đang tự tải {len(rest)} hóa đơn còn lại")
+            fails = _collect(job, {ex.submit(fetch_pdf, it["inv"], it.get("parsed") or {}): it for it in rest}, tag,
+                             f"PDF gốc trang {host}")
+            still = [it for it in fails if it.get("need_captcha")]
+            if still and job.easy_captcha:  # trang bắt captcha cho MỖI lần tra cứu -> hỏi từng hóa đơn (tùy chọn)
+                job.say(f"{tag}: trang {host} bắt captcha cho mỗi lần tra cứu – hỏi từng hóa đơn ({len(still)})")
+                for k, it in enumerate(still, 1):
+                    lb = f"{it['inv'].get('khhdon')}-{it['inv'].get('shdon')}"
+                    if not try_captcha(it, host, f"{tag}: trang {host} – HĐ {lb} ({k}/{len(still)})"):
+                        break
+            elif still:
+                for it in still:
+                    it["pdf_err"] = (f"Trang {host} bắt captcha cho MỖI lần tra cứu – bật tùy chọn 'Hỏi captcha từng "
+                                     "hóa đơn' để lấy PDF gốc")
+                job.say(f"{tag}: trang {host} bắt captcha cho mỗi lần tra cứu – {len(still)} hóa đơn dùng bản in từ cổng "
+                        "(bật 'Hỏi captcha từng hóa đơn' nếu cần PDF gốc)")
+    finally:
+        if own_ex:
+            ex.shutdown(wait=False)
+
+
 def download_pdfs(rn: Runner, job: AutoJob, kind: dict[str, Any], items: list[dict[str, Any]], tag: str,
                   ex=None, futs: dict | None = None, d1: date | None = None, d2: date | None = None) -> None:
     from .providers import easyinvoice
@@ -728,8 +851,12 @@ def download_pdfs(rn: Runner, job: AutoJob, kind: dict[str, Any], items: list[di
         time.sleep(3)
         failed = _collect(job, {ex.submit(fetch_pdf, it["inv"], it["parsed"]): it for it in failed}, tag,
                           "thử lại PDF gốc")
+    cap = [it for it in failed if it.get("need_captcha") and not easyinvoice.is_easyinvoice(it["rec"].get("link_tra_cuu"))]
+    if cap:  # trang tra cứu bắt captcha -> nhập 1 lần cho mỗi trang, phần mềm tự tải phần còn lại
+        download_captcha_sites(job, cap, tag, ex)
     for it in failed:
-        it["rec"]["ghi_chu"] = (it["rec"].get("ghi_chu", "") + " " + it.get("pdf_err", "")).strip()[:500]
+        if not it["rec"].get("file_pdf"):
+            it["rec"]["ghi_chu"] = (it["rec"].get("ghi_chu", "") + " " + it.get("pdf_err", "")).strip()[:500]
 
     easy = [it for it in items if not it["rec"].get("file_pdf") and has_lookup(it.get("parsed"))
             and easyinvoice.is_easyinvoice(it["rec"].get("link_tra_cuu"))]
@@ -750,17 +877,18 @@ def download_pdfs(rn: Runner, job: AutoJob, kind: dict[str, Any], items: list[di
 
 def download_portal_pdfs(rn: Runner, job: AutoJob, kind: dict[str, Any], items: list[dict[str, Any]],
                          tag: str) -> None:
-    """Hóa đơn chưa có PDF (không có mã tra cứu, hoặc chưa lấy được bản gốc): in bản thể hiện
-    từ trang hoadondientu (nút Xem hóa đơn) ra PDF, lưu tên ..._hddt.pdf."""
+    """Hóa đơn chưa có PDF gốc: in bản thể hiện (nút "Xem hóa đơn") ngay trên TAB CỔNG THUẾ ĐÃ ĐĂNG
+    NHẬP (không mở tab/trang mới, không tải lại trang). Không in được thì dựng PDF từ XML trên máy.
+    Lưu tên ..._hddt.pdf."""
     from .gdt import portal_pdf
+    from .providers.fallback import render_pdf
 
     todo = [it for it in items if not it["rec"].get("file_pdf")]
     if not todo:
         return
-    job.say(f"{tag}: in PDF từ trang hoadondientu cho {len(todo)} hóa đơn chưa có PDF gốc")
+    job.say(f"{tag}: lấy PDF từ trang hoadondientu đang mở cho {len(todo)} hóa đơn chưa có PDF gốc")
     keys = ("nbmst", "khhdon", "shdon", "khmshdon")
-    # Dòng lấy từ API tra cứu đã đủ dữ liệu (có hdhhdvu). Dòng lấy từ bảng kê Excel thì
-    # lấy "chi tiết hóa đơn" song song theo lô trước khi in.
+    # Dòng lấy từ bảng kê Excel thiếu chi tiết hàng hóa -> lấy "chi tiết hóa đơn" theo lô trước khi in.
     need = [it for it in todo if "hdhhdvu" not in it["inv"]
             and not it["pdf_path"].with_name(it["pdf_path"].stem + "_hddt.pdf").exists()]
     path = f"/{kind['ep']}/invoices/detail"
@@ -777,19 +905,69 @@ def download_portal_pdfs(rn: Runner, job: AutoJob, kind: dict[str, Any], items: 
             except Exception:  # noqa: BLE001
                 pass
         time.sleep(settings.gdt_delay)
+    # Dây chuyền: lấy HTML hóa đơn trên trang cổng (tuần tự, nhanh) -> in PDF song song bằng Chrome chạy ẩn.
+    from concurrent.futures import ThreadPoolExecutor
+    sco = kind["ep"] == "sco-query"
+
+    def printed(it: dict[str, Any], html: str | None) -> bytes:
+        if html:
+            try:
+                return portal_pdf.print_html(html)
+            except Exception:  # noqa: BLE001 - Chrome ẩn lỗi -> in theo cách cũ trên trình duyệt cổng
+                pass
+        return portal_pdf.render(it.get("detail") or it["inv"], sco=sco)
+
+    pool = ThreadPoolExecutor(PRINT_WORKERS)
+    jobs: dict[int, Any] = {}
+    try:
+        for i, it in enumerate(todo):
+            if job.cancel:
+                raise Cancelled()
+            hp = it["pdf_path"].with_name(it["pdf_path"].stem + "_hddt.pdf")
+            if hp.exists():
+                continue
+            try:
+                html = portal_pdf.capture(it.get("detail") or it["inv"], sco)
+            except (Cancelled, BrowserAuthError):
+                raise
+            except Exception:  # noqa: BLE001
+                html = None
+            jobs[i] = pool.submit(printed, it, html)
+        _finish_portal_pdfs(job, todo, jobs, tag)
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
+
+
+PRINT_WORKERS = 4
+
+
+def _finish_portal_pdfs(job: AutoJob, todo: list[dict[str, Any]], jobs: dict[int, Any], tag: str) -> None:
     n = 0
-    for it in todo:
+    for i, it in enumerate(todo):
         if job.cancel:
             raise Cancelled()
-        rec, inv = it["rec"], it["inv"]
+        rec = it["rec"]
         hp = it["pdf_path"].with_name(it["pdf_path"].stem + "_hddt.pdf")
         try:
+            note = "PDF thể hiện từ trang hoadondientu"
             if not hp.exists():
-                pdf = portal_pdf.render(it.get("detail") or inv, sco=kind["ep"] == "sco-query")
+                pdf, portal_err = None, ""
+                try:
+                    pdf = jobs[i].result(timeout=300)
+                except (Cancelled, BrowserAuthError):
+                    raise
+                except Exception as e:  # noqa: BLE001
+                    portal_err = str(e)[:200]
+                if pdf is None:
+                    if not it.get("parsed"):
+                        rec["ghi_chu"] = (f"Chưa có PDF (in từ cổng lỗi: {portal_err}; không có XML để dựng). "
+                                          + rec.get("ghi_chu", "")).strip()[:500]
+                        continue
+                    pdf = render_pdf(it["parsed"])
+                    note = f"PDF dựng từ XML (in từ cổng lỗi: {portal_err})"
                 hp.parent.mkdir(parents=True, exist_ok=True)
                 hp.write_bytes(pdf)
             rec["file_pdf"] = str(hp)
-            note = "PDF thể hiện từ trang hoadondientu"
             if it.get("parsed") and (it["parsed"].get("lookup_code") or it["parsed"].get("lookup_urls")):
                 note += " (chưa lấy được bản gốc của nhà cung cấp)"
             rec["ghi_chu"] = (note + ". " + rec.get("ghi_chu", "")).strip()[:500]
@@ -798,10 +976,11 @@ def download_portal_pdfs(rn: Runner, job: AutoJob, kind: dict[str, Any], items: 
         except (Cancelled, BrowserAuthError):
             raise
         except Exception as e:  # noqa: BLE001
-            rec["ghi_chu"] = (rec.get("ghi_chu", "") + f" | In PDF từ cổng lỗi: {e}").strip()[:500]
-        n += 1
-        if n % 25 == 0 or n == len(todo):
-            job.say(f"{tag}: in PDF từ cổng {n}/{len(todo)}")
+            rec["ghi_chu"] = (rec.get("ghi_chu", "") + f" | Lấy PDF lỗi: {e}").strip()[:500]
+        finally:
+            n += 1
+            if n % 25 == 0 or n == len(todo):
+                job.say(f"{tag}: PDF từ trang hoadondientu {n}/{len(todo)}")
 
 
 def download_easyinvoice(job: AutoJob, items: list[dict[str, Any]], tag: str) -> None:
@@ -838,7 +1017,7 @@ def download_easyinvoice(job: AutoJob, items: list[dict[str, Any]], tag: str) ->
 def summary_row(kind: dict[str, Any], d1: date, inv: dict[str, Any]) -> dict[str, Any]:
     return {
         "huong": kind["direction"], "tthai_code": inv.get("tthai"),
-        "loai": kind["label"], "thang": f"{d1:%m/%Y}", "ngay_lap": _s(inv.get("tdlap"))[:10],
+        "loai": kind["label"], "thang": f"{d1:%m/%Y}", "ngay_lap": vn_date(inv.get("tdlap")),
         "khmshdon": _s(inv.get("khmshdon")), "khhdon": _s(inv.get("khhdon")), "shdon": _s(inv.get("shdon")),
         "nbmst": _s(inv.get("nbmst")), "nbten": _s(inv.get("nbten")),
         "nmmst": _s(inv.get("nmmst")), "nmten": _s(inv.get("nmten")),
@@ -866,6 +1045,19 @@ def write_month_summary(job: AutoJob, root: Path, d1: date, d2: date) -> None:
     from . import reports
 
     folder = root / f"{d1:%Y-%m}"
+    if full_month(d1, d2):
+        # Lần tải chỉ chọn vài loại (vd chỉ Bán ra máy tính tiền) không được xóa dữ liệu các loại
+        # đã tải trước đó trong tháng -> giữ lại các dòng thuộc loại không tải lần này.
+        labels = {KINDS[k]["label"] for k in job.kinds if k in KINDS}
+        try:
+            old = reports.load_period_data(root, [(d1.year, d1.month)])
+        except Exception:  # noqa: BLE001
+            old = []
+        keep = [r for r in old if r.get("loai") and r.get("loai") not in labels]
+        if keep:
+            rows = keep + rows
+            job._rows.extend(keep)  # để file tổng hợp cả kỳ cũng đủ
+            job.say(f"{d1:%m/%Y}: giữ lại {len(keep)} hóa đơn các loại đã tải trước đó")
     tag = f"{d1:%Y-%m}" if full_month(d1, d2) else f"{d1:%Y-%m-%d}_den_{d2:%Y-%m-%d}"
     write_summary(job, folder, rows, f"TongHop_{tag}", by_month=False)
     try:

@@ -10,6 +10,7 @@ from typing import Any
 
 from . import db
 from .config import settings
+from .dates import vn_date
 from .gdt.client import GDTAuthError, GDTClient
 from .gdt.xml_parser import parse_invoice_xml
 from .providers import InvoiceRef, fetch_original_pdf, load_providers
@@ -57,7 +58,7 @@ def _str(v: Any) -> str:
 
 
 def _storage_base(row: dict[str, Any]) -> str:
-    month = (row.get("tdlap") or "")[:7] or "unknown"
+    month = vn_date(row.get("tdlap"))[:7] or "unknown"
     safe = lambda s: "".join(c if c.isalnum() else "-" for c in _str(s))  # noqa: E731
     return (f"{row['owner_mst']}/{row['direction']}/{month}/"
             f"{safe(row['nbmst'])}_{safe(row['khmshdon'])}{safe(row['khhdon'])}_{safe(row['shdon'])}")

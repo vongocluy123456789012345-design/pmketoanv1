@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<title>Tờ khai 01/GTGT {{ r.label }} – {{ r.mst }}</title>
+<style>
+  @page { size: A4 portrait; margin: 12mm 12mm 14mm 14mm; }
+  @page land { size: A4 landscape; margin: 10mm; }
+  * { box-sizing: border-box; }
+  body { font-family: "Times New Roman", Times, serif; font-size: 12.5px; color: #000; margin: 0; }
+  .sheet { page-break-after: always; }
+  .sheet:last-child { page-break-after: auto; }
+  .land { page: land; font-size: 11px; }
+  .top { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+  .mau { text-align: center; font-size: 11.5px; width: 46%; border: 1px solid #000; padding: 3px 6px; }
+  .qh { text-align: center; font-weight: bold; }
+  .qh u { font-weight: bold; }
+  h1 { text-align: center; font-size: 16px; margin: 12px 0 2px; }
+  h2 { text-align: center; font-size: 14px; margin: 8px 0 2px; }
+  .c { text-align: center; } .r { text-align: right; white-space: nowrap; } .i { font-style: italic; } .b { font-weight: bold; }
+  .forecast { text-align: center; color: #c00000; font-weight: bold; font-size: 12px; margin: 4px 0 8px;
+              border: 1px dashed #c00000; padding: 3px; }
+  .info p { margin: 2px 0; }
+  table { width: 100%; border-collapse: collapse; margin-top: 6px; }
+  th, td { border: 1px solid #000; padding: 3px 4px; vertical-align: top; }
+  th { background: #f0f0f0; text-align: center; vertical-align: middle; }
+  td.code { text-align: center; width: 46px; white-space: nowrap; }
+  td.num { text-align: right; width: 118px; white-space: nowrap; }
+  tr.h td { font-weight: bold; background: #fafafa; }
+  tr.bb td { font-weight: bold; }
+  tr.grp td { font-weight: bold; background: #f4f4f4; }
+  tr.sub td { font-weight: bold; }
+  tr.tot td { font-weight: bold; color: #c00000; }
+  .sign { display: flex; justify-content: space-between; margin-top: 14px; }
+  .sign div { width: 48%; text-align: center; }
+  .note { font-size: 11px; margin-top: 8px; }
+  .warn li { margin: 2px 0; }
+  .unit { text-align: right; font-style: italic; margin-top: 4px; }
+  .chk { display: inline-block; width: 14px; height: 14px; border: 1px solid #000; text-align: center; line-height: 13px; }
+</style>
+</head>
+<body>
+
+{# ======================= TỜ KHAI 01/GTGT ======================= #}
+<div class="sheet">
+  <div class="top">
+    <div class="qh" style="width:52%">CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM<br><u>Độc lập - Tự do - Hạnh phúc</u></div>
+    <div class="mau"><b>Mẫu số: 01/GTGT</b><br>({{ r.mau_text or 'Ban hành kèm theo Thông tư số 80/2021/TT-BTC ngày 29 tháng 9 năm 2021 của Bộ trưởng Bộ Tài chính' }})</div>
+  </div>
+  <h1>TỜ KHAI THUẾ GIÁ TRỊ GIA TĂNG</h1>
+  <div class="c i">(Áp dụng đối với người nộp thuế tính thuế theo phương pháp khấu trừ có hoạt động sản xuất kinh doanh)</div>
+  <div class="forecast">BẢN DỰ BÁO do AWBook lập từ hóa đơn điện tử ngày {{ now.strftime('%d/%m/%Y %H:%M') }} –
+    dùng để kiểm tra, không thay thế tờ khai nộp qua eTax / HTKK</div>
+  <div class="info">
+    <p>[01a] Tên hoạt động sản xuất kinh doanh: Hoạt động sản xuất kinh doanh thông thường</p>
+    <p class="b">[01b] Kỳ tính thuế: {{ r.label }}</p>
+    <p>[02] Lần đầu: <span class="chk">X</span> &nbsp;&nbsp;&nbsp; [03] Bổ sung lần thứ: ......</p>
+    <p>[04] Tên người nộp thuế: <b>{{ r.company.ten or '..............................................' }}</b></p>
+    <p>[05] Mã số thuế: <b>{{ r.mst }}</b></p>
+    <p>[06] Tên đại lý thuế (nếu có): ........................ &nbsp; [07] Mã số thuế: ..................</p>
+    <p>[08] Hợp đồng đại lý thuế: Số: ............ Ngày: ............</p>
+    <p>[09] Tên đơn vị phụ thuộc/địa điểm kinh doanh của hoạt động kinh doanh khác tỉnh nơi đóng trụ sở chính: ............</p>
+    <p>[10] Mã số thuế đơn vị phụ thuộc/Mã số địa điểm kinh doanh: ............</p>
+    <p>[11] Địa chỉ nơi có hoạt động kinh doanh khác tỉnh nơi đóng trụ sở chính: ............</p>
+  </div>
+  <div class="unit">Đơn vị tiền: Đồng Việt Nam</div>
+  <table>
+    <thead><tr><th style="width:40px">STT</th><th>CHỈ TIÊU</th><th colspan="2">GIÁ TRỊ HHDV<br>(CHƯA CÓ THUẾ GTGT)</th>
+      <th colspan="2">THUẾ GTGT</th></tr></thead>
+    <tbody>
+    {% for stt, text, cv, cx, kind in form %}
+      <tr class="{{ 'h' if kind == 'h' else 'bb' if kind == 'b' else '' }}">
+        <td class="c">{{ stt }}</td>
+        <td class="{{ 'i' if kind == 'i' else '' }}">{{ text }}</td>
+        {% if kind == 'chk' %}
+          <td class="code">[{{ cv }}]</td><td class="c"><span class="chk">{{ 'X' if r.ct21 else '' }}</span></td>
+          <td class="code"></td><td class="num"></td>
+        {% else %}
+          <td class="code">{{ '[' ~ cv ~ ']' if cv else '' }}</td><td class="num">{{ r.ct[cv]|m if cv else '' }}</td>
+          <td class="code">{{ '[' ~ cx ~ ']' if cx else '' }}</td><td class="num">{{ r.ct[cx]|m if cx else '' }}</td>
+        {% endif %}
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <p class="i">Tôi cam đoan số liệu khai trên là đúng và chịu trách nhiệm trước pháp luật về số liệu đã khai./.</p>
+  <div class="sign">
+    <div><b>NHÂN VIÊN ĐẠI LÝ THUẾ</b><br>Họ và tên: ............<br>Chứng chỉ hành nghề số: ............</div>
+    <div>......., ngày ...... tháng ...... năm ......<br><b>NGƯỜI NỘP THUẾ hoặc<br>ĐẠI DIỆN HỢP PHÁP CỦA NGƯỜI NỘP THUẾ</b><br>
+      <span class="i">(Chữ ký, ghi rõ họ tên; chức vụ và đóng dấu (nếu có)/Ký điện tử)</span></div>
+  </div>
+  <div class="note"><b>Kết quả dự báo:</b>
+    {% if r.ct['40'] > 0 %}Thuế GTGT còn phải nộp [40] = <b>{{ r.ct['40']|m }} đ</b>, hạn nộp {{ r.deadline[8:10] }}/{{ r.deadline[5:7] }}/{{ r.deadline[:4] }}.
+    {% else %}Không phát sinh số phải nộp; thuế GTGT còn được khấu trừ chuyển kỳ sau [43] = <b>{{ r.ct['43']|m }} đ</b>.{% endif %}
+    Hóa đơn đã cộng: {{ r.stat.ban_ra }} bán ra, {{ r.stat.mua_vao }} mua vào; đã loại {{ r.stat.loai_tru }} hóa đơn bị thay thế / hủy.
+  </div>
+  {% if r.legal %}<div class="note"><b>Căn cứ pháp lý áp dụng cho kỳ này:</b>
+    <ul style="margin:2px 0 0;padding-left:16px">{% for l in r.legal %}<li>{{ l.text }} – <span class="i">{{ l.url }}</span></li>{% endfor %}</ul>
+    <span class="i">Đã tra trên thuvienphapluat.vn và trang tư vấn uy tín (11/2026); đối chiếu văn bản gốc trước khi nộp.</span></div>{% endif %}
+</div>
+
+{# ======================= PHỤ LỤC GIẢM THUẾ 8% ======================= #}
+{% macro pl_table(d) %}
+  <div class="unit">Đơn vị tiền: Đồng Việt Nam</div>
+  <table>
+    <thead>
+      <tr><th style="width:40px">STT</th><th>Tên hàng hóa, dịch vụ</th>
+        <th style="width:150px">Giá trị hàng hóa, dịch vụ chưa có thuế GTGT/ Doanh thu hàng hóa, dịch vụ chịu thuế</th>
+        <th style="width:90px">Thuế suất/Tỷ lệ tính thuế GTGT theo quy định</th>
+        <th style="width:90px">Thuế suất/Tỷ lệ tính thuế GTGT sau giảm</th><th style="width:120px">Thuế GTGT được giảm</th></tr>
+      <tr><th>(1)</th><th>(2)</th><th>(3)</th><th>(4)</th><th>(5)</th><th>(6)=(3)x[(4)-(5)]</th></tr>
+    </thead>
+    <tbody>
+    {% for x in d.rows %}
+      <tr><td class="c">{{ loop.index }}</td><td>{{ x.ten }}</td><td class="r">{{ x.gt|m }}</td><td class="c">10%</td>
+        <td class="c">8%</td><td class="r">{{ x.giam|m }}</td></tr>
+    {% endfor %}
+      <tr class="tot"><td></td><td>Tổng cộng</td><td class="r">{{ d.gt|m }}</td><td></td><td></td><td class="r">{{ d.giam|m }}</td></tr>
+    </tbody>
+  </table>
+{% endmacro %}
+{% if r.pl8.rows %}
+<div class="sheet">
+  <div class="top"><div></div><div class="mau"><b>Mẫu số 01</b><br>(Phụ lục III kèm theo Nghị định số 174/2025/NĐ-CP)</div></div>
+  <h2>GIẢM THUẾ GIÁ TRỊ GIA TĂNG THEO {{ r.basis|upper }}</h2>
+  <div class="c i">(Kèm theo Tờ khai 01/GTGT kỳ tính thuế {{ r.label }})</div>
+  <div class="forecast">BẢN DỰ BÁO – kiểm tra trước khi kê khai</div>
+  <p>[01] Tên người nộp thuế: <b>{{ r.company.ten }}</b></p>
+  <p>[02] Mã số thuế: <b>{{ r.mst }}</b></p>
+  {{ pl_table(r.pl8) }}
+  <div class="sign"><div></div><div>......., ngày ...... tháng ...... năm ......<br><b>NGƯỜI NỘP THUẾ hoặc<br>
+    ĐẠI DIỆN HỢP PHÁP CỦA NGƯỜI NỘP THUẾ</b><br><span class="i">(Chữ ký, ghi rõ họ tên; chức vụ và đóng dấu (nếu có)/Ký điện tử)</span></div></div>
+</div>
+{% endif %}
+{% if r.pl8_mua.rows %}
+<div class="sheet">
+  <h2>BẢNG KÊ HÀNG HÓA, DỊCH VỤ MUA VÀO ÁP DỤNG THUẾ SUẤT 8%</h2>
+  <div class="c i">Kỳ tính thuế {{ r.label }} – {{ r.company.ten }} – MST {{ r.mst }}<br>
+    (Bảng kê tham khảo để đối chiếu đầu vào, không phải phụ lục bắt buộc của tờ khai)</div>
+  {{ pl_table(r.pl8_mua) }}
+</div>
+{% endif %}
+
+{# ======================= BẢNG KÊ HÓA ĐƠN ======================= #}
+{% for d, title, who in [('sold', 'BẢNG KÊ HÓA ĐƠN HÀNG HÓA, DỊCH VỤ BÁN RA', 'người mua'),
+                         ('purchase', 'BẢNG KÊ HÓA ĐƠN HÀNG HÓA, DỊCH VỤ MUA VÀO', 'người bán')] %}
+<div class="sheet land">
+  <h2>{{ title }}</h2>
+  <div class="c i">Kỳ tính thuế {{ r.label }} – Người nộp thuế: {{ r.company.ten }} – MST {{ r.mst }}</div>
+  <div class="unit">Đơn vị tiền: Đồng Việt Nam</div>
+  <table>
+    <thead><tr><th style="width:32px">STT</th><th style="width:40px">Mẫu số</th><th style="width:62px">Ký hiệu</th>
+      <th style="width:62px">Số HĐ</th><th style="width:68px">Ngày lập</th><th>Tên {{ who }}</th><th style="width:90px">MST {{ who }}</th>
+      <th style="width:100px">Giá trị chưa thuế</th><th style="width:50px">Thuế suất</th><th style="width:86px">Thuế GTGT</th>
+      <th style="width:150px">Ghi chú</th></tr></thead>
+    <tbody>
+    {% set ns = namespace(n=0, v=0, t=0) %}
+    {% for c, g, sv, st in groups[d] %}
+      <tr class="grp"><td colspan="11">{{ c|rl }}</td></tr>
+      {% for b in g %}{% set ns.n = ns.n + 1 %}
+      <tr><td class="c">{{ ns.n }}</td><td class="c">{{ b.mau }}</td><td>{{ b.kh }}</td><td>{{ b.so }}</td>
+        <td>{{ (b.ngay or '')[8:10] }}/{{ (b.ngay or '')[5:7] }}/{{ (b.ngay or '')[:4] }}</td><td>{{ b.ten }}</td><td>{{ b.mst }}</td>
+        <td class="r">{{ b.gt|m }}</td><td class="c">{{ (c|rl).replace('Thuế suất ', '').replace(' (giảm 2%)', '') if c not in ('KCT', 'KKKNT', '?') else c }}</td>
+        <td class="r">{{ b.thue|m }}</td><td>{{ b.ghi_chu }}{% if b.tthai and b.tthai != 'Hóa đơn mới' %} {{ b.tthai }}{% endif %}</td></tr>
+      {% endfor %}
+      <tr class="sub"><td colspan="7" class="r">Cộng {{ c|rl }}</td><td class="r">{{ sv|m }}</td><td></td><td class="r">{{ st|m }}</td><td></td></tr>
+      {% set ns.v = ns.v + sv %}{% set ns.t = ns.t + st %}
+    {% else %}
+      <tr><td colspan="11" class="c i">Không có hóa đơn</td></tr>
+    {% endfor %}
+      <tr class="tot"><td colspan="7" class="r">TỔNG CỘNG</td><td class="r">{{ ns.v|m }}</td><td></td><td class="r">{{ ns.t|m }}</td><td></td></tr>
+    </tbody>
+  </table>
+</div>
+{% endfor %}
+
+{# ======================= CHI TIẾT TỪNG MẶT HÀNG ======================= #}
+{% for d, title, who in [('sold', 'BẢNG KÊ CHI TIẾT HÀNG HÓA, DỊCH VỤ BÁN RA', 'người mua'),
+                         ('purchase', 'BẢNG KÊ CHI TIẾT HÀNG HÓA, DỊCH VỤ MUA VÀO', 'người bán')] %}
+{% if r['items'][d] %}
+<div class="sheet land">
+  <h2>{{ title }}</h2>
+  <div class="c i">Kỳ tính thuế {{ r.label }} – {{ r.company.ten }} – MST {{ r.mst }}</div>
+  <table>
+    <thead><tr><th style="width:30px">STT</th><th style="width:62px">Ngày</th><th style="width:58px">Ký hiệu</th>
+      <th style="width:52px">Số HĐ</th><th style="width:150px">{{ who|capitalize }}</th><th>Tên hàng hóa, dịch vụ</th>
+      <th style="width:40px">ĐVT</th><th style="width:56px">Số lượng</th><th style="width:76px">Đơn giá</th>
+      <th style="width:88px">Thành tiền</th><th style="width:38px">TS</th><th style="width:78px">Thuế GTGT</th>
+      <th style="width:90px">Tổng cộng</th></tr></thead>
+    <tbody>
+    {% set ns = namespace(tt=0, th=0, tg=0) %}
+    {% for it in r['items'][d] %}
+      <tr><td class="c">{{ loop.index }}</td><td>{{ (it.ngay or '')[8:10] }}/{{ (it.ngay or '')[5:7] }}/{{ (it.ngay or '')[2:4] }}</td>
+        <td>{{ it.kh }}</td><td>{{ it.so }}</td><td>{{ it.ten_dt }}<br><span class="i">{{ it.mst }}</span></td><td>{{ it.ten }}</td>
+        <td>{{ it.dvt }}</td><td class="r">{{ '{:,.2f}'.format(it.sl).rstrip('0').rstrip('.').replace(',', ' ') if it.sl is number else (it.sl or '') }}</td>
+        <td class="r">{{ it.dg|m if it.dg is not none else '' }}</td><td class="r">{{ it.tt|m }}</td>
+        <td class="c">{{ (it.ts ~ '%') if it.ts not in ('KCT', 'KKKNT', '?') and not it.ts.startswith('K') else it.ts }}</td>
+        <td class="r">{{ it.thue|m }}</td><td class="r">{{ it.tong|m }}</td></tr>
+      {% set ns.tt = ns.tt + it.tt %}{% set ns.th = ns.th + (it.thue or 0) %}{% set ns.tg = ns.tg + it.tong %}
+    {% endfor %}
+      <tr class="tot"><td colspan="9" class="r">TỔNG CỘNG</td><td class="r">{{ ns.tt|m }}</td><td></td><td class="r">{{ ns.th|m }}</td>
+        <td class="r">{{ ns.tg|m }}</td></tr>
+    </tbody>
+  </table>
+</div>
+{% endif %}
+{% endfor %}
+
+{# ======================= LƯU Ý ======================= #}
+{% if r.warnings or r.warn_rows %}
+<div class="sheet">
+  <h2>LƯU Ý KHI KÊ KHAI {{ r.label|upper }}</h2>
+  <ul class="warn">{% for w in r.warnings %}<li>{{ w }}</li>{% endfor %}</ul>
+  {% if r.warn_rows %}
+  <table>
+    <thead><tr><th>Hướng</th><th>Ngày</th><th>Ký hiệu</th><th>Số HĐ</th><th>Đối tác</th><th>Tổng thanh toán</th><th>Lưu ý</th></tr></thead>
+    <tbody>{% for x in r.warn_rows %}<tr><td>{{ x.huong }}</td><td>{{ x.ngay }}</td><td>{{ x.kh }}</td><td>{{ x.so }}</td>
+      <td>{{ x.ten }}<br><span class="i">{{ x.mst }}</span></td><td class="r">{{ x.tong|m }}</td><td>{{ x.why }}</td></tr>{% endfor %}</tbody>
+  </table>
+  {% endif %}
+</div>
+{% endif %}
+</body>
+</html>

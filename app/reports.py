@@ -168,11 +168,25 @@ DATA_KEYS = ("huong", "loai", "thang", "ngay_lap", "khmshdon", "khhdon", "shdon"
              "tgtcthue", "tgtthue", "tgtttbso", "tthai", "tthai_code", "file_xml", "file_pdf", "_rates")
 
 
+def _row_key(r: dict[str, Any]) -> tuple:
+    return (r.get("huong"), str(r.get("loai") or ""), str(r.get("nbmst") or ""), str(r.get("khmshdon") or ""),
+            str(r.get("khhdon") or ""), str(r.get("shdon") or "").lstrip("0"))
+
+
 def save_month_data(rows: list[dict[str, Any]], dest: Path) -> None:
+    """Lưu dữ liệu tháng. GỘP với dữ liệu đã lưu (lượt chạy trước, loại hóa đơn khác) – không ghi đè,
+    để chạy lại một phần (vd chỉ 'mua vào') không làm mất dữ liệu 'bán ra' đã có."""
     dest.parent.mkdir(parents=True, exist_ok=True)
-    data = [{k: r.get(k) for k in DATA_KEYS} for r in rows]
-    dest.write_text(json.dumps({"saved": date.today().isoformat(), "rows": data}, ensure_ascii=False, default=str),
-                    encoding="utf-8")
+    merged: dict[tuple, dict[str, Any]] = {}
+    try:
+        for r in json.loads(dest.read_text(encoding="utf-8")).get("rows", []):
+            merged[_row_key(r)] = r
+    except (FileNotFoundError, ValueError):
+        pass
+    for r in rows:
+        merged[_row_key(r)] = {k: r.get(k) for k in DATA_KEYS}
+    dest.write_text(json.dumps({"saved": date.today().isoformat(), "rows": list(merged.values())},
+                               ensure_ascii=False, default=str), encoding="utf-8")
 
 
 def load_period_data(root: Path, months: list[tuple[int, int]]) -> list[dict[str, Any]]:
