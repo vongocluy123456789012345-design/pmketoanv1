@@ -1,8 +1,8 @@
 """Tải PDF gốc EasyInvoice (SoftDreams) qua trang tra cứu <MST>hd.easyinvoice.com.vn.
 
-Trang tra cứu bắt nhập captcha cho MỖI lần tra cứu. Phần mềm KHÔNG tự giải captcha:
-ảnh captcha được chụp lại và hiện cho người dùng nhập (qua hàm ask_captcha), sau đó phần mềm
-tự điền mã tra cứu (Fkey), bấm "Tra cứu" rồi bấm "Tải PDF & đính kèm" ngay trên Chrome.
+Trang tra cứu bắt nhập captcha cho MỖI lần tra cứu. Phần mềm tự động giải captcha bằng OCR
+(ddddocr); chỉ hiện ảnh cho người dùng nhập dự phòng (qua hàm ask_captcha) nếu OCR thất bại,
+sau đó tự điền mã tra cứu (Fkey), bấm "Tra cứu" rồi bấm "Tải PDF & đính kèm" ngay trên Chrome.
 """
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Callable
 from urllib.parse import urlparse
 
+from ..captcha_solver import solve_bytes
 from ..gdt.browser import BROWSER
 
 
@@ -185,15 +186,17 @@ def mgmt_download_many(mst: str, jobs: list[tuple[str, str]]) -> list[bytes | No
 
 
 def fetch(lookup_url: str, fkey: str, ask_captcha: Callable[[str, str], str], label: str) -> bytes:
-    """Trả về PDF gốc. ask_captcha(image_data_uri, reason) -> mã người dùng nhập
-    (hàm này raise nếu người dùng bỏ qua)."""
+    """Trả về PDF gốc. Tự giải captcha bằng OCR trước (2 lần thử), chỉ gọi ask_captcha
+    để người dùng nhập tay nếu OCR thất bại."""
     url = search_url(lookup_url)
     last = ""
     for attempt in range(3):
         png = BROWSER.call(lambda: _open_search(url, fkey), 120)
-        img = "data:image/png;base64," + base64.b64encode(png).decode()
-        reason = f"EasyInvoice – {label}" + (f" (mã trước bị từ chối: {last})" if last else "")
-        value = ask_captcha(img, reason)
+        value = solve_bytes(png) if attempt < 2 else ""
+        if not value:
+            img = "data:image/png;base64," + base64.b64encode(png).decode()
+            reason = f"EasyInvoice – {label}" + (f" (mã trước bị từ chối: {last})" if last else "")
+            value = ask_captcha(img, reason)
         try:
             data, _name = BROWSER.call(lambda: _submit_and_download(value), 200)
         except CaptchaRejected as e:
