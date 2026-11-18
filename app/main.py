@@ -381,6 +381,7 @@ class VatClientIn(BaseModel):
     ten: str | None = None
     ten_ngan: str | None = None
     ngay: str | None = None  # YYYY-MM-DD; trống = ngày lập dự báo
+    write: bool = True       # False: chỉ lấy thông tin tự điền + lời nhắn
 
 
 @app.post("/api/vat/client-report")
@@ -398,7 +399,8 @@ def vat_client_report(body: VatClientIn):
         ngay = _date.fromisoformat(body.ngay) if body.ngay else None
     except ValueError:
         raise HTTPException(400, "Ngày dự báo không hợp lệ")
-    return vat_client.export(res, sender=body.sender, ten=body.ten or None, ten_ngan=body.ten_ngan or None, ngay=ngay)
+    return vat_client.export(res, write=body.write, sender=body.sender or "ATAX", ten=body.ten or None,
+                             ten_ngan=body.ten_ngan or None, ngay=ngay)
 
 
 @app.get("/api/vat/print")

@@ -357,7 +357,7 @@
         <div style="flex:0 0 auto"><button id="vcBtn">Xuất file gửi khách</button></div>
       </div>
       <div id="vcOut" style="display:none;margin-top:8px">
-        <textarea id="vcMsg" rows="4" style="width:100%;box-sizing:border-box"></textarea>
+        <textarea id="vcMsg" rows="6" style="width:100%;box-sizing:border-box"></textarea>
         <div style="margin-top:6px"><button class="sec" id="vcCopy">Copy lời nhắn</button>
           <button class="sec" id="vcOpen">Mở file Excel</button> <span id="vcInfo" class="muted"></span></div>
       </div>
@@ -1081,21 +1081,27 @@ function renderVat(s) {
     `<span class="muted"> Lập lúc ${esc((s.created || "").replace("T", " "))}${s.source && s.source.startsWith("auto") ? " (tự động)" : ""}</span>`].join(" ");
   $("vPrint").onclick = () => window.open(`/api/vat/print?mst=${encodeURIComponent(s.mst)}&key=${encodeURIComponent(s.key)}`, "_blank");
   // ----- Xuất dự báo gửi khách hàng
-  try { $("vcSender").value = localStorage.getItem("vcSender") || "ATAX"; } catch (e) { $("vcSender").value = "ATAX"; }
-  $("vcTen").value = s.company.ten || ""; $("vcTenNgan").value = ""; $("vcOut").style.display = "none";
-  const created = (s.created || "").slice(0, 10);
-  $("vcNgay").value = created && created < s.to ? created : (s.to || "");
+  // tự điền sẵn MỌI thông tin (đơn vị gửi, tên khách, tên ngắn, ngày dự báo) + lời nhắn -> bấm 1 nút là xuất
+  let vcSender = "ATAX";
+  try { vcSender = localStorage.getItem("vcSender") || "ATAX"; } catch (e) { /* bỏ qua */ }
+  $("vcSender").value = vcSender; $("vcTen").value = ""; $("vcTenNgan").value = ""; $("vcNgay").value = "";
+  $("vcOpen").style.display = "none"; $("vcInfo").textContent = ""; $("vClient").open = true;
+  const vcCall = (write, edited) => api("/api/vat/client-report", {method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({mst: s.mst, key: s.key, write, sender: $("vcSender").value.trim() || "ATAX",
+      ten: edited ? $("vcTen").value.trim() : null, ten_ngan: edited ? $("vcTenNgan").value.trim() : null,
+      ngay: edited ? ($("vcNgay").value || null) : null})});
+  const vcFill = r => { $("vcOut").style.display = ""; $("vcMsg").value = r.message; $("vcTen").value = r.ten;
+    $("vcTenNgan").value = r.ten_ngan; $("vcNgay").value = r.ngay; };
+  vcCall(false, false).then(vcFill).catch(e => { $("vcOut").style.display = ""; $("vcInfo").textContent = "Lỗi: " + e.message; });
+  // sửa ô nào -> lời nhắn cập nhật ngay
+  ["vcSender", "vcTen", "vcTenNgan", "vcNgay"].forEach(id => { $(id).onchange = () => vcCall(false, true).then(vcFill).catch(() => {}); });
   $("vcBtn").onclick = async () => {
-    const sender = $("vcSender").value.trim() || "ATAX";
-    try { localStorage.setItem("vcSender", sender); } catch (e) { /* bỏ qua */ }
+    try { localStorage.setItem("vcSender", $("vcSender").value.trim() || "ATAX"); } catch (e) { /* bỏ qua */ }
     $("vcBtn").disabled = true;
     try {
-      const r = await api("/api/vat/client-report", {method: "POST", headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({mst: s.mst, key: s.key, sender, ten: $("vcTen").value.trim(), ten_ngan: $("vcTenNgan").value.trim(),
-          ngay: $("vcNgay").value || null})});
-      $("vcOut").style.display = ""; $("vcMsg").value = r.message; $("vcTenNgan").value = r.ten_ngan;
-      $("vcInfo").textContent = `Đã lưu: ${r.file}`;
-      $("vcOpen").onclick = () => openFile(r.file);
+      const r = await vcCall(true, true);
+      vcFill(r); $("vcInfo").textContent = `Đã lưu: ${r.file}`;
+      $("vcOpen").style.display = ""; $("vcOpen").onclick = () => openFile(r.file);
     } catch (e) { $("vcOut").style.display = ""; $("vcInfo").textContent = "Lỗi: " + e.message; }
     $("vcBtn").disabled = false;
   };

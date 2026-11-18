@@ -42,7 +42,7 @@ def build(res: dict[str, Any], sender: str = "ATAX", ten: str | None = None, ten
     d_to = _d(res.get("to")) or date.today()
     if ngay is None:  # ngày dự báo = ngày lập dự báo (không quá cuối kỳ)
         ngay = min(_d(res.get("created")) or date.today(), d_to)
-    ten = (ten or res.get("company", {}).get("ten") or f"MST {res['mst']}").strip()
+    ten = (ten or company_name(res)).strip()
     ten_ngan = (ten_ngan or short_name(ten)).strip()
     sender = (sender or "ATAX").strip()
     ky_txt = f"tháng {ky}" if monthly else f"quý {ky}"           # tháng 10
@@ -63,18 +63,48 @@ def build(res: dict[str, Any], sender: str = "ATAX", ten: str | None = None, ten
 
 
 def message(b: dict[str, Any]) -> str:
+    """Lời nhắn gửi khách – luôn đủ 3 phần theo mẫu: kỳ + thời điểm, số thuế, nhắc bổ sung đến cuối kỳ."""
     v = b["vals"]["luy_ke"]
     loai = "phải nộp" if b["phai_nop"] else "được khấu trừ"
-    lines = [f"Dạ anh/chị, em xin gửi Doanh nghiệp dự báo thuế GTGT {b['ky_txt']}/{b['nam']}"
-             + (f" (tính tới thời điểm {b['ngay_txt']})" if b["den_cuoi_ky"] else "") + " như sau:",
-             f"- Đến ngày {b['ngay_txt']} dự kiến Công ty {b['ten_ngan']} có số thuế GTGT {loai} trong "
-             f"{b['ky_txt']}/{b['nam']} là: {vnd(v)} đ"]
-    if b["den_cuoi_ky"]:
-        lines.append(f"Công ty dự tính phát sinh doanh thu và chi phí đến ngày {b['cuoi_ky']} để kịp bổ sung sớm ạ. "
-                     "Em xin cảm ơn ạ")
-    else:
-        lines.append("Em xin cảm ơn ạ")
-    return "\n".join(lines)
+    return "\n".join([
+        f"Dạ anh/chị, em xin gửi Doanh nghiệp dự báo thuế GTGT {b['ky_txt']}/{b['nam']} "
+        f"(tính tới thời điểm {b['ngay_txt']}) như sau:",
+        f"- Đến ngày {b['ngay_txt']} dự kiến Công ty {b['ten_ngan']} có số thuế GTGT {loai} trong "
+        f"{b['ky_txt']}/{b['nam']} là: {vnd(v)} đ",
+        f"Công ty dự tính phát sinh doanh thu và chi phí đến ngày {b['cuoi_ky']} để kịp bổ sung sớm ạ. Em xin cảm ơn ạ",
+    ])
+
+
+def company_name(res: dict[str, Any]) -> str:
+    """Tên doanh nghiệp: từ kết quả dự báo; chưa có thì lấy từ hóa đơn đã tải (người bán của HĐ bán ra /
+    người mua của HĐ mua vào trùng MST)."""
+    ten = (res.get("company") or {}).get("ten") or ""
+    if ten.strip():
+        return ten.strip()
+    try:
+        from .config import settings
+        from .vat import load_rows
+        mst = str(res["mst"])
+        import json
+        root = Path(settings.output_dir) / mst
+        rows, _, _ = load_rows(root, res["kieu"], int(res["ky"]), int(res["nam"]))
+        if not rows:  # kỳ này chưa có hóa đơn: tìm tên ở các tháng khác của MST này (mới nhất trước)
+            for f in sorted(root.glob("*/.dulieu_*.json"), reverse=True)[:6]:
+                try:
+                    rows += json.loads(f.read_text(encoding="utf-8")).get("rows", [])
+                except (OSError, ValueError):
+                    continue
+        from collections import Counter
+        names = Counter()
+        for r in rows:
+            for m, t in (("nbmst", "nbten"), ("nmmst", "nmten")):
+                if str(r.get(m) or "").replace("-", "") == mst and str(r.get(t) or "").strip():
+                    names[str(r[t]).strip()] += 1
+        if names:
+            return names.most_common(1)[0][0]
+    except Exception:  # noqa: BLE001
+        pass
+    return f"MST {res['mst']}"
 
 
 def write_excel(b: dict[str, Any], dest: Path) -> Path:
@@ -129,7 +159,7 @@ def write_excel(b: dict[str, Any], dest: Path) -> Path:
     ws["H9"].fill = yellow
     # ----- khung lời gửi
     put("B11", "Kính gửi Quý Công Ty", 13)
-    tg = f" (tới thời điểm {b['ngay_ngan']})" if b["den_cuoi_ky"] else ""
+    tg = f" (tới thời điểm {b['ngay_ngan']})"
     put("B12", f"{b['sender']} xin gửi Quý Công ty dự báo thuế GTGT {b['ky_txt']}{tg} năm {b['nam']}, như sau", 13)
     put("B13", "DT mua vào", 13, True)
     put("C13", round(v["dt_vao"]), 13, True, "right", NUM_FMT)
@@ -163,11 +193,13 @@ def write_excel(b: dict[str, Any], dest: Path) -> Path:
     return dest
 
 
-def export(res: dict[str, Any], **kw: Any) -> dict[str, Any]:
+def export(res: dict[str, Any], write: bool = True, **kw: Any) -> dict[str, Any]:
+    """write=False: chỉ trả về thông tin tự điền + lời nhắn (để hiện sẵn trên màn hình), không ghi file."""
     from .vat import out_folder
     b = build(res, **kw)
-    tag = res["key"].replace("-", "_")
-    dest = out_folder(res["mst"], res["key"]) / f"DuBao_GuiKhachHang_{tag}.xlsx"
-    path = write_excel(b, dest)
-    return {"file": str(path), "message": message(b), "ten": b["ten"], "ten_ngan": b["ten_ngan"],
-            "ngay": b["ngay"].isoformat(), "luy_ke": round(b["vals"]["luy_ke"]), "phai_nop": b["phai_nop"]}
+    out = {"file": "", "message": message(b), "sender": b["sender"], "ten": b["ten"], "ten_ngan": b["ten_ngan"],
+           "ngay": b["ngay"].isoformat(), "luy_ke": round(b["vals"]["luy_ke"]), "phai_nop": b["phai_nop"]}
+    if write:
+        tag = res["key"].replace("-", "_")
+        out["file"] = str(write_excel(b, out_folder(res["mst"], res["key"]) / f"DuBao_GuiKhachHang_{tag}.xlsx"))
+    return out
