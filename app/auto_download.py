@@ -339,6 +339,15 @@ class Runner:
             raise RuntimeError(f"Bảng kê Excel: cổng không trả file Excel ({r.message()})")
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(r.body)
+        if kind["direction"] == "purchase":
+            from .bank_filter import BANK_SHEET, strip_bank_rows
+            try:
+                n = strip_bank_rows(dest)
+                if n:
+                    self.job.say(f"{dest.name}: chuyển {n} hóa đơn của ngân hàng sang sheet \"{BANK_SHEET}\" "
+                                 "(không đưa vào bảng kê mua vào, không tính vào tờ khai)")
+            except Exception as e:  # noqa: BLE001 - bảng kê vẫn giữ nguyên bản cổng nếu tách lỗi
+                self.job.err(f"{dest.name}: không tách được hóa đơn ngân hàng ({e})")
 
     def export_xml(self, kind: dict[str, Any], inv: dict[str, Any]) -> bytes:
         params = {k: _s(inv.get(k)) for k in ("nbmst", "khhdon", "shdon", "khmshdon")}
@@ -652,6 +661,7 @@ def download_xmls(rn: Runner, job: AutoJob, kind: dict[str, Any], folder: Path,
                     failed.append(it)
         return retry, busy
 
+    ok0 = job.xml_ok
     size, i, last_say = XML_BATCH, 0, 0
     while i < len(need):
         if job.cancel:
@@ -670,25 +680,35 @@ def download_xmls(rn: Runner, job: AutoJob, kind: dict[str, Any], folder: Path,
         time.sleep(settings.gdt_delay if not busy else 3)
         if i - last_say >= 60 or i == len(need):
             last_say = i
-            job.say(f"{tag}: đã tải {i}/{len(need)} XML")
+            job.say(f"{tag}: đã gửi {i}/{len(need)} – tải được {job.xml_ok - ok0} XML"
+                    + (f", {len(later)} chưa được" if later else ""))
 
-    for rnd, pause in enumerate((15, 30, 60, 90), 1):
+    # Tải lại phần cổng chưa trả. Nghỉ ngắn (5 / 10 / 20 giây); nếu cả lượt không lấy thêm được file nào
+    # và cổng không báo quá tải (429) thì lỗi là cố định (vd lỗi 500 với hóa đơn này) -> dừng, lấy chi tiết thay XML.
+    pauses = (5, 10, 20)
+    for rnd, pause in enumerate(pauses, 1):
         if not later:
             break
-        job.say(f"{tag}: cổng báo quá tải – nghỉ {pause} giây rồi tải lại {len(later)} XML (lượt {rnd}/4)")
+        why = str(later[0].get("xml_err") or "")[:80]
+        job.say(f"{tag}: còn {len(later)} XML cổng chưa trả ({why}) – nghỉ {pause} giây rồi tải lại "
+                f"(lượt {rnd}/{len(pauses)})")
         for _ in range(pause):
             if job.cancel:
                 raise Cancelled()
             time.sleep(1)
-        todo, later = later, []
+        todo, later, got, any_busy = later, [], job.xml_ok, False
         for k in range(0, len(todo), 5):
             if job.cancel:
                 raise Cancelled()
             retry, busy = get_batch(todo[k:k + 5])
+            any_busy = any_busy or busy
             later += retry
             time.sleep(3 if busy else settings.gdt_delay)
         if not later:
             job.say(f"{tag}: đã tải lại đủ XML")
+        elif job.xml_ok == got and not any_busy:
+            job.say(f"{tag}: cổng vẫn không trả {len(later)} XML – bỏ qua chờ, lấy chi tiết hóa đơn thay XML")
+            break
     failed += later
 
     for it in failed:

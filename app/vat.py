@@ -442,6 +442,7 @@ def compute(mst: str, kieu: str, ky: int, nam: int, inputs: dict[str, Any] | Non
     stat = {"mua_vao": 0, "ban_ra": 0, "loai_tru": 0, "khong_khau_tru": 0, "khong_xml": 0}
     no_deduct_val = no_deduct_tax = 0.0
 
+    from .bank_filter import BANK_NOTE, is_bank_purchase
     from .reports import tthai_code
     # ---- bước 1: đọc từng hóa đơn (thuế suất, dòng hàng, hóa đơn gốc nếu là HĐ thay thế / điều chỉnh)
     prepared: list[dict[str, Any]] = []
@@ -450,6 +451,9 @@ def compute(mst: str, kieu: str, ky: int, nam: int, inputs: dict[str, Any] | Non
         direction = "purchase" if r.get("huong") == "purchase" else "sold"
         if code == 6:
             excluded.append((r, "Hóa đơn đã bị hủy – không kê khai"))
+            continue
+        if is_bank_purchase(r):
+            excluded.append((r, BANK_NOTE))
             continue
         its, rates = _detail(r, mst, info)
         if not rates:

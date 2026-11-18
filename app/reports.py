@@ -290,9 +290,13 @@ def period_months(kieu: str, ky: int, nam: int) -> list[tuple[int, int]]:
 
 def invoice_totals(rows: list[dict[str, Any]]) -> dict[str, float]:
     """Cộng hóa đơn theo chỉ tiêu tờ khai. Bỏ hóa đơn đã bị thay thế / bị hủy."""
+    from .bank_filter import is_bank_purchase
+
     t = {k: 0.0 for k, _ in CHI_TIEU}
     for r in rows:
         if tthai_code(r) in (4, 6):
+            continue
+        if is_bank_purchase(r):  # hóa đơn ngân hàng không đưa vào tờ khai
             continue
         rates = r.get("_rates") or {}
         if r.get("huong") == "purchase":
