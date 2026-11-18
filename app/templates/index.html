@@ -347,6 +347,21 @@
     <h2 id="vResTitle"></h2>
     <div class="kpi" id="vKpi"></div>
     <div id="vFiles" style="margin-top:10px"></div>
+    <details id="vClient" style="margin-top:10px;border:1px solid var(--b);border-radius:8px;padding:8px 10px">
+      <summary><b>📨 Xuất dự báo gửi khách hàng</b> <span class="muted">(file Excel theo mẫu + lời nhắn gửi kèm)</span></summary>
+      <div class="inline" style="margin-top:8px">
+        <div><label>Đơn vị gửi</label><input id="vcSender" placeholder="ATAX"></div>
+        <div style="flex:2"><label>Tên khách hàng (Kính gửi Quý…)</label><input id="vcTen"></div>
+        <div><label>Tên gọi ngắn (trong lời nhắn)</label><input id="vcTenNgan"></div>
+        <div><label>Ngày dự báo</label><input type="date" id="vcNgay"></div>
+        <div style="flex:0 0 auto"><button id="vcBtn">Xuất file gửi khách</button></div>
+      </div>
+      <div id="vcOut" style="display:none;margin-top:8px">
+        <textarea id="vcMsg" rows="4" style="width:100%;box-sizing:border-box"></textarea>
+        <div style="margin-top:6px"><button class="sec" id="vcCopy">Copy lời nhắn</button>
+          <button class="sec" id="vcOpen">Mở file Excel</button> <span id="vcInfo" class="muted"></span></div>
+      </div>
+    </details>
     <ul id="vWarn" style="margin:10px 0 0;padding-left:18px;color:var(--warn)"></ul>
     <div class="tablewrap" style="margin-top:10px;max-height:none"><table id="vatTable"><tbody></tbody></table></div>
   </section>
@@ -1065,6 +1080,30 @@ function renderVat(s) {
     f.pdf_error ? `<span class="msg err">Không in được PDF: ${esc(f.pdf_error)} – dùng bản HTML để in.</span>` : "",
     `<span class="muted"> Lập lúc ${esc((s.created || "").replace("T", " "))}${s.source && s.source.startsWith("auto") ? " (tự động)" : ""}</span>`].join(" ");
   $("vPrint").onclick = () => window.open(`/api/vat/print?mst=${encodeURIComponent(s.mst)}&key=${encodeURIComponent(s.key)}`, "_blank");
+  // ----- Xuất dự báo gửi khách hàng
+  try { $("vcSender").value = localStorage.getItem("vcSender") || "ATAX"; } catch (e) { $("vcSender").value = "ATAX"; }
+  $("vcTen").value = s.company.ten || ""; $("vcTenNgan").value = ""; $("vcOut").style.display = "none";
+  const created = (s.created || "").slice(0, 10);
+  $("vcNgay").value = created && created < s.to ? created : (s.to || "");
+  $("vcBtn").onclick = async () => {
+    const sender = $("vcSender").value.trim() || "ATAX";
+    try { localStorage.setItem("vcSender", sender); } catch (e) { /* bỏ qua */ }
+    $("vcBtn").disabled = true;
+    try {
+      const r = await api("/api/vat/client-report", {method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({mst: s.mst, key: s.key, sender, ten: $("vcTen").value.trim(), ten_ngan: $("vcTenNgan").value.trim(),
+          ngay: $("vcNgay").value || null})});
+      $("vcOut").style.display = ""; $("vcMsg").value = r.message; $("vcTenNgan").value = r.ten_ngan;
+      $("vcInfo").textContent = `Đã lưu: ${r.file}`;
+      $("vcOpen").onclick = () => openFile(r.file);
+    } catch (e) { $("vcOut").style.display = ""; $("vcInfo").textContent = "Lỗi: " + e.message; }
+    $("vcBtn").disabled = false;
+  };
+  $("vcCopy").onclick = async () => {
+    try { await navigator.clipboard.writeText($("vcMsg").value); $("vcCopy").textContent = "Đã copy ✓"; }
+    catch (e) { $("vcMsg").select(); document.execCommand("copy"); $("vcCopy").textContent = "Đã copy ✓"; }
+    setTimeout(() => { $("vcCopy").textContent = "Copy lời nhắn"; }, 1500);
+  };
   $("vWarn").innerHTML = (s.warnings || []).map(w => `<li>${esc(w)}</li>`).join("") +
     ((s.legal || []).length ? `<li style="color:#1f2328;list-style:none;margin-left:-18px;margin-top:6px"><b>Căn cứ pháp lý (${esc(s.mau === "TT89" ? "mẫu 01/GTGT theo TT 89/2026" : "mẫu 01/GTGT theo TT 80/2021")}):</b><ul style="color:#1f2328">` +
       s.legal.map(l => `<li>${esc(l.text)} – <a href="${esc(l.url)}" target="_blank" rel="noopener noreferrer">xem</a></li>`).join("") + `</ul></li>` : "");

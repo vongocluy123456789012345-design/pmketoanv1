@@ -134,7 +134,7 @@ def read_period(mst: str, kieu: str, ky: int, nam: int, details: bool = True,
                     continue
                 except Exception as e:  # noqa: BLE001
                     msg = str(e)
-                    if any(c in msg for c in ("504", "502", "503", "Gateway", "AbortError", "aborted", "Không gọi được")):
+                    if any(c in msg for c in ("504", "502", "503", "Gateway", "AbortError", "aborted", "Không gọi được", "quá lâu")):
                         return {"loi": "Cổng hoadondientu.gdt.gov.vn đang quá tải (lỗi 504 phía cổng thuế) nên chưa đọc "
                                        "được hóa đơn. Báo khách thử lại sau 5–10 phút. KHÔNG gọi lại ngay và KHÔNG chuyển "
                                        "sang start_download (tải đầy đủ còn lâu hơn).", "cong_qua_tai": True}

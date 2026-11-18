@@ -374,6 +374,33 @@ def vat_config(body: VatCfgIn):
     return vat.set_cfg(_vat_mst(body.mst), kieu=body.kieu, auto=body.auto)
 
 
+class VatClientIn(BaseModel):
+    mst: str
+    key: str
+    sender: str = "ATAX"
+    ten: str | None = None
+    ten_ngan: str | None = None
+    ngay: str | None = None  # YYYY-MM-DD; trống = ngày lập dự báo
+
+
+@app.post("/api/vat/client-report")
+def vat_client_report(body: VatClientIn):
+    """Xuất file Excel 'Dự báo thuế GTGT' gửi khách hàng + lời nhắn gửi kèm, từ kết quả dự báo đã lập."""
+    from datetime import date as _date
+
+    from . import vat, vat_client
+    if not re.fullmatch(r"\d{4}-(Q[1-4]|\d{2})", body.key or ""):
+        raise HTTPException(400, "Kỳ không hợp lệ")
+    res = vat.saved_result(_vat_mst(body.mst), body.key)
+    if not res:
+        raise HTTPException(404, "Chưa có kết quả dự báo kỳ này – bấm Dự báo VAT trước")
+    try:
+        ngay = _date.fromisoformat(body.ngay) if body.ngay else None
+    except ValueError:
+        raise HTTPException(400, "Ngày dự báo không hợp lệ")
+    return vat_client.export(res, sender=body.sender, ten=body.ten or None, ten_ngan=body.ten_ngan or None, ngay=ngay)
+
+
 @app.get("/api/vat/print")
 def vat_print(mst: str, key: str):
     """Mở bản HTML tờ khai để in (Ctrl+P)."""

@@ -40,6 +40,17 @@ class BrowserError(Exception):
     pass
 
 
+def _net_error(err: str) -> str:
+    """Lỗi mạng khi gọi cổng -> câu báo dễ hiểu cho người dùng."""
+    if "Failed to fetch" in err or "NetworkError" in err:
+        return ("Không gọi được cổng thuế (Failed to fetch): máy chủ hoadondientu.gdt.gov.vn đang ngắt kết nối – cổng quá "
+                "tải hoặc tạm chặn do truy cập dồn dập. Chờ 10–15 phút, bấm F5 tải lại trang cổng trong Chrome (vào được "
+                "và vẫn đăng nhập) rồi chạy lại; hóa đơn đã tải sẽ được bỏ qua.")
+    if "AbortError" in err or "aborted" in err:
+        return "Cổng thuế phản hồi quá lâu (hết thời gian chờ) – cổng đang chậm, thử lại sau ít phút."
+    return f"Không gọi được cổng thuế: {err}"
+
+
 class BrowserAuthError(BrowserError):
     """Chưa đăng nhập hoặc phiên đăng nhập đã hết hạn."""
 
@@ -331,14 +342,14 @@ class BrowserWorker:
                     res = {"error": str(e)}
                 if not res.get("error"):
                     break
-                # "Failed to fetch" thoáng qua (trang đang tải / mạng chập chờn) -> chờ rồi thử lại
-                time.sleep(2 * (attempt + 1))
+                # "Failed to fetch" thoáng qua (trang đang tải / mạng chập chờn / cổng ngắt kết nối) -> chờ rồi thử lại
+                time.sleep(4 * (attempt + 1))
                 try:
                     page.wait_for_load_state("domcontentloaded", timeout=15000)
                 except Exception:  # noqa: BLE001
                     page = self._logged_page()
             if res.get("error"):
-                raise BrowserError(f"Không gọi được cổng thuế: {res['error']}")
+                raise BrowserError(_net_error(res["error"]))
             return FetchResult(res["status"], res["ctype"], base64.b64decode(res["b64"] or ""))
 
         r = self.call(run, timeout + 30)
