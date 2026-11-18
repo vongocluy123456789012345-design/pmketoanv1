@@ -4,23 +4,23 @@ Nhiều trang tra cứu là ứng dụng JavaScript (gõ mã tra cứu -> bấm 
 "Tải PDF"), nên tải bằng HTTP thường không thấy PDF. Ở đây phần mềm mở một Chrome/Edge CHẠY ẨN (headless,
 hồ sơ trống, không đụng Chrome của người dùng) và làm như người thật:
 
-  1. Mở link tra cứu (in trong XML) hoặc trang tra cứu của NCC.
-  2. Tìm ô nhập mã tra cứu (và ô MST người bán nếu có), điền mã, bấm "Tra cứu".
-  3. Bắt mọi PDF đi qua mạng: file PDF, file ZIP chứa PDF, JSON chứa PDF dạng base64, lượt tải (download),
+1. Mở link tra cứu (in trong XML) hoặc trang tra cứu của NCC.
+2. Tìm ô nhập mã tra cứu (và ô MST người bán nếu có), điền mã, bấm "Tra cứu".
+3. Bắt mọi PDF đi qua mạng: file PDF, file ZIP chứa PDF, JSON chứa PDF dạng base64, lượt tải (download),
      tab mới mở PDF / blob PDF.
-  4. Chưa có thì bấm các nút "Tải PDF / Tải hóa đơn / Download / Xem hóa đơn / In"...
-  5. Trang hiện hóa đơn dạng HTML (không có file PDF) thì in chính trang đó ra PDF.
+4. Chưa có thì bấm các nút "Tải PDF / Tải hóa đơn / Download / Xem hóa đơn / In"...
+5. Trang hiện hóa đơn dạng HTML (không có file PDF) thì in chính trang đó ra PDF.
 
 Mọi PDF đều phải chứa đúng số hóa đơn + ký hiệu/MST người bán mới được nhận (tránh nhận nhầm file hướng dẫn).
-Trang nào bắt buộc nhập captcha thì phần mềm DỪNG và báo NeedsCaptcha (không vượt captcha) – trừ khi được
-gọi kèm hàm `ask`: khi đó ảnh captcha được chụp lại để NGƯỜI DÙNG nhập (phần mềm không tự đọc captcha).
+Trang nào có captcha ảnh sẽ được tự động giải bằng OCR (ddddocr); chỉ dừng báo NeedsCaptcha hoặc hiện
+ảnh qua hàm `ask` để NGƯỜI DÙNG nhập dự phòng nếu OCR thất bại hoặc gặp kiểm tra chống robot phức tạp.
 
 Tăng tốc / thông minh:
-  * Mỗi trang tra cứu (theo tên miền) dùng chung 1 phiên trình duyệt -> nhập captcha 1 lần, các hóa đơn sau
+- Mỗi trang tra cứu (theo tên miền) dùng chung 1 phiên trình duyệt -> giải captcha 1 lần, các hóa đơn sau
     của cùng trang dùng lại phiên đó (trang nào cho phép).
-  * Tự học "công thức" tải: PDF lấy được qua link có chứa mã tra cứu -> lưu mẫu link (data/pdf_recipes.json);
+- Tự học "công thức" tải: PDF lấy được qua link có chứa mã tra cứu -> lưu mẫu link (data/pdf_recipes.json);
     các hóa đơn sau của trang đó tải thẳng bằng HTTP, không cần mở trình duyệt.
-  * Trang bố cục lạ không nhận ra ô mã tra cứu -> AI (nếu đã cấu hình) chỉ ra ô cần điền / nút cần bấm,
+- Trang bố cục lạ không nhận ra ô mã tra cứu -> AI (nếu đã cấu hình) chỉ ra ô cần điền / nút cần bấm,
     kết quả nhớ theo tên miền nên mỗi trang chỉ hỏi AI 1 lần.
 """
 from __future__ import annotations
@@ -37,6 +37,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlparse
+
+from ..captcha_solver import solve_bytes
 
 CONCURRENCY = 8          # số trang tra cứu mở song song
 HOST_LIMIT = 3           # tối đa số trang mở cùng lúc trên 1 trang NCC (tránh bị chặn vì quá tải)
@@ -264,7 +266,7 @@ _SCAN_JS = r"""() => {
     .filter(vis).map((el, i) => { el.setAttribute('data-aw-bt', i); const r = el.getBoundingClientRect();
       return {i, tag: el.tagName.toLowerCase(), x: r.x + r.width / 2, y: r.y + r.height / 2,
               text: ((el.innerText || el.value || '') + ' ' + (el.title || '') + ' ' + (el.getAttribute('aria-label') || '')).trim().slice(0, 80),
-              href: el.getAttribute('href') || '', cls: (typeof el.className === 'string' ? el.className : '') + ' ' + (el.id || '')}; });
+              href: el.getAttribute('href') || '', cls: (typeof el.className === 'string' ? el.className : '') + ' ' + el.id || ''}; });
   const frames = [...document.querySelectorAll('iframe,embed,object')].map(el => el.src || el.data || '').filter(Boolean);
   return {inputs, caps, btns, frames, text: (document.body && document.body.innerText || '').slice(0, 20000)};
 }"""
@@ -360,8 +362,8 @@ class HeadlessPdf:
     def fetch(self, urls: list[str], code: str | None, seller_mst: str | None,
               accept: Callable[[bytes], bool], log: Callable[[str], None] | None = None,
               ask: Callable[[str, str], str] | None = None) -> Found | None:
-        """Thử lần lượt các trang tra cứu. Trả về Found / None; raise NeedsCaptcha nếu trang bắt captcha.
-        ask(ảnh_captcha_dataurl, lý_do) -> chữ người dùng nhập: có thì hiện captcha cho người dùng nhập."""
+        """Thử lần lượt các trang tra cứu. Trả về Found / None; tự giải captcha ảnh bằng OCR,
+        chỉ gọi ask hoặc raise NeedsCaptcha nếu giải thất bại."""
         if not ask:  # đường tắt: mẫu link đã học -> tải thẳng, không mở trình duyệt
             try:
                 got = recipe_fetch(urls, code, seller_mst, accept)
@@ -494,8 +496,6 @@ class HeadlessPdf:
             # Trang chạy trên nền EasyInvoice (tên miền riêng): ô mã (#iFkey) ẩn tới khi chọn "tra cứu theo mã"
             if code and await page.evaluate("() => !!document.querySelector('#iFkey') && "
                                             "!!document.querySelector('img[src*=\"Captcha\"], img#captcha')"):
-                if not ask:
-                    raise NeedsCaptcha("trang EasyInvoice – captcha mỗi lần tra cứu")
                 await page.evaluate("""(c) => { const r = document.querySelector('#fKeyCheck'); if (r) r.click();
                     const k = document.querySelector('#iFkey'); k.value = c;
                     k.dispatchEvent(new Event('input', {bubbles: true})); k.dispatchEvent(new Event('change', {bubbles: true})); }""",
@@ -503,7 +503,7 @@ class HeadlessPdf:
                 btn = await page.evaluate("() => { const b = document.querySelector('#btnSubmit'); "
                                           "if (b) b.setAttribute('data-aw-bt', 'sub'); return !!b; }")
                 if not await self._solve_captcha(page, ask, {"i": "sub"} if btn else None, f"Mã tra cứu {code}"):
-                    raise NeedsCaptcha("không lấy được ảnh captcha")
+                    raise NeedsCaptcha("không giải được captcha EasyInvoice")
                 solved = True
                 try:
                     await page.wait_for_load_state("networkidle", timeout=15000)
@@ -514,7 +514,7 @@ class HeadlessPdf:
                     return found[0]
                 code = None  # đã tra cứu xong -> khỏi điền lại mã
             info = await self._scan_all(page)
-            # Có ô mã tra cứu đang trống -> điền mã + MST rồi bấm Tra cứu (có captcha + ask -> người dùng nhập)
+            # Có ô mã tra cứu đang trống -> điền mã + MST rồi bấm Tra cứu (tự giải captcha bằng OCR, nếu lỗi mới hỏi người dùng)
             if code:
                 filled = await self._fill_and_submit(page, info, code, seller_mst, host, ask)
                 solved = filled == "captcha"
@@ -528,11 +528,9 @@ class HeadlessPdf:
                         return found[0]
                     info = await self._scan_all(page)
             if self._captcha_needed(info) and not solved:
-                if not ask:
-                    raise NeedsCaptcha("captcha")
-                # trang hiện captcha ngay (không có ô mã hoặc mã nằm sẵn trong link) -> người dùng nhập rồi gửi
+                # trang hiện captcha ngay (không có ô mã hoặc mã nằm sẵn trong link) -> tự giải OCR trước, lỗi mới hỏi người dùng
                 if not await self._solve_captcha(page, ask, None, "Nhập captcha của trang tra cứu"):
-                    raise NeedsCaptcha("không lấy được ảnh captcha")
+                    raise NeedsCaptcha("captcha")
                 try:
                     await page.wait_for_load_state("networkidle", timeout=12000)
                 except Exception:  # noqa: BLE001
@@ -622,8 +620,8 @@ class HeadlessPdf:
 
     async def _fill_and_submit(self, page, info: dict[str, Any], code: str, seller_mst: str | None,
                                host: str = "", ask=None) -> bool | str:
-        """Điền mã tra cứu (+ MST), gặp captcha thì (nếu có ask) cho người dùng nhập, rồi bấm Tra cứu.
-        Trả về False (không thấy ô mã), True (đã gửi), "captcha" (đã gửi kèm captcha người dùng nhập)."""
+        """Điền mã tra cứu (+ MST), gặp captcha thì tự giải bằng OCR (nếu lỗi mới gọi ask cho người dùng nhập),
+        rồi bấm Tra cứu. Trả về False (không thấy ô mã), True (đã gửi), "captcha" (đã gửi kèm captcha)."""
         hint = recipes().get(host, {}).get("fields") if host else None
         targets = [(page, info)] + info.get("frame_objs", [])
         for frame, inf in targets:
@@ -668,11 +666,9 @@ class HeadlessPdf:
                             pass
             result: bool | str = True
             if any(CAPTCHA_HINT.search(i["text"]) for i in inf["inputs"]) or inf["caps"]:
-                if not ask:
-                    raise NeedsCaptcha("captcha")
                 btn = btn or self._submit_button(best, inf["btns"])
                 if not await self._solve_captcha(frame, ask, btn, f"Mã tra cứu {code}"):
-                    raise NeedsCaptcha("không lấy được ảnh captcha")
+                    raise NeedsCaptcha("captcha")
                 return "captcha"
             # nhấn Enter trong ô, rồi bấm nút "Tra cứu" gần ô nhất (không bấm link menu sang trang khác)
             try:
@@ -690,13 +686,15 @@ class HeadlessPdf:
         return False
 
     async def _solve_captcha(self, frame, ask, btn: dict[str, Any] | None, reason: str) -> bool:
-        """Chụp ảnh captcha -> người dùng nhập (ask chạy ngoài vòng lặp, không chặn các hóa đơn khác) -> điền, gửi."""
+        """Chụp ảnh captcha -> tự giải bằng OCR (ddddocr), nếu không ra chữ và có ask thì người dùng nhập -> điền, gửi."""
         st = await frame.evaluate(_CAPTCHA_JS)
         if not st.get("img") or not st.get("input"):
             return False
         png = await frame.locator("[data-aw-capimg='1']").first.screenshot(timeout=10000)
-        img = "data:image/png;base64," + base64.b64encode(png).decode()
-        answer = await asyncio.get_running_loop().run_in_executor(None, ask, img, reason)
+        answer = solve_bytes(png)
+        if not answer and ask:
+            img = "data:image/png;base64," + base64.b64encode(png).decode()
+            answer = await asyncio.get_running_loop().run_in_executor(None, ask, img, reason)
         if not answer:
             return False
         cap = frame.locator("[data-aw-capin='1']").first
