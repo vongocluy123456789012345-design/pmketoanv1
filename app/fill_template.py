@@ -23,6 +23,8 @@ from pathlib import Path
 from typing import Any
 
 NUMERIC_KEYS = {"thanh_tien", "tien_thue", "don_gia", "tong_tt", "tien_ck", "so_luong", "ty_gia"}
+TEXT_KEYS = {"mst", "ma_doi_tuong", "so_hoa_don", "mau_so", "ky_hieu", "so_chung_tu", "ma_hang", "ma_kho",
+             "ma_tra_cuu", "ma_cqt", "tk_no", "tk_co", "tk_kho", "tk_cong_no", "tk_doanh_thu", "tk_thue"}
 _ILLEGAL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 
 
@@ -285,6 +287,13 @@ def fill_ooxml(tpl: bytes, sheet_title: str, header_row: int, cols: dict[int, st
             t.set("{http://www.w3.org/XML/1998/namespace}space", "preserve")
 
     last = header_row + len(rows)
+    # kiểu giá trị dòng ví dụ (trước khi xóa): mẫu ghi ngày dạng chữ thì ghi đúng dạng chữ
+    proto_text = {c for c, el in proto_cells.items() if el.get("t") in ("s", "inlineStr", "str")}
+    # xóa GIÁ TRỊ mọi ô của các dòng ví dụ dưới tiêu đề (mọi cột) – giữ định dạng, cột, dòng của mẫu
+    for rn, rel in rows_el.items():
+        if rn > header_row:
+            for el in cells_of(rel).values():
+                clear(el)
     for i, row in enumerate(rows, header_row + 1):
         rel = get_row(i)
         for c, key in cols.items():
@@ -295,7 +304,7 @@ def fill_ooxml(tpl: bytes, sheet_title: str, header_row: int, cols: dict[int, st
                 continue
             kind = style_kind(el.get("s"))
             if isinstance(v, date):
-                if kind == "date":
+                if kind == "date" and c not in proto_text:
                     etree.SubElement(el, f"{M}v").text = str((v - epoch).days)
                 else:
                     set_text(el, _date_text(v))
@@ -440,25 +449,36 @@ try {
     $wb.SaveAs($job.probe, 51)   # bản sao .xlsx chỉ để đọc tiêu đề đúng như Excel thấy
   } else {
     $ws = $wb.Worksheets.Item([int]$job.sheet)
+    $start = [int]$job.start
+    $endUsed = $ws.UsedRange.Row + $ws.UsedRange.Rows.Count - 1
+    $lastCol = $ws.UsedRange.Column + $ws.UsedRange.Columns.Count - 1
+    # kiểu giá trị của dòng ví dụ từng cột (TRƯỚC khi xóa): mẫu ghi ngày dạng chữ "31/01/2020" thì ghi đúng dạng chữ
+    $exText = @{}
+    foreach ($col in $job.cols) { $c = [int]$col.c; $exText[$c] = ($ws.Cells.Item($start, $c).Value2 -is [string]) }
+    # xóa GIÁ TRỊ mọi dòng ví dụ (mọi cột) – giữ nguyên định dạng, danh sách chọn, cột, dòng của mẫu
+    if ($endUsed -ge $start) { $ws.Range($ws.Cells.Item($start, 1), $ws.Cells.Item($endUsed, $lastCol)).ClearContents() | Out-Null }
     foreach ($col in $job.cols) {
       $c = [int]$col.c; $n = $col.vals.Count
-      $first = $ws.Cells.Item([int]$job.start, $c)
-      $isDate = ($first.NumberFormat -match '[dy]') -or ($first.NumberFormat -match 'm' -and $first.NumberFormat -notmatch '[hs]')
-      $isText = ($first.NumberFormat -eq '@')
+      $first = $ws.Cells.Item($start, $c)
+      $fmt = [string]$first.NumberFormat
+      $isDate = ($fmt -match '[dy]') -or ($fmt -match 'm' -and $fmt -notmatch '[hs]')
+      $isText = ($fmt -eq '@')
       if ($n -gt 0) {
         $arr = New-Object 'object[,]' $n, 1
         for ($i = 0; $i -lt $n; $i++) {
           $v = $col.vals[$i]
           if ($null -eq $v) { $arr[$i, 0] = $null; continue }
-          if ($v.t -eq 'd') { if ($isDate) { $arr[$i, 0] = [double]$v.oa } else { $arr[$i, 0] = [string]$v.s } }
+          if ($v.t -eq 'd') {
+            if ($isDate -and -not $exText[$c]) { $arr[$i, 0] = [double]$v.oa }
+            elseif ($isText) { $arr[$i, 0] = [string]$v.s }
+            else { $arr[$i, 0] = "'" + [string]$v.s }   # giữ là chữ dd/mm/yyyy, Excel không tự đổi
+          }
           elseif ($v.t -eq 'n') { if ($isText) { $arr[$i, 0] = [string]$v.s } else { $arr[$i, 0] = [double]$v.v } }
+          elseif ($v.t -eq 'x' -and -not $isText -and ([string]$v.s -match '^[\d\s.,/:+-]+$')) { $arr[$i, 0] = "'" + [string]$v.s }  # MST, số HĐ: giữ số 0 đầu
           else { $arr[$i, 0] = [string]$v.s }
         }
-        $ws.Range($ws.Cells.Item([int]$job.start, $c), $ws.Cells.Item([int]$job.start + $n - 1, $c)).Value2 = $arr
+        $ws.Range($ws.Cells.Item($start, $c), $ws.Cells.Item($start + $n - 1, $c)).Value2 = $arr
       }
-      $endUsed = $ws.UsedRange.Row + $ws.UsedRange.Rows.Count - 1
-      $from = [int]$job.start + $n
-      if ($endUsed -ge $from) { $ws.Range($ws.Cells.Item($from, $c), $ws.Cells.Item($endUsed, $c)).ClearContents() | Out-Null }
     }
     $wb.Save()
   }
@@ -515,6 +535,8 @@ def fill_with_excel(tpl: bytes, ext: str, sheet_index: int, header_row: int, col
                 vals.append(None)
             elif isinstance(v, date):
                 vals.append({"t": "d", "oa": (v - _d(1899, 12, 30)).days, "s": _date_text(v)})
+            elif key in TEXT_KEYS:  # mã / số dạng chữ: không để Excel đổi thành số (mất số 0 đầu)
+                vals.append({"t": "x", "s": _num_text(v) if isinstance(v, (int, float)) else str(v)})
             elif isinstance(v, (int, float)):
                 vals.append({"t": "n", "v": v, "s": _num_text(v)})
             else:

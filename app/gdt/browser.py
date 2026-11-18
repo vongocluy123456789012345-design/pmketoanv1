@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import os
 import queue
 import subprocess
@@ -28,6 +29,7 @@ import httpx
 
 from ..config import ROOT, settings
 
+log = logging.getLogger(__name__)
 PORTAL = "https://hoadondientu.gdt.gov.vn"
 API = PORTAL + "/api"
 END_POINT = "/tra-cuu/tra-cuu-hoa-don"  # header End-Point = trang tra cứu hóa đơn của cổng
@@ -205,7 +207,15 @@ class BrowserWorker:
         if not create:
             return None
         p = ctx.new_page()
-        p.goto(PORTAL + "/", wait_until="domcontentloaded", timeout=60000)
+        # cổng thuế hay ngắt kết nối (ERR_HTTP2_PROTOCOL_ERROR, timeout lúc quá tải): thử lại vài lần;
+        # vẫn lỗi thì giữ tab cho người dùng tự bấm tải lại, không báo lỗi 500
+        for i in range(3):
+            try:
+                p.goto(PORTAL + "/", wait_until="domcontentloaded", timeout=45000)
+                break
+            except Exception as e:  # noqa: BLE001
+                log.warning("Mở cổng thuế lỗi (lần %d): %s", i + 1, str(e).splitlines()[0])
+                time.sleep(2 + 3 * i)
         return p
 
     def _logged_page(self):

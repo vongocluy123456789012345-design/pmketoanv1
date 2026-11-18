@@ -272,6 +272,16 @@
         (<a href="/api/misa-template/purchase">tải mẫu mua hàng</a> · <a href="/api/misa-template/sold">mẫu bán hàng</a>)</label>
         <input type="file" id="mTpl" accept=".xlsx,.xlsm,.xltx,.xltm,.xls,.ods,.csv,.txt,.xml,.htm,.html"></div>
     </div>
+    <div class="inline" style="margin-top:6px">
+      <div><label>Hình thức mua hàng</label><select id="mHt">
+        <option value="">Tự chọn: có Mã kho → nhập kho, không có → không qua kho</option>
+        <option value="nhap_kho">Mua hàng trong nước nhập kho</option>
+        <option value="khong_qua_kho">Mua hàng trong nước không qua kho</option></select></div>
+      <div><label>Mã kho (bắt buộc nếu nhập kho – đúng mã kho trong MISA)</label><input id="mKho" placeholder="vd HH, KHO01"></div>
+      <div><label>Phương thức thanh toán</label><select id="mPttt">
+        <option value="">Chưa thanh toán (ghi công nợ)</option><option value="tm">Tiền mặt</option>
+        <option value="unc">Ủy nhiệm chi</option></select></div>
+    </div>
     <details style="margin-top:6px"><summary class="muted">Tài khoản mặc định (mua: 1561/331/1331 · bán: 131/5111/33311)</summary>
       <div class="inline">
         <div><label>TK kho / chi phí (mua)</label><input id="mTkKho" placeholder="1561"></div>
@@ -330,6 +340,7 @@
         <div><label>[42] Đề nghị hoàn</label><input id="v42" class="vnum"></div>
       </div>
     </details>
+    <div id="vCapSlot"></div>
     <div id="vMsg" class="msg"></div>
   </section>
   <section class="card" id="vRes" style="display:none">
@@ -785,7 +796,7 @@ async function refreshBrowser() {
   else { $("bState").textContent = "Đã đăng nhập MST " + (s.mst || ""); $("bState").className = "badge original"; }
   $("bHint").style.display = s.logged_in ? "none" : "";
   $("btnAuto").disabled = !s.logged_in || !!autoJob;
-  if (s.job_id && !autoJob) watchAuto(s.job_id);
+  if (s.job_id && !autoJob && !String(s.job_id).startsWith("quick-")) watchAuto(s.job_id);  // đọc nhanh VAT: ô captcha hiện ở tab VAT (watchQuick)
 }
 $("btnOpen").onclick = async () => {
   $("btnOpen").disabled = true; $("bState").textContent = "Đang mở Chrome...";
@@ -876,10 +887,50 @@ $("capPaste").onclick = async () => {
   } catch (e) { $("capCopyMsg").textContent = "Không đọc được clipboard: " + e.message; }
 };
 async function sendCaptcha(value) {
-  if (!autoJob) return;
-  await api(`/api/auto/${autoJob}/captcha`, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({value})});
+  const id = autoJob || quickJob;
+  if (!id) return;
+  await api(`/api/auto/${id}/captcha`, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({value})});
   $("capBox").style.display = "none"; $("capVal").value = ""; lastCapImg = null;
 }
+// Đọc nhanh cho dự báo VAT (nút ⚡ hoặc AI gọi): hóa đơn máy tính tiền cần captcha -> hiện ô nhập NGAY TRONG tab VAT
+let quickJob = null, quickTimer = null, quickSeen = false, capHome = null;
+function capToVat(on) {
+  const box = $("capBox");
+  if (on && box.parentNode !== $("vCapSlot")) { capHome = capHome || {p: box.parentNode, n: box.nextSibling}; $("vCapSlot").appendChild(box); }
+  if (!on && capHome && box.parentNode === $("vCapSlot")) capHome.p.insertBefore(box, capHome.n);
+}
+function watchQuick(id) {
+  if (quickTimer) return;
+  quickJob = id; quickSeen = false;
+  quickTimer = setInterval(async () => {
+    let j; try { j = await api("/api/auto/" + id); } catch (e) { return; }
+    if (j.status !== "running") { if (quickSeen) stopQuick(); return; }
+    quickSeen = true;
+    if (j.captcha) {
+      capToVat(true);
+      $("capReason").textContent = j.captcha.reason; $("capBox").style.display = "";
+      if (lastCapImg !== j.captcha.image) {
+        lastCapImg = j.captcha.image; $("capImg").src = j.captcha.image; $("capVal").value = ""; $("capCopyMsg").textContent = "";
+        if (location.hash !== "#vat") location.hash = "vat";
+        $("capVal").focus();
+        notifyUser("Cần nhập captcha hóa đơn máy tính tiền", j.captcha.reason);
+      }
+    } else if ($("capBox").parentNode === $("vCapSlot")) $("capBox").style.display = "none";
+    const last = (j.log || []).slice(-1)[0];
+    if (last && $("btnVatQuick").disabled) msg($("vMsg"), last, true);
+  }, 1200);
+}
+function stopQuick() {
+  clearInterval(quickTimer); quickTimer = null; quickJob = null;
+  if ($("capBox").parentNode === $("vCapSlot")) $("capBox").style.display = "none";
+  capToVat(false);
+}
+// AI trong khung chat gọi đọc nhanh -> vẫn hiện ô captcha cho khách
+setInterval(async () => {
+  if (autoJob || quickTimer) return;
+  let j; try { j = await api("/api/auto-running"); } catch (e) { return; }
+  if (j && j.id && String(j.id).startsWith("quick-")) watchQuick(j.id);
+}, 3000);
 $("capOk").onclick = () => sendCaptcha($("capVal").value.trim());
 $("capVal").onkeydown = e => { if (e.key === "Enter") sendCaptcha($("capVal").value.trim()); };
 $("capSkip").onclick = () => sendCaptcha(null);
@@ -1054,17 +1105,21 @@ $("btnVat").onclick = async () => {
 $("btnVatQuick").onclick = async () => {
   const p = vatPeriod(); if (!p.ky || !p.nam) return msg($("vMsg"), "Chọn kỳ tính thuế");
   $("btnVatQuick").disabled = true; msg($("vMsg"), "Đang đọc danh sách hóa đơn trên cổng thuế…", true);
+  stopQuick(); watchQuick("quick-" + $("vMst").value);  // hiện ô captcha máy tính tiền ngay tại đây
   try {
     const st = await api("/api/vat/quick-read", {method: "POST", headers: {"Content-Type": "application/json"},
       body: JSON.stringify({mst: $("vMst").value, ...p, inputs: {}})});
-    msg($("vMsg"), `Đã đọc ${st.mua_vao} HĐ mua vào, ${st.ban_ra} HĐ bán ra trong ${st.giay} giây. Đang lấy chi tiết từng mặt hàng để lập bảng kê đầy đủ…`, true);
+    stopQuick();
+    const loai = Object.entries(st.theo_loai || {}).map(([k, v]) => `${k}: ${v}`).join("; ");
+    const cb = (st.canh_bao || []).length ? " ⚠️ " + st.canh_bao.join("; ") : "";
+    msg($("vMsg"), `Đã đọc ${st.mua_vao} HĐ mua vào, ${st.ban_ra} HĐ bán ra trong ${st.giay} giây (${loai}).${cb} Đang lấy chi tiết từng mặt hàng để lập bảng kê đầy đủ…`, !cb);
     $("btnVat").click();  // dự báo ngay bằng số liệu vừa đọc
     const mst = $("vMst").value, timer = setInterval(async () => {
       let s; try { s = await api("/api/vat/quick-read/" + mst); } catch (e) { return; }
       if (s.status === "running") msg($("vMsg"), `Đang lấy chi tiết mặt hàng ${s.done}/${s.total} hóa đơn…`, true);
       else { clearInterval(timer); msg($("vMsg"), s.status === "done" ? "Xong – tờ khai và bảng kê chi tiết đầy đủ đã lập (xem nút Mở PDF / Excel)." : "Lấy chi tiết bị dừng: " + s.status, s.status === "done"); loadVatInfo(); }
     }, 2000);
-  } catch (e) { msg($("vMsg"), e.message + (e.message.includes("đăng nhập") ? " (vào mục Tải hóa đơn → 1. Mở trang hóa đơn điện tử)" : "")); }
+  } catch (e) { stopQuick(); msg($("vMsg"), e.message + (e.message.includes("đăng nhập") ? " (vào mục Tải hóa đơn → 1. Mở trang hóa đơn điện tử)" : "")); }
   $("btnVatQuick").disabled = false;
 };
 
@@ -1307,7 +1362,8 @@ $("btnMisa").onclick = async () => {
   fd.append("direction", $("mDir").value); fd.append("mst", $("mMst").value.trim());
   const d = $("mDir").value === "sold";
   fd.append("accounts", JSON.stringify({tk_kho: $("mTkKho").value.trim(), tk_cong_no: $("mTkCn").value.trim(),
-    tk_doanh_thu: $("mTkDt").value.trim(), tk_thue: $("mTkThue").value.trim()}));
+    tk_doanh_thu: $("mTkDt").value.trim(), tk_thue: $("mTkThue").value.trim(),
+    hinh_thuc: $("mHt").value, ma_kho: $("mKho").value.trim(), pttt: $("mPttt").value}));
   $("btnMisa").disabled = true; msg($("misaMsg"), `Đang tải ${misaZone.files.length} file lên…`, true); $("misaRows").innerHTML = "";
   try {
     const j = await api("/api/misa/convert", {method: "POST", body: fd});

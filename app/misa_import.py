@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import settings
-from .docreader import fold, iter_files, parse_pdf_text, pdf_text, vn_num
+from .docreader import fold, iter_files, ocr_read, parse_pdf_text, pdf_text, vn_num
 
 # ------------------------------------------------------------------ nhận cột của file mẫu
 # khóa -> các cụm từ (đã bỏ dấu, chữ thường) có thể xuất hiện trong tiêu đề cột của mẫu MISA
@@ -38,7 +38,8 @@ FIELDS: dict[str, list[str]] = {
     "dia_chi": ["dia chi"],
     "mst": ["ma so thue", "mst"],
     "nguoi_giao_nhan": ["nguoi giao hang", "nguoi nhan hang", "nguoi mua hang", "nguoi giao", "nguoi nhan"],
-    "dien_giai": ["dien giai", "ly do", "noi dung"],
+    "dien_giai": ["dien giai"],
+    "ly_do_chi": ["ly do chi", "ly do thu", "noi dung thanh toan", "ly do"],
     "ma_hang": ["ma hang", "ma vat tu", "ma hhdv", "ma san pham"],
     "ten_hang": ["ten hang", "ten vat tu", "ten hhdv", "ten san pham", "dien giai hang", "ten hang hoa"],
     "dvt": ["don vi tinh", "dvt"],
@@ -59,11 +60,18 @@ FIELDS: dict[str, list[str]] = {
     "ma_kho": ["ma kho", "kho"],
     "loai_tien": ["loai tien"],
     "ty_gia": ["ty gia"],
-    "hinh_thuc_tt": ["hinh thuc thanh toan", "phuong thuc thanh toan"],
+    "hinh_thuc_tt": ["hinh thuc thanh toan"],
+    "pttt": ["phuong thuc thanh toan"],
+    "hinh_thuc_mua": ["hinh thuc mua hang", "hinh thuc ban hang"],
+    "nhan_kem_hd": ["nhan kem hoa don", "kem hoa don"],
     "ma_cqt": ["ma cqt", "ma co quan thue"],
     "ma_tra_cuu": ["ma tra cuu"],
     "nhom_hhdv": ["nhom hhdv", "nhom hang hoa dich vu mua vao"],
 }
+# Cột dễ bị nhận nhầm (chứa cụm từ của cột khác) -> KHÔNG điền gì, để trống như mẫu
+_SKIP_HEADER = re.compile(r"kem theo|thue suat khac|ghi no|so chung tu thanh toan|so tai khoan|ngan hang|nhan vien|"
+                          r"han thanh toan|giu ho|ban ho|chi phi san xuat|khoan muc|ma don vi|thanh pham|"
+                          r"don dat hang|don mua hang|ma thong ke|duong dan|quy doi|dong ghi chu")
 ACCOUNTS = {"purchase": {"tk_kho": "1561", "tk_cong_no": "331", "tk_thue": "1331"},
             "sold": {"tk_doanh_thu": "5111", "tk_cong_no": "131", "tk_thue": "33311", "tk_gia_von": "632", "tk_kho": "1561"}}
 
@@ -75,7 +83,7 @@ def _norm(s: Any) -> str:
 
 def map_header(title: str) -> str | None:
     t = _norm(title)
-    if not t:
+    if not t or _SKIP_HEADER.search(t):
         return None
     best, blen = None, 0
     for key, pats in FIELDS.items():
@@ -453,17 +461,15 @@ def read_one(name: str, data: bytes, idx: dict) -> dict[str, Any]:
         return inv | from_xml(data)
     if low.endswith(".pdf") or data[:5] == b"%PDF-":
         text = pdf_text(data)
+        fields = None
         if len(text.strip()) < 40:
-            from . import ocr
-            text, src = ocr.ocr_pdf(data, max_pages=3), "OCR"
-        else:
-            src = "PDF"
+            fields, text = ocr_read(data)
     else:
         from . import ocr
         if not ocr.is_image(name, data):
             return inv | {"loi": "Định dạng chưa hỗ trợ", "items": []}
-        text, src = ocr.ocr_image(data), "OCR"
-    inv.update(parse_pdf_text(text, src))
+        fields, text = ocr_read(data)
+    inv.update(fields if fields is not None else parse_pdf_text(text, "PDF"))
     inv["_text"] = text
     # đã có XML/chi tiết của hóa đơn này trên máy (tải từ cổng) -> dùng dòng hàng chính xác
     k = (str(inv.get("nbmst") or "").replace("-", ""), str(inv.get("khhdon") or "").upper(),
@@ -476,7 +482,7 @@ def read_one(name: str, data: bytes, idx: dict) -> dict[str, Any]:
         d = from_portal_json(json.loads(f.read_text(encoding="utf-8")))
         if d["items"]:
             return inv | {k2: v for k2, v in d.items() if v} | {"nguon": "Dữ liệu cổng trên máy"}
-    if src == "PDF":
+    if fields is None:  # PDF có lớp chữ -> đọc bảng hàng hóa
         try:
             inv["items"] = items_from_pdf_tables(data)
         except Exception:  # noqa: BLE001
@@ -525,22 +531,132 @@ def build_rows(inv: dict[str, Any], direction: str, seq: int, acc: dict[str, str
     diff = round(_num(inv.get("tgtthue")) - sum(_num(x[3]) for x in taxes)) if inv.get("tgtthue") is not None else 0
     if taxes and diff and abs(diff) <= max(10, len(taxes) * 2):
         max(taxes, key=lambda x: abs(x[2]))[3] += diff
+    # Thông tin chứng từ theo danh sách chọn của mẫu MISA (ghi chú từng cột):
+    #   Hình thức mua hàng: nhập kho (cần Mã kho) / không qua kho;  Phương thức thanh toán: Chưa thanh toán / Tiền mặt /
+    #   Ủy nhiệm chi;  Nhận kèm hóa đơn: GTGT (mẫu số 1) / bán hàng (mẫu số 2).
+    ma_kho = str(acc.get("ma_kho") or "").strip() if acc else ""
+    ht = str((acc or {}).get("hinh_thuc") or "").strip()
+    nhap_kho = ht == "nhap_kho" or (not ht and bool(ma_kho))
+    if purchase:
+        hinh_thuc = "Mua hàng trong nước nhập kho" if nhap_kho else "Mua hàng trong nước không qua kho"
+    else:
+        hinh_thuc = None  # mẫu bán hàng: lấy theo danh sách chọn của mẫu
+    pttt = {"tm": "Tiền mặt", "unc": "Ủy nhiệm chi"}.get(str((acc or {}).get("pttt") or ""), "Chưa thanh toán")
+    if not purchase:
+        pttt = {"Tiền mặt": "Thu tiền ngay - Tiền mặt", "Ủy nhiệm chi": "Thu tiền ngay - Chuyển khoản"}.get(pttt, "Chưa thu tiền")
+    paid = not pttt.startswith("Chưa")
+    mau = str(inv.get("khmshdon") or "1").strip()
+    nhan_kem = "Nhận kèm hóa đơn bán hàng" if mau == "2" else "Nhận kèm hóa đơn GTGT"
+    mtc = str(inv.get("ma_tra_cuu") or "").strip()
+    mtc = mtc if re.fullmatch(r"[A-Za-z0-9_\-]{5,60}", mtc) else None  # mã đọc từ PDF lỗi -> để trống
+    mst_doi_tac = str(partner["mst"] or "").strip() or None
     rows = []
     for it, pct, tt, thue in taxes:
+        ts = it.get("ts")
+        if pct is not None:
+            ts_txt = f"{pct:g}"   # mẫu MISA: 10 / 8 / 5 / 0 (không có dấu %)
+        else:
+            f = fold(str(ts or "")).upper().replace(" ", "")
+            ts_txt = "KCT" if "KCT" in f or "KHONGCHIU" in f else "KKKNT" if "KKKNT" in f or "KHONGKEKHAI" in f else \
+                ("KHAC" if f else None)
         rows.append({
+            "hinh_thuc_mua": hinh_thuc, "pttt": pttt, "nhan_kem_hd": nhan_kem,
+            "ly_do_chi": ("Chi tiền " + dien_giai[0].lower() + dien_giai[1:]) if paid and purchase else (dien_giai if paid else None),
+            "ma_kho": (ma_kho or None) if (nhap_kho or not purchase) else None,
             "ngay_hach_toan": ngay_vn, "ngay_chung_tu": ngay_vn, "so_chung_tu": so_ct, "ngay_hoa_don": ngay_vn,
-            "mau_so": inv.get("khmshdon") or "1", "ky_hieu": inv.get("khhdon"), "so_hoa_don": inv.get("shdon"),
-            "ma_doi_tuong": partner["mst"], "ten_doi_tuong": partner["ten"], "dia_chi": partner["dchi"],
-            "mst": partner["mst"], "dien_giai": dien_giai, "ma_hang": it.get("ma"), "ten_hang": it.get("ten"),
+            "mau_so": mau, "ky_hieu": inv.get("khhdon"),
+            "so_hoa_don": str(inv.get("shdon")) if inv.get("shdon") not in (None, "") else None,
+            "ma_doi_tuong": mst_doi_tac, "ten_doi_tuong": partner["ten"], "dia_chi": partner["dchi"],
+            "mst": mst_doi_tac, "dien_giai": dien_giai, "ma_hang": it.get("ma"), "ten_hang": it.get("ten"),
             "dvt": it.get("dvt"), "so_luong": it.get("sl"), "don_gia": it.get("dg"), "thanh_tien": tt,
-            "tien_ck": it.get("ck") or None, "thue_suat": (f"{pct:g}%" if pct is not None else (it.get("ts") or "")),
+            "tien_ck": it.get("ck") or None, "thue_suat": ts_txt,
             "tien_thue": thue, "tong_tt": inv.get("tgtttbso"),
             "tk_no": a["tk_kho"] if purchase else a["tk_cong_no"], "tk_co": a["tk_cong_no"] if purchase else a["tk_doanh_thu"],
             "tk_kho": a.get("tk_kho"), "tk_cong_no": a["tk_cong_no"], "tk_doanh_thu": a.get("tk_doanh_thu"),
             "tk_thue": a["tk_thue"], "loai_tien": "VND", "ty_gia": 1, "hinh_thuc_tt": inv.get("htttoan"),
-            "ma_cqt": inv.get("mccqt"), "ma_tra_cuu": inv.get("ma_tra_cuu"), "nhom_hhdv": "1" if purchase else None,
+            "ma_cqt": inv.get("mccqt"), "ma_tra_cuu": mtc, "nhom_hhdv": "1" if purchase else None,
         })
     return rows
+
+
+# ------------------------------------------------------------------ danh sách chọn (ghi chú cột) của mẫu
+def template_lists(ws, hr: int, cols: dict[int, str]) -> dict[int, list[str]]:
+    """Đọc danh sách giá trị hợp lệ (Data Validation – 'ghi chú' chọn giá trị) của từng cột ở dòng dữ liệu đầu tiên."""
+    from openpyxl.utils import range_boundaries
+    out: dict[int, list[str]] = {}
+    try:
+        dvs = list(ws.data_validations.dataValidation)
+    except Exception:  # noqa: BLE001
+        return out
+    for dv in dvs:
+        if dv.type != "list" or not dv.formula1:
+            continue
+        f1 = str(dv.formula1).strip()
+        if f1.startswith('"') and f1.endswith('"'):
+            opts = [x.strip() for x in re.split(r"[,;]", f1[1:-1]) if x.strip()]
+        else:  # danh sách nằm ở vùng ô khác (=Sheet!$A$1:$A$5)
+            opts = []
+            try:
+                ref = f1.lstrip("=")
+                sh, rng = (ref.rsplit("!", 1) + [""])[:2] if "!" in ref else (ws.title, ref)
+                src = ws.parent[sh.strip("'")]
+                c1, r1, c2, r2 = range_boundaries(rng.replace("$", ""))
+                opts = [str(src.cell(r, c).value).strip() for r in range(r1, r2 + 1) for c in range(c1, c2 + 1)
+                        if src.cell(r, c).value not in (None, "")]
+            except Exception:  # noqa: BLE001
+                continue
+        for rg in str(dv.sqref).split():
+            try:
+                c1, r1, c2, r2 = range_boundaries(rg)
+            except ValueError:
+                continue
+            for c in cols:
+                if c1 <= c <= c2 and r1 <= hr + 1 <= (r2 or r1):
+                    out[c] = opts
+    return out
+
+
+def _fit_option(v: Any, opts: list[str]) -> Any:
+    """Đưa giá trị về đúng 1 lựa chọn trong danh sách của mẫu (so không dấu, không phân biệt hoa thường)."""
+    if v is None or v == "" or not opts:
+        return v
+    fv = _norm(v)
+    for o in opts:
+        if _norm(o) == fv:
+            return o
+    if re.fullmatch(r"\d+(\.\d+)?", fv):  # thuế suất 8 / 8% / 0.08
+        for o in opts:
+            if re.fullmatch(r"\d+(\.\d+)?%?", _norm(o).replace(" ", "")) and float(_norm(o).rstrip("%")) == float(fv):
+                return o
+    words = set(fv.split())
+    best, score = None, 0.0
+    for o in opts:
+        ow = set(_norm(o).split())
+        s = len(words & ow) / max(1, len(words | ow))
+        if s > score:
+            best, score = o, s
+    return best if score >= 0.34 else v
+
+
+def apply_lists(rows: list[dict[str, Any]], cols: dict[int, str], lists: dict[int, list[str]]) -> list[str]:
+    """Sửa giá trị các cột có danh sách chọn cho đúng mẫu. Cột chọn bắt buộc (hình thức, phương thức, kèm hóa đơn)
+    mà chưa có giá trị -> lấy lựa chọn đầu tiên của mẫu. Trả về cảnh báo giá trị không khớp danh sách."""
+    warn = []
+    for c, key in cols.items():
+        opts = lists.get(c)
+        if not opts:
+            continue
+        for r in rows:
+            v = r.get(key)
+            if v in (None, ""):
+                if key in ("hinh_thuc_mua", "pttt", "nhan_kem_hd"):
+                    r[key] = opts[0]
+                continue
+            fit = _fit_option(v, opts)
+            if fit not in opts:
+                warn.append(f"{v} (cột {key})")
+            r[key] = fit
+    return sorted(set(warn))
 
 
 def write_template(tpl: bytes, rows: list[dict[str, Any]], colmap: dict[int, str] | None = None):
@@ -689,6 +805,14 @@ def run(job: Job, files: list[tuple[str, bytes]], tpl: bytes, direction: str, ow
                                 "dong": len(r), "tong": v.get("tgtttbso"), "nguon": v.get("nguon"),
                                 "huong": "Mua vào" if d == "purchase" else "Bán ra",
                                 "loi": v.get("loi") or v.get("canh_bao") or ""})
+        # làm theo ghi chú (danh sách chọn) từng cột của mẫu
+        lists = template_lists(ws, hr, cols)
+        if lists:
+            job.say("Theo danh sách chọn của mẫu: " + "; ".join(
+                f"{ws.cell(hr, c).value}: {' / '.join(o[:4])}" for c, o in lists.items() if c in cols)[:600])
+            bad = apply_lists(rows, cols, lists)
+            if bad:
+                job.say("Giá trị chưa có trong danh sách chọn của mẫu (kiểm tra lại): " + ", ".join(bad[:10]))
         # Điền vào CHÍNH file mẫu, giữ nguyên định dạng, cùng loại file với mẫu
         if kind == "ooxml":
             data = ft.fill_ooxml(tpl, ws.title, hr, cols, rows)

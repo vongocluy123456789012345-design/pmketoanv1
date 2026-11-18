@@ -183,6 +183,14 @@ def _auto_job(job_id: str):
     return job
 
 
+@app.get("/api/auto-running")
+def auto_running():
+    """Lượt đọc/tải đang chạy (kể cả đọc nhanh cho dự báo VAT do AI gọi) – để giao diện hiện ô captcha."""
+    from . import auto_download as ad
+    job = ad.running_job()
+    return {"id": job.id, **job.public()} if job else {}
+
+
 @app.get("/api/auto/{job_id}")
 def auto_status(job_id: str):
     return _auto_job(job_id).public()
@@ -764,9 +772,10 @@ def open_folder(path: str | None = None):
     base = Path(settings.output_dir).resolve()
     if not target.resolve().is_relative_to(base):
         raise HTTPException(400, "Chỉ mở được thư mục lưu hóa đơn")
-    if target.suffix.lower() in (".xlsx", ".pdf", ".html", ".xml"):
-        if not target.is_file():
-            raise HTTPException(404, "Không còn file này")
+    if target.is_file():
+        pass  # mở file kết quả (.xlsx, .xls, .pdf, .zip...)
+    elif target.suffix.lower() in (".xlsx", ".xls", ".xlsm", ".csv", ".pdf", ".html", ".xml", ".zip", ".json"):
+        raise HTTPException(404, "Không còn file này")
     else:
         target.mkdir(parents=True, exist_ok=True)
     os.startfile(target)  # noqa: S606 - app chạy trên máy người dùng

@@ -266,7 +266,7 @@ _SCAN_JS = r"""() => {
     .filter(vis).map((el, i) => { el.setAttribute('data-aw-bt', i); const r = el.getBoundingClientRect();
       return {i, tag: el.tagName.toLowerCase(), x: r.x + r.width / 2, y: r.y + r.height / 2,
               text: ((el.innerText || el.value || '') + ' ' + (el.title || '') + ' ' + (el.getAttribute('aria-label') || '')).trim().slice(0, 80),
-              href: el.getAttribute('href') || '', cls: (typeof el.className === 'string' ? el.className : '') + ' ' + el.id || ''}; });
+              href: el.getAttribute('href') || '', cls: (typeof el.className === 'string' ? el.className : '') + ' ' + (el.id || '')}; });
   const frames = [...document.querySelectorAll('iframe,embed,object')].map(el => el.src || el.data || '').filter(Boolean);
   return {inputs, caps, btns, frames, text: (document.body && document.body.innerText || '').slice(0, 20000)};
 }"""

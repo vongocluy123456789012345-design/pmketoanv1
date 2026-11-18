@@ -38,10 +38,16 @@ def ocr_language() -> str:
         return "none"
 
 
-def _prepare(img):
-    """Ảnh xám, tăng tương phản, phóng to ảnh nhỏ (OCR đọc tốt chữ cao ~30px)."""
-    from PIL import ImageOps
-    img = ImageOps.exif_transpose(img).convert("L")
+def _prepare(img, ink: bool = False):
+    """Ảnh xám, tăng tương phản, phóng to ảnh nhỏ (OCR đọc tốt chữ cao ~30px).
+    ink=True (lượt đọc thứ 2): lấy kênh màu TỐI NHẤT của mỗi điểm -> chữ in đỏ/xanh (số hóa đơn, ký hiệu) đậm như
+    chữ đen. Không dùng mặc định vì trang có nền / hoa văn màu sẽ bị tối theo và mất chữ khác."""
+    from PIL import ImageChops, ImageOps
+    img = ImageOps.exif_transpose(img)
+    if ink and img.mode not in ("L", "1", "I", "I;16", "F"):
+        r, g, b = img.convert("RGB").split()
+        img = ImageChops.darker(ImageChops.darker(r, g), b)
+    img = img.convert("L")
     img = ImageOps.autocontrast(img, cutoff=1)
     w, h = img.size
     if w < 1800:
@@ -96,8 +102,8 @@ def _rows(words: list[tuple[float, float, float, float, str]]) -> str:
     return "\n".join(out)
 
 
-def ocr_pil(img) -> str:
-    img = _prepare(img)
+def ocr_pil(img, ink: bool = False) -> str:
+    img = _prepare(img, ink)
     fd, path = tempfile.mkstemp(suffix=".png")
     os.close(fd)
     try:
@@ -126,6 +132,14 @@ def pdf_images(data: bytes, dpi: int = 300, max_pages: int = MAX_PAGES) -> list[
 
 def ocr_pdf(data: bytes, max_pages: int = MAX_PAGES) -> str:
     return "\n".join(ocr_pil(img) for img in pdf_images(data, max_pages=max_pages))
+
+
+def page_images(data: bytes, max_pages: int = 3) -> list[Any]:
+    """Ảnh từng trang của PDF scan hoặc ảnh chụp – render 1 lần, dùng cho cả 2 lượt OCR."""
+    if data[:5] == b"%PDF-":
+        return pdf_images(data, max_pages=max_pages)
+    from PIL import Image
+    return [Image.open(io.BytesIO(data))]
 
 
 def is_image(name: str, data: bytes) -> bool:
