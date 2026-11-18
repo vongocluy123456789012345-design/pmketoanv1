@@ -1045,6 +1045,9 @@ def summary_row(kind: dict[str, Any], d1: date, inv: dict[str, Any]) -> dict[str
         "nmmst": _s(inv.get("nmmst")), "nmten": _s(inv.get("nmten")),
         "tgtcthue": inv.get("tgtcthue"), "tgtthue": inv.get("tgtthue"), "tgtttbso": inv.get("tgtttbso"),
         "tthai": TTHAI.get(inv.get("tthai"), _s(inv.get("tthai"))),
+        # hóa đơn gốc bị thay thế / bị điều chỉnh (để ghép cặp khi lên tờ khai)
+        "khmshdgoc": _s(inv.get("khmshdgoc")), "khhdgoc": _s(inv.get("khhdgoc")), "shdgoc": _s(inv.get("shdgoc")),
+        "tdlhdgoc": vn_date(inv.get("tdlhdgoc")) if inv.get("tdlhdgoc") else "",
         "file_xml": "", "file_pdf": "", "ncc": "", "ma_tra_cuu": "", "link_tra_cuu": "", "ghi_chu": "",
     }
 

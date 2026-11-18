@@ -56,9 +56,13 @@ def mark_checked(month_dir: Path, d1: date, kind: dict[str, Any], count: int, to
     f.write_text(json.dumps(d, ensure_ascii=False, indent=1), encoding="utf-8")
 
 
-def coverage(root: Path, months: list[tuple[int, int]]) -> list[str]:
-    """Cảnh báo không sót hóa đơn: loại nào của tháng nào chưa đọc / đọc thiếu so với cổng."""
+def coverage(root: Path, months: list[tuple[int, int]], rows: list[dict[str, Any]] | None = None) -> list[str]:
+    """Báo rõ từng tháng x từng loại hóa đơn (mua vào có mã / không mã / máy tính tiền, bán ra / bán ra máy tính
+    tiền): đã đọc bao nhiêu HĐ, đủ so với cổng chưa, loại nào CHƯA đọc, loại nào đọc THIẾU bao nhiêu HĐ."""
+    from collections import Counter
+
     from .auto_download import KINDS
+    have = Counter((r.get("thang"), r.get("loai")) for r in (rows or []))
     out = []
     for y, m in months:
         f = Path(root) / f"{y:04d}-{m:02d}" / f".kiemtra_{y:04d}-{m:02d}.json"
@@ -66,15 +70,28 @@ def coverage(root: Path, months: list[tuple[int, int]]) -> list[str]:
             d = json.loads(f.read_text(encoding="utf-8"))
         except (FileNotFoundError, ValueError):
             d = {}
-        # loại đã tải đầy đủ từ trước (có thư mục loại trong tháng) coi như đã đọc
-        miss = [KINDS[k]["label"] for k in ALL_KINDS
-                if k not in d and not (Path(root) / f"{y:04d}-{m:02d}" / KINDS[k]["folder"]).is_dir()]
-        short = [f"{v['label']} ({v['so_hd']}/{v['tong_cong']})" for v in d.values()
-                 if v.get("tong_cong") and v["so_hd"] < v["tong_cong"]]
+        parts, miss, short = [], [], []
+        for k in ALL_KINDS:
+            lab = KINDS[k]["label"]
+            n = have.get((f"{m:02d}/{y}", lab), 0)
+            v = d.get(k)
+            # loại đã tải đầy đủ từ trước (có thư mục loại trong tháng) coi như đã đọc
+            folder = (Path(root) / f"{y:04d}-{m:02d}" / KINDS[k]["folder"]).is_dir()
+            if v is None and not folder:
+                miss.append(lab)
+                parts.append(f"{lab}: CHƯA đọc")
+            elif v and v.get("tong_cong") and v["so_hd"] < v["tong_cong"]:
+                short.append(f"{lab}: đọc {v['so_hd']}/{v['tong_cong']} – THIẾU {v['tong_cong'] - v['so_hd']} HĐ")
+                parts.append(f"{lab}: {n} HĐ (thiếu {v['tong_cong'] - v['so_hd']})")
+            else:
+                tc = f" – đủ theo cổng ({v['tong_cong']})" if v and v.get("tong_cong") is not None else ""
+                parts.append(f"{lab}: {n} HĐ{tc}")
         if miss:
-            out.append(f"Tháng {m:02d}/{y} CHƯA đọc: {', '.join(miss)} – dự báo có thể thiếu hóa đơn (bấm Đọc nhanh từ cổng).")
+            out.append(f"Tháng {m:02d}/{y} CHƯA đọc: {', '.join(miss)} – dự báo có thể thiếu hóa đơn loại này "
+                       "(bấm ⚡ Đọc nhanh từ cổng).")
         if short:
-            out.append(f"Tháng {m:02d}/{y} đọc THIẾU so với cổng: {', '.join(short)}.")
+            out.append(f"Tháng {m:02d}/{y} đọc THIẾU so với cổng: {'; '.join(short)} – bấm ⚡ Đọc nhanh từ cổng để đọc lại.")
+        out.append(f"Tháng {m:02d}/{y} – hóa đơn đã đọc theo từng loại: {'; '.join(parts)}.")
     return out
 
 

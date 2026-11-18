@@ -34,7 +34,8 @@ def tthai_code(rec: dict[str, Any]) -> int:
     except (TypeError, ValueError):
         pass
     t = str(rec.get("tthai") or v or "").lower()
-    for k, s in TTHAI_TEXT.items():
+    # cụm dài trước: "đã bị thay thế" chứa "thay thế", "đã bị điều chỉnh" chứa "điều chỉnh"
+    for k, s in sorted(TTHAI_TEXT.items(), key=lambda kv: -len(kv[1])):
         if s.lower() in t:
             return k
     return 1

@@ -286,6 +286,150 @@ CT_LABELS = {
 }
 
 
+def _orig_ref(r: dict[str, Any]) -> dict[str, Any] | None:
+    """Hóa đơn gốc mà HĐ này thay thế / điều chỉnh: {kh, so, ngay, loai(1 thay thế, 2 điều chỉnh)}.
+    Lấy từ danh sách cổng (khhdgoc/shdgoc), nếu không có thì đọc XML (TTHDLQuan) hoặc JSON chi tiết."""
+    kh, so, ngay, loai = r.get("khhdgoc"), r.get("shdgoc"), r.get("tdlhdgoc"), None
+    f = str(r.get("file_xml") or "")
+    if not (kh and so) and f:
+        try:
+            p = Path(f)
+            if p.suffix.lower() == ".json" and p.exists():
+                d = json.loads(p.read_text(encoding="utf-8"))
+                kh, so, ngay = d.get("khhdgoc"), d.get("shdgoc"), d.get("tdlhdgoc")
+            elif p.suffix.lower() == ".xml" and p.exists():
+                t = p.read_text(encoding="utf-8", errors="ignore")
+                m = re.search(r"<TTHDLQuan>(.*?)</TTHDLQuan>", t, re.S)
+                if m:
+                    g = lambda tag: (re.search(rf"<{tag}>([^<]*)</{tag}>", m.group(1)) or [None, None])[1]  # noqa: E731
+                    kh, so, ngay, loai = g("KHHDCLQuan"), g("SHDCLQuan"), g("NLHDCLQuan"), g("TCHDon")
+        except (OSError, ValueError):
+            pass
+    if not (kh and str(so or "").strip()):
+        return None
+    try:
+        so_i = int(str(so).strip())
+    except ValueError:
+        return None
+    return {"kh": str(kh).strip().upper(), "so": so_i, "ngay": str(ngay or "")[:10], "loai": str(loai or "")}
+
+
+def _inv_name(r: dict[str, Any]) -> str:
+    return f"HĐ {r.get('khhdon') or ''}-{r.get('shdon') or ''} ({'mua vào' if r.get('huong') == 'purchase' else 'bán ra'}, " \
+           f"{str(r.get('ngay_lap') or '')[8:10]}/{str(r.get('ngay_lap') or '')[5:7]})"
+
+
+def _sum_rates(rates: dict[str, list[float]]) -> tuple[float, float]:
+    return sum(v[0] for v in rates.values()), sum(v[1] for v in rates.values())
+
+
+def _pair_invoices(prepared: list[dict[str, Any]]) -> list[str]:
+    """Ghép hóa đơn thay thế / điều chỉnh với hóa đơn gốc cùng kỳ:
+      * HĐ bị thay thế: loại, chỉ kê khai HĐ thay thế.
+      * HĐ điều chỉnh: KHÔNG kê khai riêng – số tăng/giảm cộng/trừ vào HĐ bị điều chỉnh;
+        điều chỉnh giảm hết (tổng về 0) -> loại cả 2.
+      * HĐ gốc ở kỳ khác: HĐ thay thế kê khai đủ, HĐ điều chỉnh kê khai số tăng/giảm của chính nó.
+    Trả về các dòng giải thích để hiện cho người dùng."""
+    def key(d: str, nbmst: Any, kh: Any, so: Any) -> tuple:
+        try:
+            so = int(str(so).strip())
+        except ValueError:
+            pass
+        return d, str(nbmst or "").replace("-", ""), str(kh or "").strip().upper(), so
+
+    idx = {key(p["dir"], p["r"].get("nbmst"), p["r"].get("khhdon"), p["r"].get("shdon")): p for p in prepared}
+    notes: list[str] = []
+    replaced_by: dict[int, dict[str, Any]] = {}
+    # HĐ thay thế (2) / điều chỉnh (3): tìm HĐ gốc
+    for p in prepared:
+        ref = p["ref"]
+        kind = 2 if p["code"] == 2 or (ref and ref["loai"] == "1") else 3 if p["code"] == 3 or (ref and ref["loai"] == "2") else 0
+        if not kind:
+            continue
+        r = p["r"]
+        orig = idx.get(key(p["dir"], r.get("nbmst"), ref["kh"], ref["so"])) if ref else None
+        if not orig and not ref:
+            # dữ liệu cũ chưa có số HĐ gốc: ghép với HĐ "đã bị thay thế"/"đã bị điều chỉnh" DUY NHẤT trong kỳ
+            # cùng người bán, cùng ký hiệu, lập trước HĐ này
+            want = 4 if kind == 2 else 5
+            cands = [q for q in prepared if q is not p and q["code"] == want and not q["drop"] and q["dir"] == p["dir"]
+                     and str(q["r"].get("nbmst") or "") == str(r.get("nbmst") or "")
+                     and (q["r"].get("khhdon") or "") == (r.get("khhdon") or "")
+                     and (q["r"].get("ngay_lap") or "") <= (r.get("ngay_lap") or "")]
+            if len(cands) == 1:
+                orig = cands[0]
+                ref = {"kh": str(orig["r"].get("khhdon") or "").upper(), "so": orig["r"].get("shdon"),
+                       "ngay": str(orig["r"].get("ngay_lap") or ""), "loai": ""}
+                p["note"].append("ghép HĐ gốc theo cùng người bán & ký hiệu (dữ liệu chưa có số HĐ gốc)")
+        goc_txt =f"HĐ gốc {ref['kh']}-{ref['so']}" + (f" ngày {ref['ngay'][8:10]}/{ref['ngay'][5:7]}/{ref['ngay'][:4]}"
+                                                        if len(ref["ngay"]) >= 10 else "") if ref else "HĐ gốc (không đọc được số)"
+        if kind == 2:
+            if orig and orig is not p:
+                orig["drop"] = f"Bị thay thế bởi HĐ {r.get('khhdon')}-{r.get('shdon')} – loại, không kê khai"
+                replaced_by[id(orig)] = p
+                p["note"].append(f"Thay thế HĐ {ref['kh']}-{ref['so']}")
+                notes.append(f"{_inv_name(orig['r'])} bị thay thế bởi {_inv_name(r)}: loại HĐ {ref['kh']}-{ref['so']}, "
+                             f"chỉ kê khai HĐ {r.get('khhdon')}-{r.get('shdon')}.")
+            elif ref:
+                p["note"].append(f"Thay thế {goc_txt} (không thuộc kỳ này)")
+                notes.append(f"{_inv_name(r)} thay thế {goc_txt} không thuộc kỳ này: kê khai HĐ thay thế; nếu HĐ gốc đã "
+                             "kê khai ở kỳ trước thì kiểm tra lại kỳ đó.")
+            else:
+                p["note"].append("Thay thế HĐ chưa xác định được số (dữ liệu chưa có số HĐ gốc)")
+                notes.append(f"{_inv_name(r)} là HĐ thay thế nhưng dữ liệu chưa có số HĐ gốc: đã kê khai HĐ thay thế; "
+                             "các HĐ 'đã bị thay thế' trong kỳ đã loại. Tải XML/chi tiết hóa đơn để ghép chính xác.")
+        else:
+            val, tax = _sum_rates(p["rates"])
+            sign = "tăng" if val + tax > 0 else "giảm"
+            amt = f"{fmt(abs(val))} đ tiền hàng, {fmt(abs(tax))} đ thuế"
+            if orig and orig is not p:
+                for c, (v, t) in p["rates"].items():
+                    cur = orig["rates"].setdefault(c, [0.0, 0.0])
+                    cur[0] += v
+                    cur[1] += t
+                orig["its"] = orig["its"] + p["its"]
+                orig["adj"].append(p)
+                p["drop"] = (f"HĐ điều chỉnh {sign} cho HĐ {ref['kh']}-{ref['so']} – đã cộng/trừ vào HĐ bị điều chỉnh, "
+                             "không kê khai riêng")
+                orig["note"].append(f"Đã {'cộng' if sign == 'tăng' else 'trừ'} HĐ điều chỉnh {r.get('khhdon')}-{r.get('shdon')} "
+                                    f"({amt})")
+                p["pair_note"] = len(notes)
+                notes.append(f"{_inv_name(orig['r'])} bị điều chỉnh {sign} bởi {_inv_name(r)} ({amt}): "
+                             f"{'cộng vào' if sign == 'tăng' else 'trừ vào'} HĐ {ref['kh']}-{ref['so']}, "
+                             f"không kê khai HĐ {r.get('khhdon')}-{r.get('shdon')}.")
+            elif not ref:
+                p["note"].append(f"Điều chỉnh {sign} HĐ chưa xác định được số – kê khai số {sign}")
+                notes.append(f"{_inv_name(r)} là HĐ điều chỉnh {sign} ({amt}) nhưng dữ liệu chưa có số HĐ gốc: tạm kê khai "
+                             f"số điều chỉnh {sign}. Tải XML/chi tiết hóa đơn để ghép đúng HĐ bị điều chỉnh.")
+            else:
+                p["note"].append(f"Điều chỉnh {sign} {goc_txt} (không thuộc kỳ này) – kê khai số {sign}")
+                notes.append(f"{_inv_name(r)} điều chỉnh {sign} {goc_txt} không thuộc kỳ này ({amt}): kê khai số "
+                             f"điều chỉnh {sign} ở kỳ này.")
+    # điều chỉnh giảm hết -> triệt tiêu, loại cả HĐ gốc và HĐ điều chỉnh
+    for p in prepared:
+        if p["adj"] and not p["drop"]:
+            val, tax = _sum_rates(p["rates"])
+            if abs(val) < 1 and abs(tax) < 1:
+                adj = ", ".join(f"{a['r'].get('khhdon')}-{a['r'].get('shdon')}" for a in p["adj"])
+                p["drop"] = f"Bị điều chỉnh giảm hết bởi HĐ {adj} – 2 HĐ triệt tiêu, không kê khai"
+                for a in p["adj"]:
+                    a["drop"] = f"Điều chỉnh giảm hết HĐ {p['r'].get('khhdon')}-{p['r'].get('shdon')} – triệt tiêu, không kê khai"
+                    if a.get("pair_note") is not None:
+                        notes[a["pair_note"]] = ""   # thay bằng dòng "triệt tiêu" bên dưới
+                notes.append(f"{_inv_name(p['r'])} và HĐ điều chỉnh {adj} triệt tiêu về 0: loại cả 2, không kê khai.")
+    # HĐ bị thay thế mà HĐ thay thế không có trong kỳ: vẫn loại (cổng đã ghi nhận bị thay thế)
+    for p in prepared:
+        if p["code"] == 4 and not p["drop"]:
+            p["drop"] = "Đã bị thay thế – loại, không kê khai"
+            notes.append(f"{_inv_name(p['r'])} đã bị thay thế (HĐ thay thế ở kỳ khác hoặc chưa ghép được số): loại, "
+                         "không kê khai.")
+        elif p["code"] == 5 and not p["adj"] and not p["drop"]:
+            p["note"].append("Đã bị điều chỉnh (HĐ điều chỉnh ở kỳ khác)")
+            notes.append(f"{_inv_name(p['r'])} đã bị điều chỉnh bởi HĐ ở kỳ khác: kê khai theo số gốc; số điều chỉnh "
+                         "kê khai ở kỳ có HĐ điều chỉnh.")
+    return [n for n in notes if n]
+
+
 def compute(mst: str, kieu: str, ky: int, nam: int, inputs: dict[str, Any] | None = None) -> dict[str, Any]:
     inputs = {k: round(_num((inputs or {}).get(k))) for k in INPUT_KEYS}
     root = Path(settings.output_dir) / mst
@@ -298,19 +442,20 @@ def compute(mst: str, kieu: str, ky: int, nam: int, inputs: dict[str, Any] | Non
     stat = {"mua_vao": 0, "ban_ra": 0, "loai_tru": 0, "khong_khau_tru": 0, "khong_xml": 0}
     no_deduct_val = no_deduct_tax = 0.0
 
+    from .reports import tthai_code
+    # ---- bước 1: đọc từng hóa đơn (thuế suất, dòng hàng, hóa đơn gốc nếu là HĐ thay thế / điều chỉnh)
+    prepared: list[dict[str, Any]] = []
     for r in sorted(rows, key=lambda x: (x.get("ngay_lap") or "", x.get("khhdon") or "", str(x.get("shdon") or ""))):
-        from .reports import tthai_code
         code = tthai_code(r)
         direction = "purchase" if r.get("huong") == "purchase" else "sold"
-        if code in (4, 6):
-            excluded.append(r)
-            stat["loai_tru"] += 1
+        if code == 6:
+            excluded.append((r, "Hóa đơn đã bị hủy – không kê khai"))
             continue
         its, rates = _detail(r, mst, info)
         if not rates:
             rates = {rate_class(k): list(v) for k, v in (r.get("_rates") or {}).items()} if r.get("_rates") else {}
-        if not rates:
-            stat["khong_xml"] += 1
+        no_detail = not rates
+        if no_detail:
             tax = _num(r.get("tgtthue"))
             val = _num(r.get("tgtcthue"))
             guess = "?"
@@ -318,8 +463,23 @@ def compute(mst: str, kieu: str, ky: int, nam: int, inputs: dict[str, Any] | Non
                 p = round(tax / val * 100)
                 guess = str(p) if p in (5, 8, 10) else "?"
             rates = {guess if tax else ("?" if direction == "purchase" else "KCT"): [val, tax]}
-            warn_rows.append((r, "Không có XML/chi tiết – dùng tổng tiền trên cổng, thuế suất suy ra"))
         _spread_tax(its, rates)
+        prepared.append({"r": r, "code": code, "dir": direction, "its": its, "rates": rates, "no_detail": no_detail,
+                         "ref": _orig_ref(r), "drop": None, "adj": [], "note": []})
+    pair_notes = _pair_invoices(prepared)   # ghép HĐ thay thế / điều chỉnh với HĐ gốc trong kỳ
+    for p in prepared:
+        if p["drop"]:
+            excluded.append((p["r"], p["drop"]))
+    stat["loai_tru"] = len(excluded)
+
+    # ---- bước 2: kê khai các hóa đơn còn lại
+    for p in prepared:
+        if p["drop"]:
+            continue
+        r, code, direction, its, rates = p["r"], p["code"], p["dir"], p["its"], p["rates"]
+        if p["no_detail"]:
+            stat["khong_xml"] += 1
+            warn_rows.append((r, "Không có XML/chi tiết – dùng tổng tiền trên cổng, thuế suất suy ra"))
         partner_mst = r.get("nbmst") if direction == "purchase" else r.get("nmmst")
         partner = r.get("nbten") if direction == "purchase" else r.get("nmten")
         mau = str(r.get("khmshdon") or "")
@@ -333,12 +493,10 @@ def compute(mst: str, kieu: str, ky: int, nam: int, inputs: dict[str, Any] | Non
                                      "để được khấu trừ".replace(",", ".")))
         else:
             stat["ban_ra"] += 1
-        if code == 3:
-            warn_rows.append((r, "Hóa đơn điều chỉnh – kiểm tra số tăng/giảm đã đúng dấu"))
         for c, (val, tax) in rates.items():
             line = {"ngay": r.get("ngay_lap"), "mau": mau, "kh": r.get("khhdon"), "so": r.get("shdon"),
                     "mst": partner_mst, "ten": partner, "ts": c, "gt": round(val), "thue": round(tax),
-                    "tthai": r.get("tthai"), "loai": r.get("loai"), "ghi_chu": ""}
+                    "tthai": r.get("tthai"), "loai": r.get("loai"), "ghi_chu": "; ".join(p["note"])}
             if direction == "purchase":
                 if deductible and rate_pct(c) is not None or (deductible and c == "?" and tax):
                     line["kt"] = True
@@ -412,9 +570,12 @@ def compute(mst: str, kieu: str, ky: int, nam: int, inputs: dict[str, Any] | Non
     if rows:
         from .quick_read import coverage
         warnings[:0] = coverage(root, [(y, m) for y, m in period_months(kieu, ky, nam)
-                                       if f"{m:02d}/{y}" not in missing])
+                                       if f"{m:02d}/{y}" not in missing], rows)
     if stat["loai_tru"]:
-        warnings.append(f"Đã loại {stat['loai_tru']} hóa đơn bị thay thế / bị hủy.")
+        warnings.append(f"Đã loại {stat['loai_tru']} hóa đơn không kê khai: "
+                        + "; ".join(f"{_inv_name(r)} – {why}" for r, why in excluded[:30])
+                        + (f"; … và {len(excluded) - 30} HĐ khác (xem sheet Lưu ý)" if len(excluded) > 30 else "") + ".")
+    warnings.extend(pair_notes)
     if stat["khong_khau_tru"]:
         warnings.append(f"{stat['khong_khau_tru']} hóa đơn mua vào không phải hóa đơn GTGT (mẫu 2…) – không khấu trừ.")
     if no_deduct_val:
@@ -425,7 +586,10 @@ def compute(mst: str, kieu: str, ky: int, nam: int, inputs: dict[str, Any] | Non
                         "mới được khấu trừ (Luật Thuế GTGT 2024). Nếu chưa thanh toán qua ngân hàng, nhập số thuế không "
                         "được khấu trừ vào ô tương ứng.")
     if stat["khong_xml"]:
-        warnings.append(f"{stat['khong_xml']} hóa đơn không có XML/chi tiết – thuế suất suy ra từ tổng tiền.")
+        nx = [r for r, why in warn_rows if why.startswith("Không có XML")]
+        warnings.append(f"{stat['khong_xml']} hóa đơn chưa có XML/chi tiết – thuế suất suy ra từ tổng tiền: "
+                        + ", ".join(f"{r.get('khhdon')}-{r.get('shdon')}" for r in nx[:25])
+                        + (f" … (+{len(nx) - 25})" if len(nx) > 25 else "") + ".")
     if not inputs["ct22"]:
         warnings.append("Chỉ tiêu [22] (thuế còn được khấu trừ kỳ trước chuyển sang) đang là 0 – nhập nếu kỳ trước còn dư.")
     if pl8["rows"]:
@@ -451,8 +615,9 @@ def compute(mst: str, kieu: str, ky: int, nam: int, inputs: dict[str, Any] | Non
                        "huong": "Mua vào" if r.get("huong") == "purchase" else "Bán ra",
                        "tong": r.get("tgtttbso"), "why": why} for r, why in warn_rows],
         "excluded": [{"ngay": r.get("ngay_lap"), "kh": r.get("khhdon"), "so": r.get("shdon"), "tthai": r.get("tthai"),
-                      "huong": "Mua vào" if r.get("huong") == "purchase" else "Bán ra", "tong": r.get("tgtttbso")}
-                     for r in excluded],
+                      "huong": "Mua vào" if r.get("huong") == "purchase" else "Bán ra", "tong": r.get("tgtttbso"),
+                      "loai": r.get("loai"), "why": why}
+                     for r, why in excluded],
         "rows": len(rows),
     }
 
@@ -829,7 +994,7 @@ def _write_excel(res: dict[str, Any], dest: Path) -> Path:
     for x in res["excluded"]:
         rr += 1
         for i, v in enumerate([x["huong"], x["ngay"], x["kh"], x["so"], "", "", x["tong"],
-                               f"Đã loại khỏi tờ khai: {x['tthai']}"], 1):
+                               f"Đã loại khỏi tờ khai ({x['tthai']}): {x.get('why') or ''}"], 1):
             w.cell(rr, i, v)
     return _save(wb, dest)
 
