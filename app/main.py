@@ -159,7 +159,7 @@ class AutoIn(BaseModel):
     excel: bool = True
     xml: bool = True
     pdf: bool = True
-    easy_captcha: bool = False
+    easy_captcha: bool = True
 
 
 @app.post("/api/auto/start")
