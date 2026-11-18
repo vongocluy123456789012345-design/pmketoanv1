@@ -1120,19 +1120,51 @@ def write_summary(job: AutoJob, root: Path, rows: list[dict[str, Any]] | None = 
     rows = job._rows if rows is None else rows
     if not rows:
         return None
+    from .bank_filter import BANK_SHEET, is_bank_purchase
+
+    # hóa đơn mua vào của ngân hàng: để sheet riêng, không cộng vào bảng kê tổng
+    bank = [r for r in rows if is_bank_purchase(r)]
+    rows_all, rows = rows, [r for r in rows if not is_bank_purchase(r)]
     wb = Workbook()
     ws = wb.active
     ws.title = "Tong hop"
     bold, fill = Font(bold=True), PatternFill("solid", fgColor="DDEBF7")
+    if by_month:
+        _month_sheet(wb, rows, bold, fill)
+    from . import reports
+    reports.add_issues_sheet(wb, rows)
+    _list_sheet(ws, rows, root, bold, fill)
+    if bank:
+        bs = wb.create_sheet(BANK_SHEET)
+        _list_sheet(bs, bank, root, bold, fill)
+    if name is None:
+        m1, m2 = job.months[0][0], job.months[-1][1]
+        name = f"TongHop_{m1:%Y-%m-%d}_den_{m2:%Y-%m-%d}"
+    root.mkdir(parents=True, exist_ok=True)
+    dest = root / f"{name}.xlsx"
+    try:
+        wb.save(dest)
+    except PermissionError:
+        dest = root / f"{name}_{datetime.now():%H%M%S}.xlsx"
+        wb.save(dest)
+    if main:
+        job.summary_file = str(dest)
+        try:
+            reports.write_accounting_export(rows_all, root / f"{dest.stem.replace('TongHop', 'XuatPMKT')}.xlsx")
+        except Exception as e:  # noqa: BLE001
+            job.err(f"Không ghi được file xuất phần mềm kế toán: {e}")
+    return dest
+
+
+def _list_sheet(ws, rows: list[dict[str, Any]], root: Path, bold, fill) -> None:
+    """Ghi danh sách hóa đơn (cột theo COLS) vào sheet ws."""
+    from openpyxl.styles import Font
+
     for i, (_, title, width) in enumerate(COLS, 1):
         c = ws.cell(1, i, title)
         c.font, c.fill = bold, fill
         ws.column_dimensions[c.column_letter].width = width
     link_font = Font(color="0563C1", underline="single")
-    if by_month:
-        _month_sheet(wb, rows, bold, fill)
-    from . import reports
-    reports.add_issues_sheet(wb, rows)
     for r, rec in enumerate(rows, 2):
         for i, (k, _, _) in enumerate(COLS, 1):
             v = rec.get(k)
@@ -1153,23 +1185,6 @@ def write_summary(job: AutoJob, root: Path, rows: list[dict[str, Any]] | None = 
                     c.number_format = "#,##0"
     ws.freeze_panes = "A2"
     ws.auto_filter.ref = ws.dimensions
-    if name is None:
-        m1, m2 = job.months[0][0], job.months[-1][1]
-        name = f"TongHop_{m1:%Y-%m-%d}_den_{m2:%Y-%m-%d}"
-    root.mkdir(parents=True, exist_ok=True)
-    dest = root / f"{name}.xlsx"
-    try:
-        wb.save(dest)
-    except PermissionError:
-        dest = root / f"{name}_{datetime.now():%H%M%S}.xlsx"
-        wb.save(dest)
-    if main:
-        job.summary_file = str(dest)
-        try:
-            reports.write_accounting_export(rows, root / f"{dest.stem.replace('TongHop', 'XuatPMKT')}.xlsx")
-        except Exception as e:  # noqa: BLE001
-            job.err(f"Không ghi được file xuất phần mềm kế toán: {e}")
-    return dest
 
 
 def _month_sheet(wb, rows: list[dict[str, Any]], bold, fill) -> None:

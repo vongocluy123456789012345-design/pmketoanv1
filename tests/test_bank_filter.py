@@ -84,3 +84,19 @@ def test_vat_forecast_excludes_bank_invoices():
     assert r["ct"]["23"] == 1_000_000 and r["ct"]["24"] == 100_000, r["ct"]
     assert [b["so"] for b in r["bk"]["purchase"]] == ["1"]
     assert r["stat"]["mua_vao"] == 1 and r["stat"]["loai_tru"] == 1
+
+
+def test_summary_puts_bank_invoices_on_own_sheet(tmp_path):
+    from app.auto_download import write_summary
+
+    def rec(so, seller, val):
+        return {"huong": "purchase", "loai": "Mua vào – đã cấp mã", "thang": "10/2026", "shdon": str(so),
+                "nbten": seller, "tgtcthue": val, "tgtthue": val // 10, "tgtttbso": val + val // 10, "tthai": "Hóa đơn mới"}
+
+    rows = [rec(1, "CÔNG TY TNHH VẬT TƯ X", 1_000_000), rec(2, "NGÂN HÀNG TMCP Á CHÂU", 100_000)]
+    f = write_summary(None, tmp_path, rows, "TongHop_test", by_month=True)
+    wb = load_workbook(f)
+    assert [c.value for c in wb["Tong hop"]["F"][1:]] == ["1"]
+    assert [c.value for c in wb[BANK_SHEET]["F"][1:]] == ["2"]
+    total = [r for r in wb["Theo thang"].iter_rows(values_only=True) if r[0] == "TỔNG"][0]
+    assert total[2] == 1 and total[3] == 1_000_000
