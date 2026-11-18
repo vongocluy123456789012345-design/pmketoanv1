@@ -1025,4 +1025,7 @@ def run() -> None:
 
 
 if __name__ == "__main__":
-    run()
+    # Chạy bằng module "app.main" đã import đúng cách (không dùng bản "__main__"): khi khởi động kiểu
+    # runpy / python -c, các model dữ liệu (AutoIn...) trong "__main__" không phân giải được kiểu -> lỗi 500.
+    from app.main import run as _run
+    _run()
