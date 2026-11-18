@@ -149,8 +149,8 @@
         <label style="display:inline;margin-right:10px"><input id="aExcel" type="checkbox" checked style="width:auto"> Bảng kê Excel</label>
         <label style="display:inline;margin-right:10px"><input id="aXml" type="checkbox" checked style="width:auto"> XML</label>
         <label style="display:inline;margin-right:10px"><input id="aPdf" type="checkbox" checked style="width:auto"> PDF gốc</label>
-        <label style="display:inline" title="Trang tra cứu có captcha: mặc định mỗi trang chỉ hỏi bạn nhập captcha 1 lần, phần mềm tự tải các hóa đơn còn lại của trang đó. Bật mục này để lấy PDF gốc cả ở các trang bắt captcha cho MỖI lần tra cứu (EasyInvoice...) – sẽ hỏi từng hóa đơn. Phần mềm không tự đọc captcha."><input id="aEasyCap" type="checkbox" style="width:auto"> Hỏi captcha từng hóa đơn (trang bắt nhập mỗi lần, vd EasyInvoice)</label>
-        <div class="muted">* Hóa đơn máy tính tiền: cổng bắt nhập captcha khi tra cứu, phần mềm sẽ hiện ô để bạn nhập.
+        <label style="display:inline" title="Trang tra cứu có captcha: phần mềm tự động giải bằng OCR. Bật mục này để tự giải và lấy PDF gốc cả ở các trang bắt captcha cho MỖI lần tra cứu (EasyInvoice...)."><input id="aEasyCap" type="checkbox" checked style="width:auto"> Tự giải captcha từng hóa đơn (trang bắt nhập mỗi lần, vd EasyInvoice)</label>
+        <div class="muted">* Hóa đơn máy tính tiền &amp; trang tra cứu có captcha: phần mềm tự động giải bằng OCR (chỉ hiện ô nhập tay dự phòng nếu OCR không đọc được).
           Lưu tại: <a href="#" id="aFolder"></a> <span id="aFolderTag" class="badge pending"></span>
           <button id="btnDir" class="sec" style="padding:2px 9px;font-size:12px" title="Chọn thư mục khác để lưu hóa đơn, bảng kê, XML, PDF">Đổi nơi lưu…</button>
           <button id="btnDirReset" class="sec" style="padding:2px 9px;font-size:12px" title="Quay về thư mục Documents mặc định">Mặc định</button>
@@ -160,7 +160,7 @@
       <div style="flex:0 0 auto"><button id="btnStop" class="sec" disabled>Dừng</button></div>
     </div>
     <div id="capBox" style="display:none;margin-top:10px;padding:10px;border:1px solid var(--warn);border-radius:6px;background:#fff8c5">
-      <b>Cổng thuế yêu cầu captcha</b> <span class="muted" id="capReason"></span>
+      <b>Nhập captcha dự phòng (OCR chưa nhận diện được)</b> <span class="muted" id="capReason"></span>
       <div class="inline" style="margin-top:6px">
         <img id="capImg" style="height:44px;background:#fff;border:1px solid var(--b);border-radius:6px">
         <div><input id="capVal" autocomplete="off" placeholder="Nhập mã trong ảnh"></div>
@@ -179,7 +179,7 @@
     <h2>Lấy PDF gốc từ trang tra cứu – không cần đăng nhập cổng thuế</h2>
     <p class="page-intro">Phần mềm mở Chrome <b>chạy ẩn</b>, vào trang tra cứu của nhà cung cấp hóa đơn (VNPT, Viettel, MISA, BKAV, FPT,
       M-Invoice, trang riêng của người bán…), tự gõ mã tra cứu, bấm Tra cứu và bắt file PDF (tải về, mở tab mới, hoặc in trang hóa đơn).
-      Trang nào <b>bắt buộc captcha / kiểm tra chống robot</b> thì phần mềm dừng và báo để bạn tải tay (không vượt captcha).</p>
+      Trang có captcha đơn giản sẽ được tự động giải bằng OCR; nếu gặp kiểm tra chống robot phức tạp thì phần mềm báo để bạn tải tay.</p>
     <div class="inline">
       <div style="flex:3"><label>Link trang tra cứu (in trên hóa đơn / email)</label><input id="lkUrl" placeholder="vd https://0101234567-tt78.vnpt-invoice.com.vn"></div>
       <div style="flex:2"><label>Mã tra cứu</label><input id="lkCode" placeholder="Mã tra cứu / mã bảo mật"></div>
@@ -435,7 +435,7 @@
           <label style="display:inline;margin-right:8px"><input type="checkbox" class="scKind" value="mua-vao-mtt" style="width:auto"> MTT mua vào*</label>
           <label style="display:inline"><input type="checkbox" class="scKind" value="ban-ra-mtt" style="width:auto"> MTT bán ra*</label>
         </div>
-        <div class="muted">* cần bạn nhập captcha khi tới lịch (có tiếng báo). Chưa đăng nhập cổng thì phần mềm mở Chrome, báo Windows và thử lại mỗi 15 phút.</div>
+        <div class="muted">* tự động giải captcha bằng OCR khi tới lịch (chỉ báo âm thanh và hiện ô nhập tay nếu OCR đọc lỗi). Chưa đăng nhập cổng thì phần mềm mở Chrome, báo Windows và thử lại mỗi 15 phút.</div>
         <div style="margin-top:6px"><button id="btnSc">Lưu lịch</button> <button id="btnScNow" class="sec">Chạy ngay (tháng trước)</button></div>
         <div id="scMsg" class="msg"></div>
     </div>
@@ -895,7 +895,7 @@ function watchAuto(id) {
       $("capReason").textContent = j.captcha.reason; $("capBox").style.display = "";
       if (lastCapImg !== j.captcha.image) { lastCapImg = j.captcha.image; $("capImg").src = j.captcha.image; $("capVal").value = ""; $("capCopyMsg").textContent = ""; $("capVal").focus();
         if (location.hash !== "#tai") location.hash = "tai";
-        notifyUser("Cần nhập captcha", j.captcha.reason); }
+        notifyUser("Cần nhập captcha dự phòng", j.captcha.reason); }
     } else { $("capBox").style.display = "none"; }
     $("aSummary").style.display = j.summary_file ? "" : "none";
     $("aSummary").onclick = e => { e.preventDefault(); api("/api/open-folder?path=" + encodeURIComponent(j.summary_file), {method: "POST"}).catch(err => alert(err.message)); };
@@ -1145,7 +1145,7 @@ function mdLite(s) {  // hiển thị markdown đơn giản an toàn: **đậm**
     .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
     .replace(/(^|[\s(])(https?:\/\/[^\s<)]+)/g, '$1<a href="$2" target="_blank" rel="noopener noreferrer">$2</a>')
     .replace(/^#{1,4} (.+)$/gm, "<b>$1</b>").replace(/^-{3,}$/gm, '<hr style="border:0;border-top:1px solid var(--b)">')
-    .replace(/^&gt; ?/gm, "").replace(/^(\s*)[-*] /gm, "$1• ").replace(/\n/g, "<br>").replace(/(<hr[^>]*>)<br>/g, "$1");
+    .replace(/^&gt; ?/gm, "").replace(/^(\s*)[-*] /gm, "$1• ").replace(/\n/g, "<br>").replace(/(<hr[^>]*>)<br>/gm, "$1");
 }
 function aiAdd(who, html, name, color) {
   if (name) { const w = document.createElement("div"); w.className = "aiWho";
