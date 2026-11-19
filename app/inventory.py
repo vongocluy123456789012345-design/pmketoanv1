@@ -286,9 +286,66 @@ def new_code(ten: str, used: set[str]) -> str:
     return code
 
 
+# Từ chỉ LOẠI hàng / màu / size / chữ chung: bỏ khi so từ khóa nhận dạng (2 nơi đặt tên khác nhau: "Cước cầu lông Gosen
+# Ryzonic 69- Trắng" và "Dây cước căng vợt GOSEN Ryzonic 69" cùng là 1 hàng: từ khóa {gosen, ryzonic, 69})
+# (giữ lại từ PHÂN BIỆT sản phẩm: giày, áo, quần, túi, balo, bình, xịt, bóng, hộp, cuộn... vd "xịt vệ sinh GIÀY" khác
+# "xịt vệ sinh mặt vợt", cước "Ryzonic 65 CUỘN" khác cước lẻ)
+_KW_STOP = set("""day cuoc cang vot cau long khung bo
+cai chiec doi soi cay hang hoa san pham dung cho the thao chinh hang ma made in japan china viet nam mau size sz loai moi
+nam nu tre em unisex co tron ngan dai chai goi pickleball tennis paddle paddles
+trang den do xanh la cam hong vang tim xam bac nau be kem ngoc trai dat duong navy blue black white red pink orange
+yellow green purple gray grey silver gold pastel light dark cyan mint
+s m l xl xxl xxxl 2xl 3xl 4xl 5xl 3u 4u 5u 6u 4u5 3u5 5u5 3ug5 4ug5 5ug5 cl va voi""".split())
+
+
+def _kw(name: str) -> frozenset[str]:
+    """Từ khóa nhận dạng hàng: hãng, dòng, số model (bỏ từ loại hàng, màu, size, mã SKU dài, số size giày 34-46)."""
+    out = set()
+    for w in _norm(name).split():
+        if w in _KW_STOP or _UNIT.match(w):
+            continue
+        if w.isdigit() and 34 <= int(w) <= 46 and len(w) == 2:   # size giày / áo
+            continue
+        if len(w) >= 8 and any(c.isdigit() for c in w):             # mã SKU dài (BSRY69WH, BFRAX100ZVAZ...)
+            continue
+        out.add(w)
+    return frozenset(out)
+
+
+def _kw_match(inv_name: str, base: list[dict[str, Any]], base_kw: list[frozenset[str]]) -> tuple[dict | None, float, str]:
+    """Hàng danh mục có ĐỦ từ khóa nhận dạng nằm trong tên hóa đơn (chọn hàng có nhiều từ khóa nhất – cụ thể nhất).
+    Thiếu đúng 1 từ chữ (thường là tên hãng: "Lining Halbertec 4000" vs "Halbertec 4000") -> cần kiểm tra."""
+    ki = _kw(inv_name)
+    if not ki:
+        return None, 0.0, ""
+    full, near = [], []
+    for it, kc in zip(base, base_kw):
+        if len(kc) < 2 or not any(any(c.isdigit() for c in t) or len(t) >= 4 for t in kc):
+            continue
+        miss = kc - ki
+        if not miss:
+            full.append((len(kc), it))
+        elif len(miss) == 1 and len(kc) >= 3 and not any(c.isdigit() for c in next(iter(miss))):
+            near.append((len(kc), it))      # thiếu 1 từ chữ (thường là tên hãng), còn >= 2 từ khóa khớp
+    for cand, sc, why in ((full, 0.93, "Khớp từ khóa tên chuẩn (hãng, dòng, model)"),
+                          (near, 0.8, "Khớp từ khóa tên chuẩn (thiếu 1 từ) – CẦN KIỂM TRA")):
+        if cand:
+            top = max(n for n, _ in cand)
+            best = [it for n, it in cand if n == top]
+            if len(best) == 1:
+                return best[0], sc, why
+            # nhiều hàng cùng mức: chọn hàng có tên gần nhất
+            k = _norm(inv_name)
+            b = max(best, key=lambda it: _score(k, _norm(it["ten"])))
+            return b, sc - 0.05, why
+    return None, 0.0, ""
+
+
 def match_codes(items: list[dict[str, Any]], groups: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
-    """Gắn mã hàng cho mọi dòng (sửa trực tiếp line["ma_ghep"]). Trả về bảng ghép theo từng tên hàng."""
+    """Gắn mã hàng cho mọi dòng (sửa trực tiếp line["ma_ghep"]). Trả về bảng ghép theo từng tên hàng.
+    Ưu tiên MÃ CHUẨN của file đầu kỳ: mã có sẵn -> trùng tên -> khớp từ khóa tên chuẩn -> tên gần đúng -> hàng mới."""
     base = list(items)
+    base_kw = [_kw(i["ten"]) for i in base]
     by_code = {i["ma"].upper(): i for i in items}
     by_name = {_norm(i["ten"]): i for i in items}
     used = set(by_code)
@@ -304,8 +361,11 @@ def match_codes(items: list[dict[str, Any]], groups: dict[str, list[dict[str, An
                 m = memo[key]
             else:
                 it = by_name.get(key)
+                kw_it, kw_sc, kw_why = (None, 0.0, "") if it else _kw_match(ln["ten"], base, base_kw)
                 if it:
                     m = {"ma": it["ma"], "diem": 1.0, "cach": "Trùng tên trong danh mục"}
+                elif kw_it is not None:
+                    m = {"ma": kw_it["ma"], "diem": round(kw_sc, 2), "cach": kw_why}
                 else:
                     best, sc = None, 0.0
                     # tên gần đúng: so với danh mục đầu kỳ + hàng MỚI đã gặp ở mua vào (bán ra hàng vừa mua trong kỳ)

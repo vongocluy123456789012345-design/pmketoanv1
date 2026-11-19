@@ -60,3 +60,20 @@ def test_opening_match_compute_report():
     assert ["Hàng hóa", "AO04"] in vals and ["Công cụ dụng cụ", "AO04"] in vals and ["Hàng hóa", "GLU"] in vals
     tot = next(r for r in range(7, 20) if out.cell(r, 1).value == "Tổng cộng")
     assert out.cell(tot, 10).value == 5_500_000            # tổng giá trị nhập
+
+
+def test_match_by_standard_keywords():
+    """Ghép theo MÃ CHUẨN đầu kỳ bằng từ khóa (hãng, dòng, model), bỏ qua cách gọi loại hàng / màu / size."""
+    items = [{"kho": "Hàng hóa", "ma": "DC_G_65", "ten": "Dây cước căng vợt GOSEN Ryzonic 65", "dvt": "Sợi", "sl": 1, "gt": 1},
+             {"kho": "Hàng hóa", "ma": "DC_G_65C", "ten": "Dây cước căng vợt GOSEN Ryzonic 65 cuộn", "dvt": "Cuộn", "sl": 1, "gt": 1},
+             {"kho": "Hàng hóa", "ma": "BXG_LIG", "ten": "Bình xịt vệ sinh giày Ligpro (420ml)", "dvt": "Chai", "sl": 1, "gt": 1},
+             {"kho": "Hàng hóa", "ma": "V_LI_H4000", "ten": "Vợt cầu lông Lining Halbertec 4000", "dvt": "Cái", "sl": 1, "gt": 1}]
+    mk = lambda t: {"row": 1, "ma": "", "ten": t, "dvt": "", "sl": 1, "tt": 1, "ck": 0, "ngay": None}  # noqa: E731
+    lines = [mk("Dây căng vợt cầu lông Gosen Ryzonic 65- Đỏ- mã hàng: BSRY65RE"),
+             mk("Dây căng vợt cầu lông Gosen Ryzonic 65 cuộn 200m- Trắng"),
+             mk("Xịt vệ sinh mặt vợt pickleball Ligpro (chai 200ml)"),
+             mk("Khung vợt cầu lông Halbertec 4000 - 4U Pink")]
+    inv.match_codes(items, {"Mua vào": lines})
+    assert [ln["ma_ghep"] for ln in lines[:2]] == ["DC_G_65", "DC_G_65C"]
+    assert lines[2]["ma_ghep"] != "BXG_LIG"                          # xịt mặt vợt KHÁC bình xịt vệ sinh giày
+    assert lines[3]["ma_ghep"] == "V_LI_H4000" and "KIỂM TRA" in lines[3]["cach"]   # thiếu tên hãng -> cần kiểm tra
