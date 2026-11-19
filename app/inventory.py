@@ -70,7 +70,7 @@ def _date(v: Any) -> date | None:
 def read_opening(data: bytes) -> dict[str, Any]:
     """-> {"items": [{kho, ma, ten, dvt, sl, gt}], "loai": "tonkho"|"danhmuc"}"""
     from .misa_import import load_any_workbook
-    wb = load_any_workbook(data)
+    wb = load_any_workbook(data, values=True)   # mã hàng có thể là công thức (VLOOKUP): lấy giá trị
     for ws in wb.worksheets:
         for r in range(1, min(ws.max_row, 30) + 1):
             heads = {c.column: _norm(c.value) for c in ws[r] if isinstance(c.value, str)}
@@ -92,7 +92,69 @@ def read_opening(data: bytes) -> dict[str, Any]:
                               "ma": ma, "ten": ten, "dvt": str(ws.cell(rr, c_dvt).value or "").strip() if c_dvt else "",
                               "sl": 0.0, "gt": 0.0})
             return {"loai": "danhmuc", "items": items}
-    raise ValueError("Không nhận ra file tồn kho đầu kỳ (cần báo cáo Tổng hợp tồn kho hoặc Danh mục vật tư hàng hóa của MISA)")
+    # Bảng kê 01-2/BK-HTK (hàng tồn kho, máy móc, thiết bị của hộ kinh doanh) hoặc bảng tồn kho tự lập bất kỳ:
+    # cột tên hàng + số lượng + giá trị (+ mã hàng, ĐVT), tiêu đề có thể nằm trên 2-3 dòng
+    for ws in wb.worksheets:
+        items = _read_generic(ws)
+        if items:
+            return {"loai": "bangke", "items": items}
+    raise ValueError("Không nhận ra file tồn kho đầu kỳ (cần báo cáo Tổng hợp tồn kho, Danh mục VTHH của MISA, bảng kê "
+                     "01-2/BK-HTK hàng tồn kho, hoặc bảng có các cột Tên hàng, ĐVT, Số lượng, Giá trị, Mã hàng)")
+
+
+def _read_generic(ws) -> list[dict[str, Any]]:
+    """Bảng tồn kho dạng danh sách: tìm cột theo tiêu đề (trải trên vài dòng), đọc từng dòng hàng; dòng mục
+    "I. HÀNG HÓA...", "II. MÁY MÓC, THIẾT BỊ" dùng làm Tên kho."""
+    top = min(ws.max_row, 40)
+    for hr in range(1, top + 1):
+        cols: dict[str, int] = {}
+        for rr in range(hr, min(hr + 3, ws.max_row + 1)):
+            for c in range(1, min(ws.max_column, 40) + 1):
+                h = _norm(ws.cell(rr, c).value)
+                if not h:
+                    continue
+                if "ten" not in cols and (h.startswith("ten hang") or h.startswith("hang ton kho") or h.startswith("ten vat tu")
+                                          or h == "hang hoa"):
+                    cols["ten"] = c
+                elif "ma" not in cols and (h.startswith("ma hang") or h.startswith("ma vat tu")):
+                    cols["ma"] = c
+                elif "dvt" not in cols and (h in ("dvt", "dv tinh") or h.startswith("don vi tinh")):
+                    cols["dvt"] = c
+                elif "sl" not in cols and h.startswith("so luong"):
+                    cols["sl"] = c
+                elif "gt" not in cols and (h.startswith("gia tri") or h == "thanh tien"):
+                    cols["gt"] = c
+                elif "kho" not in cols and h.startswith("ten kho"):
+                    cols["kho"] = c
+        if not ("ten" in cols and "sl" in cols):
+            continue
+        last_head = max(r for r in range(hr, min(hr + 3, ws.max_row + 1))
+                        if any(_norm(ws.cell(r, c).value) for c in cols.values()))
+        items: list[dict[str, Any]] = []
+        kho = DEFAULT_KHO
+        used: set[str] = set()
+        for r in range(last_head + 1, ws.max_row + 1):
+            ten = str(ws.cell(r, cols["ten"]).value or "").strip()
+            first = str(ws.cell(r, 1).value or ws.cell(r, 2).value or "").strip()
+            # dòng mục: "I. HÀNG HÓA, SẢN PHẨM TỒN KHO" / "II. MÁY MÓC, THIẾT BỊ"
+            sec = first if re.match(r"^[IVX]+\s*[.)]", first) else (ten if re.match(r"^[IVX]+\s*[.)]", ten) else "")
+            if sec:
+                t = _norm(sec)
+                kho = ("Máy móc, thiết bị" if "may moc" in t else "Công cụ dụng cụ" if "cong cu" in t
+                       else "Nguyên vật liệu" if "nguyen" in t else "Thành phẩm" if "thanh pham" in t else DEFAULT_KHO)
+                continue
+            if not ten or re.match(r"^\[\d+\]$", ten) or _norm(ten).startswith(("tong cong", "cong")):
+                continue
+            ma = str(ws.cell(r, cols["ma"]).value or "").strip() if "ma" in cols else ""
+            if not ma:
+                ma = new_code(ten, used)
+            used.add(ma.upper())
+            items.append({"kho": str(ws.cell(r, cols["kho"]).value or "").strip() if "kho" in cols else kho, "ma_kho": "",
+                          "ma": ma, "ten": ten, "dvt": str(ws.cell(r, cols["dvt"]).value or "").strip() if "dvt" in cols else "",
+                          "sl": _num(ws.cell(r, cols["sl"]).value), "gt": _num(ws.cell(r, cols["gt"]).value) if "gt" in cols else 0.0})
+        if items:
+            return items
+    return []
 
 
 def _read_tonkho(ws, hr: int, heads: dict[int, str]) -> list[dict[str, Any]]:
@@ -125,7 +187,7 @@ def _read_tonkho(ws, hr: int, heads: dict[int, str]) -> list[dict[str, Any]]:
 def read_lines(data: bytes) -> dict[str, Any]:
     """Dòng hàng của file chứng từ mẫu MISA -> {"lines": [...], "hr": dòng tiêu đề, "cols": {khóa: cột}}"""
     from .misa_import import read_template
-    wb, ws, hr, cols, _ = read_template(data)
+    wb, ws, hr, cols, _ = read_template(data, values=True)
     by = {k: c for c, k in cols.items()}
     if "ten_hang" not in by and "ma_hang" not in by:
         raise ValueError("File không có cột Mã hàng / Tên hàng")
@@ -163,12 +225,38 @@ def _score(a: str, b: str) -> float:
     small = min(len(ta), len(tb))
     cover = len(ta & tb) / max(1, small)      # tên ngắn nằm gọn trong tên dài
     ratio = difflib.SequenceMatcher(None, a, b).ratio()
-    pre = 0.9 if (len(min(a, b, key=len)) >= 12 and (a.startswith(b) or b.startswith(a))) else 0.0
+    pre = 0.9 if (small >= 4 and (a.startswith(b) or b.startswith(a))) else 0.0   # tên ngắn chung chung không tính
     sc = max(ratio, jac, pre, cover * 0.92 if small >= 4 and cover >= 0.9 else 0.0)
     # 2 tên khác nhau ở từ phân biệt (vd "Ensure" vs "Glucerna"): khác sản phẩm dù chung phần mô tả
     if _distinct(ta - tb) and _distinct(tb - ta):
         sc *= 0.7
+    # tên trên hóa đơn chứa mã model của danh mục (vd "TRM2974ZZTW1DKGR..." chứa "TRM2974"): cùng hàng
+    mb, ma_ = _models(tb), _models(ta)
+    if mb and any(any(t.startswith(m) for t in ta) for m in mb):
+        sc = max(sc, 0.9)
+    elif mb and ma_ and not (mb & ma_):
+        # cả 2 có mã SKU / model nhưng khác nhau (BSRY65YE vàng vs BSRY65RE đỏ, AYPU011 vs AYPT315): khác hàng
+        sc *= 0.6
+    # số model / số hiệu của danh mục KHÔNG có trên hóa đơn (1000 vs 4000, Ryzonic 62 vs 65, N65 vs NO1): khác hàng
+    if _keys(tb) - ta:
+        sc *= 0.6
     return sc
+
+
+def _models(words: set[str]) -> set[str]:
+    """Mã model dạng chữ + số, dài >= 5 (TRM2974, BSRY62PI, AYPR285...)."""
+    return {w for w in words if len(w) >= 5 and any(c.isdigit() for c in w) and any(c.isalpha() for c in w)
+            and not _UNIT.match(w)}
+
+
+# số + đơn vị đo (200ml, 16mm, 850g, 200m, 4u5): không phải mã model
+_UNIT = re.compile(r"^\d+(?:[.,]\d+)?(?:ml|mm|cm|m|g|gr|kg|l|lit|u|u\d|oz|inch|cai|chiec|hop|chai|cuon|vien|goi)$")
+
+
+def _keys(words: set[str]) -> set[str]:
+    """Số hiệu ngắn phân biệt model: số >= 2 chữ số (1000, 62) hoặc chữ+số ngắn (N65, A880, 3S, 5U)."""
+    return {w for w in words if any(c.isdigit() for c in w)
+            and ((w.isdigit() and len(w) >= 2) or (not w.isdigit() and 2 <= len(w) <= 4))}
 
 
 AUTO_OK = 0.78      # ghép tự động
@@ -176,13 +264,16 @@ MAYBE = 0.55        # ghép nhưng cần kiểm tra
 
 
 def new_code(ten: str, used: set[str]) -> str:
+    """Mã dễ đọc: chữ cái đầu các từ + số hiệu model, vd "Áo cầu lông Taro TR025-A29" -> ACLT_TR025_A29."""
     words = [w for w in _norm(ten).upper().split() if w]
-    base = "".join(w[0] for w in words[:6]) or "HH"
-    base = re.sub(r"[^A-Z0-9]", "", base)[:10] or "HH"
+    model = [w for w in words if any(c.isdigit() for c in w)][:2]
+    head = "".join(w[0] for w in words if w not in model and not w.isdigit())[:5]
+    base = "_".join(x for x in [head] + model if x) or "HH"
+    base = re.sub(r"[^A-Z0-9_]", "", base)[:20] or "HH"
     code, i = base, 1
     while code.upper() in used:
         i += 1
-        code = f"{base}{i}"
+        code = f"{base}_{i}"
     used.add(code.upper())
     return code
 
@@ -209,7 +300,8 @@ def match_codes(items: list[dict[str, Any]], groups: dict[str, list[dict[str, An
                     m = {"ma": it["ma"], "diem": 1.0, "cach": "Trùng tên trong danh mục"}
                 else:
                     best, sc = None, 0.0
-                    for i in base:              # tên gần đúng: chỉ so với danh mục đầu kỳ (không so với mã vừa tạo)
+                    # tên gần đúng: so với danh mục đầu kỳ + hàng MỚI đã gặp ở mua vào (bán ra hàng vừa mua trong kỳ)
+                    for i in (base if kind == "Mua vào" else items):
                         s = _score(key, _norm(i["ten"]))
                         if ln["dvt"] and i["dvt"] and _norm(ln["dvt"]) != _norm(i["dvt"]):
                             s -= 0.08
@@ -575,7 +667,10 @@ def run(job: Job, inp: dict[str, Any]) -> None:
         op_name, op_data = inp["opening"]
         opening = read_opening(op_data)
         items = opening["items"]
-        job.say(f"Tồn kho đầu kỳ: {len(items)} mã hàng ({'báo cáo Tổng hợp tồn kho – lấy số CUỐI KỲ' if opening['loai'] == 'tonkho' else 'danh mục VTHH – SL đầu kỳ 0'})")
+        kieu = {"tonkho": "báo cáo Tổng hợp tồn kho – lấy số CUỐI KỲ", "danhmuc": "danh mục VTHH – SL đầu kỳ 0",
+                "bangke": "bảng kê hàng tồn kho – tên hàng, ĐVT, số lượng, giá trị"}[opening["loai"]]
+        job.say(f"Tồn kho đầu kỳ: {len(items)} mã hàng ({kieu}); tổng SL {sum(i['sl'] for i in items):,.0f}, "
+                f"giá trị {sum(i['gt'] for i in items):,.0f} đ".replace(",", "."))
         parsed: dict[str, Any] = {}
         sources: dict[str, tuple[str, bytes]] = {}
         labels = {"buy": "Mua vào", "sell": "Bán ra", "ret": "Hàng bán trả lại"}

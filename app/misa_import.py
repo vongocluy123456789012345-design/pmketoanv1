@@ -254,7 +254,7 @@ def _decode(data: bytes) -> str:
     return data.decode("latin-1")
 
 
-def load_any_workbook(data: bytes):
+def load_any_workbook(data: bytes, values: bool = False):
     """Mở file mẫu ở BẤT KỲ định dạng bảng tính thường gặp -> workbook openpyxl:
     .xlsx/.xlsm/.xltx/.xltm, .xls (Excel 97-2003), .ods (LibreOffice/OpenOffice), .csv/.txt,
     và file "xls" thực chất là HTML hoặc XML Spreadsheet 2003."""
@@ -269,7 +269,7 @@ def load_any_workbook(data: bytes):
             names = []
         if "content.xml" in names and not any(n.startswith("xl/") for n in names):
             return _book_from_tables(_ods_tables(data))
-        wb = load_workbook(io.BytesIO(data))
+        wb = load_workbook(io.BytesIO(data), data_only=values)   # values=True: đọc kết quả công thức
         if wb.template:  # .xltx/.xltm -> lưu ra dạng sổ thường
             wb.template = False
         return wb
@@ -291,9 +291,9 @@ def load_any_workbook(data: bytes):
     return _book_from_tables(_csv_tables(text))
 
 
-def read_template(data: bytes):
+def read_template(data: bytes, values: bool = False):
     """-> (workbook, sheet, dòng tiêu đề, {cột: khóa}, [tiêu đề chưa nhận được])"""
-    wb = load_any_workbook(data)
+    wb = load_any_workbook(data, values)
     best = None
     for ws in wb.worksheets:
         for r in range(1, min(ws.max_row, 20) + 1):
