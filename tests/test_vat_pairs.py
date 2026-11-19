@@ -56,3 +56,36 @@ def test_pairs_on_return():
     assert "33" in out[32] and "triệt tiêu" in out[34] and "triệt tiêu" in out[35]
     text = " ".join(r["warnings"])
     assert "bị thay thế bởi HĐ C26TAA-33" in text and "triệt tiêu về 0" in text and "điều chỉnh giảm" in text
+
+
+def test_related_sheets():
+    """File Excel dự báo luôn có 5 sheet: HĐ ngân hàng, bị thay thế, thay thế, bị điều chỉnh, điều chỉnh."""
+    from openpyxl import load_workbook
+    old = settings.output_dir
+    with tempfile.TemporaryDirectory() as tmp:
+        object.__setattr__(settings, "output_dir", tmp)
+        try:
+            d = Path(tmp) / MST / "2026-10"
+            d.mkdir(parents=True)
+            bank = row(50, 100_000, 1, "Hóa đơn mới") | {"huong": "purchase", "loai": "Mua vào – đã cấp mã",
+                                                          "nbmst": "0100112437", "nbten": "NGÂN HÀNG TMCP NGOẠI THƯƠNG",
+                                                          "nmmst": MST}
+            kct = row(51, 2_000_000, 1, "Hóa đơn mới") | {"huong": "purchase", "loai": "Mua vào – đã cấp mã",
+                                                           "nbmst": "0100000009", "nmmst": MST, "tgtthue": 0,
+                                                           "tgtttbso": 2_000_000, "_rates": {"KCT": [2_000_000, 0]}}
+            (d / ".dulieu_2026-10.json").write_text(json.dumps({"saved": "2026-11-05", "rows": ROWS + [bank, kct]},
+                                                               ensure_ascii=False), encoding="utf-8")
+            r = vat.compute(MST, "M", 10, 2026, {})
+            p = vat._write_excel(r, Path(tmp) / "x.xlsx")
+            wb = load_workbook(p)
+        finally:
+            object.__setattr__(settings, "output_dir", old)
+    assert r["ct"]["23"] == 2_000_000 and r["ct"]["24"] == 0          # KCT: giá trị vào [23], không thuế
+    lq = r["lien_quan"]
+    assert [x["so"] for x in lq["ngan_hang"]] == ["50"]
+    assert {x["so"] for x in lq["bi_thay_the"]} == {"32", "40"} and [x["so"] for x in lq["thay_the"]] == ["33"]
+    assert {x["so"] for x in lq["bi_dieu_chinh"]} == {"34", "36"} and {x["so"] for x in lq["dieu_chinh"]} == {"35", "37", "38"}
+    b36 = next(x for x in lq["bi_dieu_chinh"] if x["so"] == "36")
+    assert b36["gt_sau"] == 9_000_000 and b36["lien_quan"] == "C26TAA-37"
+    for n in ("HD ngan hang", "HD bi thay the", "HD thay the", "HD bi dieu chinh", "HD dieu chinh"):
+        assert n in wb.sheetnames

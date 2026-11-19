@@ -361,12 +361,16 @@ def _pair_invoices(prepared: list[dict[str, Any]]) -> list[str]:
                 ref = {"kh": str(orig["r"].get("khhdon") or "").upper(), "so": orig["r"].get("shdon"),
                        "ngay": str(orig["r"].get("ngay_lap") or ""), "loai": ""}
                 p["note"].append("ghép HĐ gốc theo cùng người bán & ký hiệu (dữ liệu chưa có số HĐ gốc)")
-        goc_txt =f"HĐ gốc {ref['kh']}-{ref['so']}" + (f" ngày {ref['ngay'][8:10]}/{ref['ngay'][5:7]}/{ref['ngay'][:4]}"
+        if ref and not p.get("link"):
+            p["link"] = f"{ref['kh']}-{ref['so']} (kỳ khác)"
+        goc_txt = f"HĐ gốc {ref['kh']}-{ref['so']}" + (f" ngày {ref['ngay'][8:10]}/{ref['ngay'][5:7]}/{ref['ngay'][:4]}"
                                                         if len(ref["ngay"]) >= 10 else "") if ref else "HĐ gốc (không đọc được số)"
         if kind == 2:
             if orig and orig is not p:
                 orig["drop"] = f"Bị thay thế bởi HĐ {r.get('khhdon')}-{r.get('shdon')} – loại, không kê khai"
                 replaced_by[id(orig)] = p
+                orig["role"], orig["link"] = "bi_thay_the", f"{r.get('khhdon')}-{r.get('shdon')}"
+                p["link"] = f"{ref['kh']}-{ref['so']}"
                 p["note"].append(f"Thay thế HĐ {ref['kh']}-{ref['so']}")
                 notes.append(f"{_inv_name(orig['r'])} bị thay thế bởi {_inv_name(r)}: loại HĐ {ref['kh']}-{ref['so']}, "
                              f"chỉ kê khai HĐ {r.get('khhdon')}-{r.get('shdon')}.")
@@ -389,6 +393,9 @@ def _pair_invoices(prepared: list[dict[str, Any]]) -> list[str]:
                     cur[1] += t
                 orig["its"] = orig["its"] + p["its"]
                 orig["adj"].append(p)
+                orig["role"] = "bi_dieu_chinh"
+                orig["link"] = ", ".join(x for x in (orig.get("link"), f"{r.get('khhdon')}-{r.get('shdon')}") if x)
+                p["link"] = f"{ref['kh']}-{ref['so']}"
                 p["drop"] = (f"HĐ điều chỉnh {sign} cho HĐ {ref['kh']}-{ref['so']} – đã cộng/trừ vào HĐ bị điều chỉnh, "
                              "không kê khai riêng")
                 orig["note"].append(f"Đã {'cộng' if sign == 'tăng' else 'trừ'} HĐ điều chỉnh {r.get('khhdon')}-{r.get('shdon')} "
@@ -441,6 +448,7 @@ def compute(mst: str, kieu: str, ky: int, nam: int, inputs: dict[str, Any] | Non
     excluded, warn_rows = [], []
     stat = {"mua_vao": 0, "ban_ra": 0, "loai_tru": 0, "khong_khau_tru": 0, "khong_xml": 0}
     no_deduct_val = no_deduct_tax = 0.0
+    kct_val = 0.0   # mua vào KCT / KKKNT: giá trị đưa vào [23]
 
     from .bank_filter import BANK_NOTE, is_bank_purchase
     from .reports import tthai_code
@@ -506,6 +514,13 @@ def compute(mst: str, kieu: str, ky: int, nam: int, inputs: dict[str, Any] | Non
                     line["kt"] = True
                     ct["23"] += val
                     ct["24"] += tax
+                elif c in ("KCT", "KKKNT"):
+                    # HHDV không chịu thuế / không kê khai tính nộp thuế: giá trị chưa thuế vẫn đưa vào [23], không có thuế
+                    line["kt"] = False
+                    line["ghi_chu"] = "; ".join(x for x in (line["ghi_chu"], f"{c}: giá trị đưa vào [23], không có thuế "
+                                                           "GTGT khấu trừ") if x)
+                    ct["23"] += val
+                    kct_val += val
                 else:
                     line["kt"] = False
                     line["ghi_chu"] = ("Hóa đơn bán hàng – không có thuế GTGT khấu trừ" if mau == "2" and direction == "purchase"
@@ -536,6 +551,32 @@ def compute(mst: str, kieu: str, ky: int, nam: int, inputs: dict[str, Any] | Non
         for it in its:
             items[direction].append({"ngay": r.get("ngay_lap"), "kh": r.get("khhdon"), "so": r.get("shdon"),
                                      "mst": partner_mst, "ten_dt": partner, **it, "tong": it["tt"] + (it["thue"] or 0)})
+
+    # ----- danh sách riêng: HĐ ngân hàng, HĐ bị thay thế / thay thế / bị điều chỉnh / điều chỉnh (sheet trong Excel)
+    def _lq(r: dict[str, Any], lien_quan: str, xu_ly: str, sau: tuple[float, float] | None = None) -> dict[str, Any]:
+        mua = r.get("huong") == "purchase"
+        d = {"huong": "Mua vào" if mua else "Bán ra", "loai": r.get("loai"), "ngay": r.get("ngay_lap"),
+             "mau": r.get("khmshdon"), "kh": r.get("khhdon"), "so": r.get("shdon"),
+             "mst": r.get("nbmst") if mua else r.get("nmmst"), "ten": r.get("nbten") if mua else r.get("nmten"),
+             "gt": round(_num(r.get("tgtcthue"))), "thue": round(_num(r.get("tgtthue"))), "tong": round(_num(r.get("tgtttbso"))),
+             "tthai": r.get("tthai"), "lien_quan": lien_quan, "xu_ly": xu_ly}
+        if sau is not None:
+            d["gt_sau"], d["thue_sau"] = round(sau[0]), round(sau[1])
+        return d
+
+    lien_quan: dict[str, list[dict[str, Any]]] = {"ngan_hang": [], "bi_thay_the": [], "thay_the": [],
+                                                  "bi_dieu_chinh": [], "dieu_chinh": []}
+    for r, why in excluded:
+        if why == BANK_NOTE:
+            lien_quan["ngan_hang"].append(_lq(r, "", why))
+    role_of = {2: "thay_the", 3: "dieu_chinh", 4: "bi_thay_the", 5: "bi_dieu_chinh"}
+    for p in prepared:
+        role = p.get("role") or role_of.get(p["code"])
+        if not role:
+            continue
+        xu_ly = p["drop"] or ("Kê khai" + (": " + "; ".join(p["note"]) if p["note"] else ""))
+        sau = _sum_rates(p["rates"]) if role == "bi_dieu_chinh" and not p["drop"] else None
+        lien_quan[role].append(_lq(p["r"], p.get("link") or "", xu_ly, sau))
 
     # ----- chỉ tiêu nhập tay + công thức của tờ khai
     ct["23a"], ct["24a"] = inputs["ct23a"], inputs["ct24a"]
@@ -583,7 +624,10 @@ def compute(mst: str, kieu: str, ky: int, nam: int, inputs: dict[str, Any] | Non
     if stat["khong_khau_tru"]:
         warnings.append(f"{stat['khong_khau_tru']} hóa đơn mua vào không phải hóa đơn GTGT (mẫu 2…) – không khấu trừ.")
     if no_deduct_val:
-        warnings.append(f"HHDV mua vào không đưa vào [23]/[24]: giá trị {fmt(no_deduct_val)} đ (KCT, KKKNT, HĐ bán hàng).")
+        warnings.append(f"HHDV mua vào không đưa vào [23]/[24]: giá trị {fmt(no_deduct_val)} đ (HĐ bán hàng / không khấu trừ).")
+    if kct_val:
+        warnings.append(f"HHDV mua vào không chịu thuế (KCT) / không kê khai tính nộp (KKKNT): giá trị {fmt(kct_val)} đ "
+                        "đã đưa vào chỉ tiêu [23], không có thuế đầu vào [24].")
     cash = [w for w in warn_rows if "tiền mặt" in w[1]]
     if cash:
         warnings.append(f"{len(cash)} hóa đơn mua vào từ 5 triệu đồng: cần chứng từ thanh toán không dùng tiền mặt "
@@ -623,6 +667,7 @@ def compute(mst: str, kieu: str, ky: int, nam: int, inputs: dict[str, Any] | Non
                       "loai": r.get("loai"), "why": why}
                      for r, why in excluded],
         "rows": len(rows),
+        "lien_quan": lien_quan,
     }
 
 
@@ -975,6 +1020,61 @@ def _write_excel(res: dict[str, Any], dest: Path) -> Path:
 
     item_sheet("CT HHDV ban ra", res["items"]["sold"], "người mua")
     item_sheet("CT HHDV mua vao", res["items"]["purchase"], "người bán")
+
+    # ----- HĐ ngân hàng + HĐ thay thế / điều chỉnh (luôn có sheet, không có HĐ thì để trống)
+    from openpyxl.utils import get_column_letter
+
+    def lq_sheet(title: str, heading: str, data: list[dict[str, Any]], lien_quan: str, sau: bool = False) -> None:
+        w = wb.create_sheet(title)
+        cols = [("STT", 6), ("Hướng", 9), ("Loại hóa đơn", 24), ("Ngày lập", 11), ("Mẫu số", 7), ("Ký hiệu", 10),
+                ("Số HĐ", 10), ("MST đối tác", 15), ("Tên đối tác", 36), ("Giá trị chưa thuế", 17), ("Thuế GTGT", 15),
+                ("Tổng thanh toán", 17), ("Trạng thái HĐ", 16)]
+        if lien_quan:
+            cols.append((lien_quan, 18))
+        if sau:
+            cols += [("Giá trị chưa thuế sau điều chỉnh", 20), ("Thuế GTGT sau điều chỉnh", 17)]
+        cols.append(("Xử lý trên tờ khai", 60))
+        money_cols = {"Giá trị chưa thuế", "Thuế GTGT", "Tổng thanh toán", "Giá trị chưa thuế sau điều chỉnh",
+                      "Thuế GTGT sau điều chỉnh"}
+        w.merge_cells(f"A1:{get_column_letter(len(cols))}1")
+        w.cell(1, 1, heading).font = Font(bold=True, size=13)
+        w.cell(2, 1, f"Kỳ tính thuế: {res['label']} – Người nộp thuế: {res['company']['ten']} – MST {res['mst']}")
+        for i, (h, wd) in enumerate(cols, 1):
+            c = w.cell(4, i, h)
+            c.font, c.fill, c.alignment, c.border = bold, head, center, box
+            w.column_dimensions[c.column_letter].width = wd
+        if not data:
+            w.cell(5, 1, "Không có hóa đơn nào trong kỳ.").font = Font(italic=True, color="808080")
+        for n, x in enumerate(data, 1):
+            vals = [n, x["huong"], x["loai"], x["ngay"], x["mau"], x["kh"], x["so"], x["mst"], x["ten"], x["gt"], x["thue"],
+                    x["tong"], x["tthai"]]
+            if lien_quan:
+                vals.append(x["lien_quan"])
+            if sau:
+                vals += [x.get("gt_sau"), x.get("thue_sau")]
+            vals.append(x["xu_ly"])
+            for i, v in enumerate(vals, 1):
+                c = w.cell(n + 4, i, v)
+                c.border = box
+                if cols[i - 1][0] in money_cols:
+                    c.number_format = money
+                if i == len(vals):
+                    c.alignment = Alignment(wrap_text=True, vertical="top")
+        if data:
+            rr = len(data) + 5
+            w.cell(rr, 9, "TỔNG CỘNG").font = bold
+            for i, k in ((10, "gt"), (11, "thue"), (12, "tong")):
+                c = w.cell(rr, i, sum(x[k] for x in data))
+                c.font, c.number_format = bold, money
+        w.freeze_panes = "A5"
+
+    lq = res.get("lien_quan") or {}
+    lq_sheet("HD ngan hang", "HÓA ĐƠN CỦA NGÂN HÀNG (ĐÃ TÁCH RA – KHÔNG ĐƯA VÀO BẢNG KÊ MUA VÀO VÀ TỜ KHAI)",
+             lq.get("ngan_hang", []), "")
+    lq_sheet("HD bi thay the", "HÓA ĐƠN BỊ THAY THẾ", lq.get("bi_thay_the", []), "Bị thay thế bởi HĐ")
+    lq_sheet("HD thay the", "HÓA ĐƠN THAY THẾ", lq.get("thay_the", []), "Thay thế cho HĐ")
+    lq_sheet("HD bi dieu chinh", "HÓA ĐƠN BỊ ĐIỀU CHỈNH", lq.get("bi_dieu_chinh", []), "Bị điều chỉnh bởi HĐ", sau=True)
+    lq_sheet("HD dieu chinh", "HÓA ĐƠN ĐIỀU CHỈNH", lq.get("dieu_chinh", []), "Điều chỉnh cho HĐ")
 
     # ----- Cảnh báo
     w = wb.create_sheet("Canh bao", 1)
