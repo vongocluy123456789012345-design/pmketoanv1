@@ -192,17 +192,25 @@ def read_lines(data: bytes) -> dict[str, Any]:
     if "ten_hang" not in by and "ma_hang" not in by:
         raise ValueError("File không có cột Mã hàng / Tên hàng")
     lines = []
+    # file mẫu MISA còn nguyên dòng VÍ DỤ minh họa (ngày 31/01/2020, BPHP "Bàn phím máy tính"...): không phải dữ liệu
+    is_tpl = any("file mau" in _norm(ws.cell(r, 1).value) for r in range(1, min(hr, 6)))
+    skipped = 0
     for r in range(hr + 1, ws.max_row + 1):
         g = lambda k: ws.cell(r, by[k]).value if k in by else None  # noqa: E731
         ten, ma = str(g("ten_hang") or "").strip(), str(g("ma_hang") or "").strip()
         sl = _num(g("so_luong"))
         if not (ten or ma):
             continue
+        ngay = _date(g("ngay_hach_toan") or g("ngay_chung_tu") or g("ngay_hoa_don"))
+        if is_tpl and ngay == date(2020, 1, 31):
+            skipped += 1
+            continue
         tt = _num(g("thanh_tien")) or round(sl * _num(g("don_gia")))
         lines.append({"row": r, "ma": ma, "ten": ten, "dvt": str(g("dvt") or "").strip(), "sl": sl, "tt": tt,
                       "ck": _num(g("tien_ck")), "ngay": _date(g("ngay_hach_toan") or g("ngay_chung_tu") or g("ngay_hoa_don")),
                       "so_ct": str(g("so_chung_tu") or "").strip(), "so_hd": str(g("so_hoa_don") or "").strip()})
-    return {"lines": lines, "hr": hr, "cols": by, "sheet": ws.title, "sheet_index": wb.worksheets.index(ws) + 1}
+    return {"lines": lines, "hr": hr, "cols": by, "sheet": ws.title, "sheet_index": wb.worksheets.index(ws) + 1,
+            "vi_du": skipped}
 
 
 # ------------------------------------------------------------------ ghép mã hàng
@@ -697,9 +705,15 @@ def run(job: Job, inp: dict[str, Any]) -> None:
                 src = (Path(mj.file).name, Path(mj.file).read_bytes())
                 job.say(f"{labels[key]}: đã điền {mj.done} hóa đơn vào mẫu ({Path(mj.file).name})")
             if src:
+                pk = read_lines(src[1])
+                if pk["vi_du"]:
+                    job.say(f"{labels[key]}: bỏ qua {pk['vi_du']} dòng ví dụ có sẵn của file mẫu MISA")
+                if not pk["lines"]:
+                    job.say(f"{labels[key]}: file chưa có dữ liệu – bỏ qua")
+                    continue
                 sources[key] = src
-                parsed[key] = read_lines(src[1])
-                job.say(f"{labels[key]}: {len(parsed[key]['lines'])} dòng hàng")
+                parsed[key] = pk
+                job.say(f"{labels[key]}: {len(pk['lines'])} dòng hàng")
         if "buy" not in parsed and "sell" not in parsed:
             raise ValueError("Cần ít nhất file mua vào hoặc bán ra (hoặc hóa đơn để chuyển vào mẫu)")
         groups = {labels[k]: parsed[k]["lines"] for k in ("buy", "sell", "ret") if k in parsed}

@@ -747,6 +747,65 @@ def _read_tuple(args):
         return {"file": name, "loi": f"Lỗi đọc: {e}", "items": []}
 
 
+def _read_path(args):
+    """Tiến trình phụ: đọc file từ ổ đĩa (không gửi nội dung file qua lại giữa tiến trình -> đỡ tốn RAM)."""
+    name, path, idx = args
+    try:
+        return read_one(name, Path(path).read_bytes(), idx)
+    except MemoryError:
+        return {"file": name, "loi": "Không đủ bộ nhớ để đọc file này", "items": []}
+    except Exception as e:  # noqa: BLE001
+        return {"file": name, "loi": f"Lỗi đọc: {e}", "items": []}
+
+
+def _read_all(items: list[tuple[str, bytes]], idx: dict, job: "Job") -> list[dict[str, Any]]:
+    """Đọc nhiều hóa đơn song song bằng ÍT tiến trình (OCR bản scan rất tốn RAM): ghi file tạm ra ổ đĩa, mỗi tiến
+    trình đọc 1 file. Tiến trình phụ hỏng (thiếu RAM...) thì đọc nốt phần còn lại ngay trong tiến trình chính."""
+    import os
+    import tempfile
+    from concurrent.futures import as_completed
+
+    invs: list[dict[str, Any] | None] = [None] * len(items)
+    # Dùng LUỒNG trong tiến trình chính, không dùng tiến trình phụ: bộ OCR của Windows (WinRT) chạy trong tiến trình phụ
+    # báo "Not enough memory resources" với mọi file -> hóa đơn scan không đọc được. OCR WinRT nhả GIL nên vẫn song song.
+    workers = max(2, min(4, os.cpu_count() or 2))
+    with tempfile.TemporaryDirectory(prefix="awb_hd_") as td:
+        paths = []
+        for i, (n, d) in enumerate(items):
+            p = Path(td) / f"{i:05d}{Path(n).suffix.lower() or '.bin'}"
+            p.write_bytes(d)
+            paths.append(str(p))
+        done = 0
+
+        def took(i: int, inv: dict[str, Any]) -> None:
+            nonlocal done
+            invs[i] = inv
+            done += 1
+            if inv.get("items") or inv.get("loi"):
+                job.done += 1
+            if done % 10 == 0 or done == len(items):
+                job.say(f"Đã đọc {done}/{len(items)} hóa đơn")
+
+        if len(items) >= 2:
+            try:
+                with ThreadPoolExecutor(workers) as ex:
+                    futs = {ex.submit(_read_path, (n, paths[i], idx)): i for i, (n, _d) in enumerate(items)}
+                    for f in as_completed(futs):
+                        took(futs[f], f.result())
+            except (MemoryError, OSError) as e:
+                job.say(f"Đọc song song bị dừng ({type(e).__name__}) – đọc tiếp lần lượt từng hóa đơn")
+        # file lỗi vì thiếu tài nguyên khi đọc song song: đọc lại lần lượt
+        for i, inv in enumerate(invs):
+            if inv and "memory" in str(inv.get("loi") or "").lower() + str(inv.get("loi") or "").lower().replace("bộ nhớ", "memory"):
+                invs[i] = None
+                job.done -= 1 if (inv.get("items") or inv.get("loi")) else 0
+                done -= 1
+        for i, (n, _d) in enumerate(items):
+            if invs[i] is None:
+                took(i, _read_path((n, paths[i], idx)))
+    return invs  # type: ignore[return-value]
+
+
 def run(job: Job, files: list[tuple[str, bytes]], tpl: bytes, direction: str, own_mst: str, acc: dict[str, str],
         tpl_name: str = "") -> None:
     from . import fill_template as ft
@@ -766,19 +825,8 @@ def run(job: Job, files: list[tuple[str, bytes]], tpl: bytes, direction: str, ow
         job.total = len(items)
         idx = local_index()
         job.say(f"Đọc {len(items)} hóa đơn (dùng XML/dữ liệu cổng trên máy nếu có – {len(idx)} hóa đơn đã tải)")
-        invs: list[dict[str, Any]] = [None] * len(items)  # type: ignore[list-item]
-        import os
-        from concurrent.futures import ProcessPoolExecutor
-        workers = max(2, min(8, (os.cpu_count() or 4) - 1))
-        # bước 1: đọc nhanh không cần AI – nhiều tiến trình song song (đọc PDF tốn CPU)
-        pool = ProcessPoolExecutor(workers) if len(items) >= 4 else ThreadPoolExecutor(2)
-        with pool as ex:
-            for i, inv in enumerate(ex.map(_read_tuple, [(n, d, idx) for n, d in items], chunksize=2)):
-                invs[i] = inv
-                if inv.get("items") or inv.get("loi"):
-                    job.done += 1
-                if (i + 1) % 20 == 0:
-                    job.say(f"Đã đọc {i + 1}/{len(items)} hóa đơn")
+        # bước 1: đọc nhanh không cần AI – vài tiến trình song song (đọc PDF / OCR tốn CPU, RAM)
+        invs: list[dict[str, Any]] = _read_all(items, idx, job)
         need_ai = [i for i, v in enumerate(invs) if not v.get("items") and not v.get("loi")]
         if need_ai:
             job.say(f"{len(need_ai)} hóa đơn bố cục lạ / bản scan – AI đang đọc (song song)")

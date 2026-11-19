@@ -17,6 +17,14 @@ import webbrowser
 from pathlib import Path
 
 
+# Bản exe không có cửa sổ console: stdout/stderr = None, kể cả trong các TIẾN TRÌNH PHỤ đọc hóa đơn song song.
+# Tiến trình phụ gặp lỗi mà ghi log vào None -> bật hộp "Unhandled exception in script". Gắn sẵn chỗ ghi rỗng.
+if sys.stdout is None:
+    sys.stdout = open(os.devnull, "w", encoding="utf-8")
+if sys.stderr is None:
+    sys.stderr = open(os.devnull, "w", encoding="utf-8")
+
+
 def _setup_logging(root: Path) -> None:
     """Bản không có cửa sổ console: ghi log ra data/app.log (và tránh lỗi khi stdout là None)."""
     (root / "data").mkdir(parents=True, exist_ok=True)

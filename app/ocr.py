@@ -64,10 +64,20 @@ async def _recognize_file(path: str) -> str:
     from winsdk.windows.storage import FileAccessMode, StorageFile
     f = await StorageFile.get_file_from_path_async(path)
     stream = await f.open_async(FileAccessMode.READ)
-    dec = await BitmapDecoder.create_async(stream)
-    bmp = await dec.get_software_bitmap_async()
-    eng, _ = _engine()
-    res = await eng.recognize_async(bmp)
+    bmp = None
+    try:
+        dec = await BitmapDecoder.create_async(stream)
+        bmp = await dec.get_software_bitmap_async()
+        eng, _ = _engine()
+        res = await eng.recognize_async(bmp)
+    finally:
+        # ĐÓNG ảnh + luồng đọc file: không đóng thì lần OCR kế tiếp báo "Not enough memory resources"
+        for o in (bmp, stream):
+            try:
+                if o is not None:
+                    o.close()
+            except Exception:  # noqa: BLE001
+                pass
     words = []
     for line in res.lines:
         for w in line.words:
@@ -102,13 +112,27 @@ def _rows(words: list[tuple[float, float, float, float, str]]) -> str:
     return "\n".join(out)
 
 
+_OCR_LOCK = __import__("threading").Lock()
+
+
 def ocr_pil(img, ink: bool = False) -> str:
+    """Bộ OCR của Windows KHÔNG chạy được nhiều lần nhận dạng cùng lúc (nhiều luồng / tiến trình -> lỗi
+    "Not enough memory resources", mã -2147024882): mỗi lúc chỉ 1 lần OCR, gặp lỗi đó thì chờ rồi thử lại."""
+    import time
     img = _prepare(img, ink)
     fd, path = tempfile.mkstemp(suffix=".png")
     os.close(fd)
     try:
         img.save(path, "PNG")
-        return asyncio.run(_recognize_file(path))
+        for attempt in range(6):
+            try:
+                with _OCR_LOCK:
+                    return asyncio.run(_recognize_file(path))
+            except OSError as e:   # OCR đang bận ở tiến trình khác / tài nguyên tạm thiếu
+                if "-2147024882" not in str(e) and "memory" not in str(e).lower() or attempt == 5:
+                    raise
+                time.sleep(0.4 * (attempt + 1))
+        return ""
     finally:
         try:
             os.remove(path)
