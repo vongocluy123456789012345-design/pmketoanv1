@@ -633,7 +633,7 @@ async def inventory_run(opening: UploadFile = File(...), tpl: UploadFile | None 
                         sell_file: UploadFile | None = File(None), sell_inv: list[UploadFile] | None = File(None),
                         ret_file: UploadFile | None = File(None), ret_inv: list[UploadFile] | None = File(None),
                         catalog_tpl: UploadFile | None = File(None), mst: str = Form(""), ky_text: str = Form(""),
-                        ngay: str = Form(""), accounts: str = Form("{}")):
+                        ngay: str = Form(""), accounts: str = Form("{}"), ten_dn: str = Form("")):
     """Tổng hợp tồn kho theo mẫu MISA: đầu kỳ + mua vào + bán ra (+ hàng bán trả lại), ghép mã hàng tự động."""
     import json as _json
 
@@ -646,7 +646,7 @@ async def inventory_run(opening: UploadFile = File(...), tpl: UploadFile | None 
         return (f.filename or "file", data) if data else None
 
     inp: dict = {"opening": await one(opening), "tpl": await one(tpl), "catalog_tpl": await one(catalog_tpl),
-                 "mst": mst.strip(), "ky_text": ky_text.strip(), "ngay": ngay.strip()}
+                 "mst": mst.strip(), "ky_text": ky_text.strip(), "ngay": ngay.strip(), "ten_dn": ten_dn.strip()}
     try:
         inp["acc"] = _json.loads(accounts or "{}")
     except ValueError:

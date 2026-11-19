@@ -389,7 +389,10 @@ def period_text(d1: date | None, d2: date | None) -> str:
     return f"Từ ngày {d1:%d/%m/%Y} đến ngày {d2:%d/%m/%Y}"
 
 
-def write_report(tpl: bytes, rows: list[dict[str, Any]], ky_text: str, ngay_ky: date | None) -> bytes:
+DEFAULT_TPL = Path(__file__).resolve().parent / "assets" / "mau_tong_hop_ton_kho.xlsx"
+
+
+def write_report(tpl: bytes, rows: list[dict[str, Any]], ky_text: str, ngay_ky: date | None, ten_dn: str = "") -> bytes:
     """Ghi vào CHÍNH file mẫu Tổng hợp tồn kho (.xlsx của MISA): giữ phần đầu (tên đơn vị, tiêu đề), dòng tiêu đề
     cột, định dạng ô, chữ ký; thay dữ liệu, dòng Tổng cộng, ngày ký. Tiêu đề cột in lặp lại ở mỗi trang."""
     from openpyxl import load_workbook
@@ -403,7 +406,11 @@ def write_report(tpl: bytes, rows: list[dict[str, Any]], ky_text: str, ngay_ky: 
     wb = load_workbook(io.BytesIO(tpl))
     ws = wb.worksheets[0]
     # dòng tiêu đề cột (Tên kho / Mã hàng ...) + dòng Số lượng/Giá trị ngay dưới
-    hr = next(r for r in range(1, 40) if _norm(ws.cell(r, 2).value) == "ma hang" or _norm(ws.cell(r, 1).value) == "ten kho")
+    hr = next((r for r in range(1, 40) if _norm(ws.cell(r, 2).value) == "ma hang" or _norm(ws.cell(r, 1).value) == "ten kho"), None)
+    if not hr:
+        raise ValueError("File mẫu Tổng hợp tồn kho không có dòng tiêu đề 'Tên kho / Mã hàng' như báo cáo MISA")
+    if ten_dn:
+        ws.cell(1, 1).value = ten_dn
     first = hr + 2
     # dòng mẫu: dòng dữ liệu đầu, dòng Tổng cộng, khối ngày ký + chữ ký
     tot_r = next((r for r in range(first, ws.max_row + 1) if _norm(ws.cell(r, 1).value).startswith("tong cong")), None)
@@ -492,9 +499,9 @@ def write_report(tpl: bytes, rows: list[dict[str, Any]], ky_text: str, ngay_ky: 
                 cell.font = f
         for k in tot:
             tot[k] += x.get(k) or 0
-        # chiều cao dòng theo độ dài tên hàng (cột tên hàng ~36 ký tự / dòng như mẫu MISA)
+        # chiều cao dòng theo độ dài tên hàng (cột tên hàng ~30 ký tự / dòng như mẫu MISA)
         ln = len(str(x.get("ten") or ""))
-        ws.row_dimensions[r].height = 15.75 * max(1, -(-ln // 36))
+        ws.row_dimensions[r].height = 15.75 * max(1, -(-ln // 30))
         r += 1
     # Tổng cộng
     put_row(r, tot_style, tot_merges)
@@ -715,9 +722,14 @@ def run(job: Job, inp: dict[str, Any]) -> None:
         job.report = report
         job.say(f"Ghép mã: {len(report)} tên hàng – {new} mã MỚI, {chk} cần kiểm tra")
         # 1) Tổng hợp tồn kho theo mẫu
-        tpl_name, tpl = inp.get("tpl") or (op_name, op_data)
+        if inp.get("tpl"):
+            tpl_name, tpl = inp["tpl"]
+        elif opening["loai"] == "tonkho":          # đầu kỳ là báo cáo Tổng hợp tồn kho MISA: dùng luôn định dạng đó
+            tpl_name, tpl = op_name, op_data
+        else:                                    # mẫu Tổng hợp tồn kho chuẩn MISA có sẵn trong phần mềm
+            tpl_name, tpl = DEFAULT_TPL.name, DEFAULT_TPL.read_bytes()
         f1 = out_dir / f"TONG_HOP_TON_KHO_{re.sub(r'[^0-9A-Za-z]+', '_', fold(ky_text))}.xlsx"
-        f1.write_bytes(write_report(tpl, rows, ky_text, ngay))
+        f1.write_bytes(write_report(tpl, rows, ky_text, ngay, inp.get("ten_dn", "")))
         job.files["tonkho"] = str(f1)
         job.say(f"Đã lập Tổng hợp tồn kho {ky_text}: {len(rows)} mã hàng" +
                 (f" – {job.stat['am']} dòng tồn cuối kỳ ÂM (kiểm tra lại số đầu kỳ / chứng từ bán)" if job.stat["am"] else ""))
@@ -746,7 +758,7 @@ def run(job: Job, inp: dict[str, Any]) -> None:
         job.say("Xong.")
     except Exception as e:  # noqa: BLE001
         job.status = "error"
-        job.say(f"LỖI: {e}")
+        job.say(f"LỖI: {e or type(e).__name__}")
 
 
 def start(inp: dict[str, Any]) -> Job:

@@ -387,10 +387,11 @@
     <div class="inline">
       <div style="flex:2"><label>1. Tồn kho đầu kỳ / danh mục hàng hóa (*) – báo cáo Tổng hợp tồn kho kỳ trước hoặc Danh mục VTHH</label>
         <input type="file" id="tkOpen" accept=".xlsx,.xls,.xlsm,.ods,.csv"></div>
-      <div style="flex:2"><label>2. Mẫu Tổng hợp tồn kho để xuất (bỏ trống = dùng định dạng file đầu kỳ)</label>
+      <div style="flex:2"><label>2. Mẫu Tổng hợp tồn kho để xuất (bỏ trống = dùng mẫu chuẩn MISA có sẵn)</label>
         <input type="file" id="tkTpl" accept=".xlsx,.xls,.xlsm"></div>
     </div>
     <div class="inline" style="margin-top:6px">
+      <div style="flex:2"><label>Tên đơn vị (dòng đầu báo cáo)</label><input id="tkTen" placeholder="vd HỘ KINH DOANH VNB SPORTS"></div>
       <div><label>Kỳ báo cáo (bỏ trống = tự theo ngày chứng từ)</label><input id="tkKy" placeholder="vd Tháng 11 năm 2026"></div>
       <div><label>Ngày ký (bỏ trống = cuối kỳ)</label><input type="date" id="tkNgay"></div>
       <div style="flex:2"><label>Mẫu Danh mục VTHH của MISA (tùy chọn – để xuất danh mục hàng MỚI đúng mẫu)</label>
@@ -1472,7 +1473,7 @@ $("btnTk").onclick = async () => {
     .forEach(([k, id]) => { if ($(id).files[0]) fd.append(k, $(id).files[0]); });
   tkBuyZ.files.forEach(f => fd.append("buy_inv", f)); tkSellZ.files.forEach(f => fd.append("sell_inv", f));
   tkRetZ.files.forEach(f => fd.append("ret_inv", f));
-  fd.append("ky_text", $("tkKy").value.trim()); fd.append("ngay", $("tkNgay").value);
+  fd.append("ky_text", $("tkKy").value.trim()); fd.append("ngay", $("tkNgay").value); fd.append("ten_dn", $("tkTen").value.trim());
   $("btnTk").disabled = true; $("tkFiles").innerHTML = ""; $("tkRows").innerHTML = "";
   msg($("tkMsg"), "Đang xử lý…", true);
   try {
