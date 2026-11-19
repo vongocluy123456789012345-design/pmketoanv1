@@ -522,10 +522,12 @@ def compute(mst: str, kieu: str, ky: int, nam: int, inputs: dict[str, Any] | Non
                     ct["23"] += val
                     kct_val += val
                 else:
+                    # HĐ bán hàng (mẫu 2) / HĐ không phải HĐ GTGT: giá trị vẫn đưa vào [23], thuế không khấu trừ
                     line["kt"] = False
-                    line["ghi_chu"] = ("Hóa đơn bán hàng – không có thuế GTGT khấu trừ" if mau == "2" and direction == "purchase"
-                                       else "Không chịu thuế / không kê khai – không khấu trừ" if c in ("KCT", "KKKNT")
-                                       else "Không khấu trừ")
+                    line["ghi_chu"] = "; ".join(x for x in (line["ghi_chu"], (
+                        "Hóa đơn bán hàng: giá trị đưa vào [23], không có thuế GTGT khấu trừ" if mau == "2"
+                        else "Không phải HĐ GTGT: giá trị đưa vào [23], thuế không được khấu trừ")) if x)
+                    ct["23"] += val
                     no_deduct_val += val
                     no_deduct_tax += tax
             else:
@@ -624,7 +626,8 @@ def compute(mst: str, kieu: str, ky: int, nam: int, inputs: dict[str, Any] | Non
     if stat["khong_khau_tru"]:
         warnings.append(f"{stat['khong_khau_tru']} hóa đơn mua vào không phải hóa đơn GTGT (mẫu 2…) – không khấu trừ.")
     if no_deduct_val:
-        warnings.append(f"HHDV mua vào không đưa vào [23]/[24]: giá trị {fmt(no_deduct_val)} đ (HĐ bán hàng / không khấu trừ).")
+        warnings.append(f"HHDV mua vào theo hóa đơn bán hàng (mẫu 2) / không phải HĐ GTGT: giá trị {fmt(no_deduct_val)} đ "
+                        "đã đưa vào chỉ tiêu [23], không có thuế đầu vào [24].")
     if kct_val:
         warnings.append(f"HHDV mua vào không chịu thuế (KCT) / không kê khai tính nộp (KKKNT): giá trị {fmt(kct_val)} đ "
                         "đã đưa vào chỉ tiêu [23], không có thuế đầu vào [24].")

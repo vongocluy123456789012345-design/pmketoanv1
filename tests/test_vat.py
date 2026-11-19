@@ -51,7 +51,7 @@ def test_compute():
             (folder / ".dulieu_2026-11.json").write_text(json.dumps({"saved": "2026-12-01", "rows": rows}), encoding="utf-8")
             r = vat.compute("0312345678", "M", 11, 2026, {"ct22": 1_000_000, "khong_kt": 500_000})
             ct = r["ct"]
-            assert ct["23"] == 83_000_000 and ct["24"] == 8_000_000 and ct["25"] == 7_500_000
+            assert ct["23"] == 87_000_000 and ct["24"] == 8_000_000 and ct["25"] == 7_500_000
             assert ct["26"] == 10_000_000 and ct["30"] == 20_000_000 and ct["31"] == 1_000_000
             assert ct["32"] == 150_000_000 and ct["33"] == 13_000_000
             assert ct["27"] == 170_000_000 and ct["28"] == 14_000_000 and ct["34"] == 180_000_000 and ct["35"] == 14_000_000
