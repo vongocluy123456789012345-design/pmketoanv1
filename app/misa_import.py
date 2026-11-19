@@ -410,6 +410,93 @@ def items_from_pdf_tables(data: bytes) -> list[dict[str, Any]]:
     return items
 
 
+_NUM = r"(-?\d[\d.,]*)"
+_ROW_FULL = re.compile(r"^\s*(\d{1,3})\s+(.+?)\s+(\S+)\s+" + _NUM + r"\s+" + _NUM + r"\s+" + _NUM + r"\s*$")
+_ROW_NUMS = re.compile(r"^\s*(\d{1,3})\s+(\S+(?:\s+\S+)?)\s+" + _NUM + r"\s+" + _NUM + r"\s+" + _NUM + r"\s*$")
+_ROW_NODVT = re.compile(r"^\s*(\d{1,3})\s+" + _NUM + r"\s+" + _NUM + r"\s+" + _NUM + r"\s*$")   # không có ĐVT
+
+
+_PAGE_NOISE = re.compile(r"trang\s*:|tiep theo|tra cuu|giai phap|cung cap|website|dia chi|ho kinh doanh|so tai khoan|"
+                         r"hoa don ban hang|ky hieu|\(day\)|ma co quan|ho ten nguoi|ten don vi|ma so thue|can cuoc|"
+                         r"hinh thuc|^stt|\(no\.\)|goods, services|mst ")
+
+
+def _name_lines(raw: list[str], folded: list[str]) -> list[str]:
+    """Dòng chữ thuộc tên hàng trong khoảng giữa 2 dòng số: bỏ chân trang / đầu trang sau khi sang trang
+    (từ "Trang: 1/3" tới dòng số cột "1 2 3 4 5 6=4x5" của trang sau)."""
+    out, skip = [], False
+    for ln, fl in zip(raw, folded):
+        if not ln:
+            continue
+        if "=4x5" in fl.replace(" ", ""):
+            skip = False
+            continue
+        if re.search(r"trang\s*:|tiep theo", fl):
+            skip = True
+        if skip or _PAGE_NOISE.search(fl):
+            continue
+        out.append(ln)
+    return out
+
+
+def items_from_ocr_text(text: str) -> list[dict[str, Any]]:
+    """Đọc bảng hàng hóa từ chữ OCR (hóa đơn scan / máy tính tiền) KHÔNG cần AI.
+    Dòng hàng: "STT [tên hàng] ĐVT SL Đơn giá Thành tiền" (SL x Đơn giá = Thành tiền). Tên hàng dài bị tách lên / xuống
+    dòng số (căn giữa ô) -> ghép các dòng chữ quanh dòng số; khoảng giữa 2 dòng hàng chia đôi cho 2 hàng."""
+    from .docreader import _ocr_clean
+    lines = [ln.strip() for ln in _ocr_clean(text).splitlines()]
+    f = [fold(ln).lower() for ln in lines]
+    start = next((i for i, x in enumerate(f) if "=4x5" in x.replace(" ", "")), None)      # dòng số cột (1)(2)..6=4x5
+    if start is None:
+        start = next((i for i, x in enumerate(f) if "(amount)" in x or "thanh tien" in x), None)
+    if start is None:
+        start = next((i for i, x in enumerate(f) if x.startswith("stt")), None)
+    if start is None:
+        return []
+    end = next((i for i in range(start + 1, len(f)) if re.search(r"tong cong|cong tien|total amount|tong tien", f[i])), len(f))
+    rows: list[tuple[int, dict[str, Any]]] = []
+    for i in range(start + 1, end):
+        ln = lines[i]
+        nd = _ROW_NODVT.match(ln)
+        m = None if nd else _ROW_NUMS.match(ln)
+        full = None if (nd or m) else _ROW_FULL.match(ln)
+        if nd:
+            stt, sl, dg, tt = nd.group(1), vn_num(nd.group(2)), vn_num(nd.group(3)), vn_num(nd.group(4))
+        elif m or full:
+            mm = m or full
+            stt, sl, dg, tt = mm.group(1), vn_num(mm.group(m and 3 or 4)), vn_num(mm.group(m and 4 or 5)), vn_num(mm.group(m and 5 or 6))
+        else:
+            continue
+        if not (sl and dg and tt) or abs(sl * dg - tt) > max(2, abs(tt) * 0.01):
+            continue
+        if nd:
+            name, dvt = "", ""
+        elif m:
+            name, dvt = "", m.group(2)
+        else:
+            name, dvt = full.group(2), full.group(3)
+        rows.append((i, {"stt": int(stt), "ten": name, "dvt": dvt, "sl": sl, "dg": dg, "tt": tt}))
+    if not rows:
+        return []
+    # ghép tên hàng cho dòng chỉ có số: chữ ở khoảng trống trên / dưới dòng số
+    idxs = [i for i, _ in rows]
+    inline = [bool(r["ten"]) for _, r in rows]     # dòng có sẵn tên ngay trên dòng số (không chia khoảng trống)
+    for k, (i, r) in enumerate(rows):
+        if r["ten"]:
+            continue
+        prev_i = idxs[k - 1] if k else start
+        next_i = idxs[k + 1] if k + 1 < len(rows) else end
+        above = _name_lines(lines[prev_i + 1:i], f[prev_i + 1:i])
+        below = _name_lines(lines[i + 1:next_i], f[i + 1:next_i])
+        if k and not inline[k - 1]:             # khoảng giữa với hàng trước (cũng tách tên): mỗi hàng nửa khoảng
+            above = above[len(above) // 2:]
+        if k + 1 < len(rows) and not inline[k + 1]:
+            below = below[: (len(below) + 1) // 2]
+        r["ten"] = re.sub(r"\s+", " ", " ".join(above + below)).strip(" -")
+    return [{"ma": None, "ten": r["ten"], "dvt": r["dvt"], "sl": r["sl"], "dg": r["dg"], "tt": r["tt"], "ck": None,
+             "ts": None, "thue": None} for _, r in rows if r["ten"]]
+
+
 def items_ok(inv: dict[str, Any]) -> bool:
     """Tổng thành tiền các dòng phải khớp tổng tiền hàng của hóa đơn (sai số 0,5% hoặc 1.000đ)."""
     items, total = inv.get("items") or [], inv.get("tgtcthue")
@@ -499,6 +586,14 @@ def read_one(name: str, data: bytes, idx: dict) -> dict[str, Any]:
         if items_ok(inv):
             inv["nguon"] = "PDF (bảng hàng hóa)"
             return inv
+    else:  # bản scan / ảnh: đọc bảng hàng từ chữ OCR (nhanh, không cần AI) – chỉ nhận khi tổng khớp
+        try:
+            inv["items"] = items_from_ocr_text(text)
+        except Exception:  # noqa: BLE001
+            inv["items"] = []
+        if items_ok(inv):
+            inv["nguon"] = "OCR (bảng hàng hóa)"
+            return inv
     inv["items"] = []
     return inv
 
@@ -555,7 +650,7 @@ def build_rows(inv: dict[str, Any], direction: str, seq: int, acc: dict[str, str
         pttt = {"Tiền mặt": "Thu tiền ngay - Tiền mặt", "Ủy nhiệm chi": "Thu tiền ngay - Chuyển khoản"}.get(pttt, "Chưa thu tiền")
     paid = not pttt.startswith("Chưa")
     mau = str(inv.get("khmshdon") or "1").strip()
-    nhan_kem = "Nhận kèm hóa đơn bán hàng" if mau == "2" else "Nhận kèm hóa đơn GTGT"
+    nhan_kem = ("Nhận kèm hóa đơn bán hàng" if mau == "2" else "Nhận kèm hóa đơn GTGT") if purchase else "Có"  # bán ra: "Lập kèm hóa đơn" Có/Không
     mtc = str(inv.get("ma_tra_cuu") or "").strip()
     mtc = mtc if re.fullmatch(r"[A-Za-z0-9_\-]{5,60}", mtc) else None  # mã đọc từ PDF lỗi -> để trống
     mst_doi_tac = str(partner["mst"] or "").strip() or None

@@ -174,7 +174,15 @@ def parse_pdf_text(t: str, source: str = "PDF") -> dict[str, Any]:
     m = RX["tong_cong3"].search(f)  # bảng tổng hợp nhiều thuế suất: "Tổng cộng: <trước thuế> <thuế> <thanh toán>"
     if m and out["tgtttbso"] is None:
         out["tgtcthue"], out["tgtthue"], out["tgtttbso"] = (vn_num(m.group(k)) for k in (1, 2, 3))
-    _fix_amounts(out, f)
+    if str(out.get("khmshdon") or "") == "2":
+        # HĐ bán hàng (mẫu 2, kể cả máy tính tiền 2C...): KHÔNG có thuế GTGT -> tiền hàng = tổng thanh toán
+        if out.get("tgtttbso") is None:   # nhãn "Tổng cộng thanh toán" OCR đọc sai ("Tdng cöng"): số tiền lớn nhất
+            m2 = re.search(r"(?:t\w{1,3}ng\s*c\w{1,3}ng|total amount)[^\d\n]{0,60}?([\d][\d.,]*)", f, re.I)
+            nums = [vn_num(x) for x in _MONEY_TOKEN.findall(f)]
+            out["tgtttbso"] = vn_num(m2.group(1)) if m2 else (max((x for x in nums if x), default=None))
+        out["tgtthue"], out["tgtcthue"] = 0.0, out["tgtttbso"]
+    else:
+        _fix_amounts(out, f)
     ts = g("thue_suat")
     out["thue_suat"] = re.sub(r"\s|0/0", lambda x: "" if x.group(0).isspace() else "%", ts) if ts else None
     mc = g("mccqt")
