@@ -433,7 +433,25 @@ def _cat(name: str) -> str:
             if c == "cau" and len(ws) > 1 and ws[ws.index(w) + 1:ws.index(w) + 2] == ["long"]:
                 continue     # "cầu lông" là môn, không phải loại hàng
             return c
+    # tên OCR cụt không có chữ loại hàng: nhận theo dấu hiệu (chưa căng lưới / 4U5 / mã vợt Yonex BFR...)
+    t = " " + _norm(name) + " "
+    if re.search(r" (chua cang luoi|cang luoi|[3-6]u[4-7]?|bfr[0-9a-z]*) ", t):
+        return "vot"
     return ""
+
+
+_OCR_DIGIT = str.maketrans("iol", "101")
+_YONEX_LINE = {"ax": "Astrox", "arc": "Arcsaber", "nf": "Nanoflare", "vc": "Voltric", "dr": "Duora", "nr": "Nanoray"}
+
+
+def _expand_sku(name: str) -> str:
+    """Giải nghĩa mã vợt Yonex trong tên (OCR hay chỉ còn mã): "BFR3AX88DZTZ" -> thêm "Yonex Astrox 88D"."""
+    out = []
+    for w in _norm(name).split():
+        m = re.match(r"bfr\d?(ax|arc|nf|vc|dr|nr)([0-9iol]{1,3})([a-y]?)z", w)   # OCR: II = 11, IOO = 100
+        if m:
+            out.append(f"Vợt Yonex {_YONEX_LINE[m.group(1)]} {m.group(2).translate(_OCR_DIGIT)}{m.group(3).upper()}")
+    return f"{name} {' '.join(out)}" if out else name
 
 
 def _available(items: list[dict[str, Any]], groups: dict[str, list[dict[str, Any]]]) -> dict[str, float]:
@@ -465,7 +483,8 @@ def match_codes(items: list[dict[str, Any]], groups: dict[str, list[dict[str, An
             if ln["ma"] and ln["ma"].upper() in by_code:
                 ln["ma_ghep"], ln["cach"] = by_code[ln["ma"].upper()]["ma"], "Mã có sẵn trong file"
                 continue
-            key = _norm(ln["ten"])
+            nm = _expand_sku(ln["ten"])      # tên + mã SKU giải nghĩa (BFR3AX88D -> Astrox 88D)
+            key = _norm(nm)
             if key in memo:
                 m = memo[key]
                 if kind != "Mua vào" and "MỚI" in m["cach"]:     # bán đúng hàng vừa mua (mã tạo lúc ghép mua vào)
@@ -477,17 +496,17 @@ def match_codes(items: list[dict[str, Any]], groups: dict[str, list[dict[str, An
                 pool = items
                 pool_kw = [kw_cache.setdefault(id(i), _kw(i["ten"])) for i in items]
                 it = by_name.get(key)
-                kw_it, kw_sc, kw_why = (None, 0.0, "") if it else _kw_match(ln["ten"], pool, pool_kw, ln["dvt"])
+                kw_it, kw_sc, kw_why = (None, 0.0, "") if it else _kw_match(nm, pool, pool_kw, ln["dvt"])
                 if it:
                     m = {"ma": it["ma"], "diem": 1.0, "cach": "Trùng tên trong danh mục"}
                 elif kw_it is not None:
                     m = {"ma": kw_it["ma"], "diem": round(kw_sc, 2), "cach": kw_why}
-                elif fam := [i for i in pool if _family(ln["ten"], i["ten"], fk)] if (fk := _fam_kw(ln["ten"])) else []:
+                elif fam := [i for i in pool if _family(nm, i["ten"], fk)] if (fk := _fam_kw(nm)) else []:
                     if not buying:                     # bán ra: ưu tiên hàng cùng dòng còn tồn
                         if not avail:
                             avail.update(_available(items, groups))
                         fam = [i for i in fam if avail.get(i["ma"].upper(), 0) > 0] or fam
-                    best = _pick(ln["ten"], ln["dvt"], fam)
+                    best = _pick(nm, ln["dvt"], fam)
                     m = {"ma": best["ma"], "diem": 0.85,
                          "cach": "Cùng dòng / model, khác phiên bản – màu – size: ghép mã chuẩn – CẦN KIỂM TRA"}
                 else:
@@ -503,7 +522,7 @@ def match_codes(items: list[dict[str, Any]], groups: dict[str, list[dict[str, An
                         # bán ra phải là hàng ĐANG CÓ: trong các hàng gần nhất, ưu tiên hàng còn tồn (đầu kỳ + đã mua)
                         if not avail:
                             avail.update(_available(items, groups))
-                        cat = _cat(ln["ten"])
+                        cat = _cat(nm)
                         same = [(s, i) for s, i in scored if cat and _cat(i["ten"]) == cat]
                         if same:                     # cùng loại hàng (vợt với vợt, áo với áo...)
                             scored = same
@@ -538,47 +557,93 @@ def match_codes(items: list[dict[str, Any]], groups: dict[str, list[dict[str, An
     return report
 
 
+def _line_words(name: str) -> frozenset[str]:
+    """Tên hàng bỏ hết số hiệu / mã phía sau: "Ống cầu lông Hải Yến S90" -> {hai, yen}."""
+    return frozenset(w for w in _kw(name) if w.isalpha())
+
+
+def _near_tier(a: str, b: str) -> int:
+    """Mức gần giống để bù hàng thiếu tồn: 1 = cùng model khác phiên bản, 2 = cùng tên dòng khác số hiệu
+    (Halbertec 6000 ~ 1000), 3 = cùng loại + cùng tên chỉ khác mã phía sau (Hải Yến S90 ~ S70); 0 = khác hàng."""
+    if _cat(a) != _cat(b):
+        return 0
+    if _family(a, b):
+        return 1
+    la, lb = _line_words(a), _line_words(b)
+    if not la or not lb or not (la <= lb or lb <= la):
+        return 0
+    return 2 if (la & lb) - _FAM_WEAK else 3
+
+
 def _rebalance_sales(items: list[dict[str, Any]], groups: dict[str, list[dict[str, Any]]],
                      report: list[dict[str, Any]]) -> None:
-    """Bán ra VƯỢT số đang có của mã đã ghép (đầu kỳ + mua + trả lại) mà còn hàng CÙNG DÒNG / MODEL khác phiên bản đang
-    tồn (vd bán "BG 65 cuộn" hết hàng, kho còn "BG 65 Titanium" 133): chuyển dòng bán sang mã còn tồn đó."""
-    sell = groups.get("Bán ra") or []
+    """Bán ra VƯỢT số đang có của mã đã ghép (đầu kỳ + mua + trả lại): phần thiếu chuyển sang hàng GẦN GIỐNG còn dư
+    (ưu tiên cùng model khác phiên bản -> cùng dòng khác số hiệu -> cùng tên chỉ khác mã phía sau), vd thiếu
+    "BG 65 cuộn" -> "BG 65 Titanium", thiếu "Hải Yến S90" -> "Hải Yến S70"."""
+    sell = [ln for ln in groups.get("Bán ra") or [] if ln["sl"] > 0 and ln.get("ma_ghep")]
     if not sell:
         return
-    left: dict[str, float] = {}
+    have: dict[str, float] = {}
     for i in items:
-        left[i["ma"].upper()] = left.get(i["ma"].upper(), 0.0) + float(i.get("sl") or 0)
+        have[i["ma"].upper()] = have.get(i["ma"].upper(), 0.0) + float(i.get("sl") or 0)
     for kind in ("Mua vào", "Hàng bán trả lại"):
         for ln in groups.get(kind) or []:
             if ln.get("ma_ghep") and ln["sl"] > 0:
-                left[ln["ma_ghep"].upper()] = left.get(ln["ma_ghep"].upper(), 0.0) + ln["sl"]
+                have[ln["ma_ghep"].upper()] = have.get(ln["ma_ghep"].upper(), 0.0) + ln["sl"]
+    need: dict[str, float] = {}
+    for ln in sell:
+        need[ln["ma_ghep"].upper()] = need.get(ln["ma_ghep"].upper(), 0.0) + ln["sl"]
+    spare = {k: have.get(k, 0.0) - need.get(k, 0.0) for k in set(have) | set(need)}   # dư (+) / thiếu (-)
     by_code = {i["ma"].upper(): i for i in items}
-    fam_cache: dict[str, list[dict[str, Any]]] = {}
+    tiers: dict[tuple[str, str], list[list[dict[str, Any]]]] = {}
     moved: dict[tuple[str, str], str] = {}
-    for ln in sorted(sell, key=lambda x: (x.get("ngay") or date.min, x.get("row", 0))):
-        if ln["sl"] <= 0 or not ln.get("ma_ghep") or ln.get("cach") == "Mã có sẵn trong file":
-            continue
-        k = ln["ma_ghep"].upper()
-        if left.get(k, 0.0) >= ln["sl"]:
-            left[k] = left.get(k, 0.0) - ln["sl"]
-            continue
-        if ln["ten"] not in fam_cache:
-            fk = _fam_kw(ln["ten"])
-            cur = by_code.get(k)
-            fam_cache[ln["ten"]] = [i for i in items if i["ma"].upper() != k and (
-                _family(ln["ten"], i["ten"], fk) or (cur is not None and _family(cur["ten"], i["ten"])))]
-        alt = [i for i in fam_cache[ln["ten"]] if left.get(i["ma"].upper(), 0.0) >= ln["sl"]]
-        if not alt:
-            left[k] = left.get(k, 0.0) - ln["sl"]
-            continue
-        best = _pick(ln["ten"], ln["dvt"], alt)
-        left[best["ma"].upper()] -= ln["sl"]
-        moved[(ln["ten"], best["ma"])] = ln["ma_ghep"]
-        ln["cach"] = (f"Mã {ln['ma_ghep']} không còn đủ tồn – xuất hàng cùng dòng còn tồn {best['ma']} – CẦN KIỂM TRA")
-        ln["ma_ghep"] = best["ma"]
+    for k in sorted(c for c, v in spare.items() if v < 0):
+        cur = by_code.get(k)
+        lines = [ln for ln in sell if ln["ma_ghep"].upper() == k and ln.get("cach") != "Mã có sẵn trong file"]
+        # dòng bán muộn nhất chuyển trước (hàng đầu kỳ xuất trước)
+        lines.sort(key=lambda x: (x.get("ngay") or date.min, x.get("row", 0)), reverse=True)
+        while spare[k] < 0 and lines:
+            # chuyển ÍT dòng nhất: dòng nhỏ nhất vừa đủ phần thiếu, không có thì dòng lớn nhất
+            gap = -spare[k]
+            enough = [x for x in lines if x["sl"] >= gap]
+            ln = min(enough, key=lambda x: x["sl"]) if enough else max(lines, key=lambda x: x["sl"])
+            lines.remove(ln)
+            tk = (ln["ten"], k)
+            if tk not in tiers:
+                lv: list[list[dict[str, Any]]] = [[], [], []]
+                for i in items:
+                    if i["ma"].upper() == k:
+                        continue
+                    t = max(_near_tier(_expand_sku(ln["ten"]), i["ten"]), 0)
+                    if cur is not None:
+                        t2 = _near_tier(cur["ten"], i["ten"])
+                        t = min(x for x in (t, t2) if x) if (t or t2) else 0
+                    if t:
+                        lv[t - 1].append(i)
+                tiers[tk] = lv
+            best = None
+            for grp in tiers[tk]:
+                alt = [i for i in grp if spare.get(i["ma"].upper(), 0.0) >= ln["sl"]]
+                if alt:
+                    best = _pick(_expand_sku(ln["ten"]), ln["dvt"], alt)
+                    break
+            if best is None and ln.get("cach", "").startswith("Bán ra: ghép vào hàng có sẵn gần nhất"):
+                # tên đọc không rõ (OCR cụt) vốn đã ghép tạm: lấy hàng cùng loại tên gần nhất còn đủ tồn
+                cat = _cat(_expand_sku(ln["ten"])) or (_cat(cur["ten"]) if cur else "")
+                alt = [i for i in items if i["ma"].upper() != k and spare.get(i["ma"].upper(), 0.0) >= ln["sl"]
+                       and (not cat or _cat(i["ten"]) == cat)]
+                if alt:
+                    best = _pick(_expand_sku(ln["ten"]), ln["dvt"], alt)
+            if best is None:
+                continue
+            spare[best["ma"].upper()] -= ln["sl"]
+            spare[k] += ln["sl"]
+            moved[(ln["ten"], best["ma"])] = ln["ma_ghep"]
+            ln["cach"] = f"Mã {ln['ma_ghep']} không đủ tồn – xuất hàng gần giống còn tồn {best['ma']} – CẦN KIỂM TRA"
+            ln["ma_ghep"] = best["ma"]
     for (ten, ma), old in moved.items():
         report.append({"loai": "Bán ra", "ten": ten, "dvt": by_code[ma.upper()]["dvt"], "ma": ma, "diem": 0.8,
-                       "cach": f"Chuyển từ mã {old} (hết tồn) sang hàng cùng dòng còn tồn – CẦN KIỂM TRA",
+                       "cach": f"Chuyển từ mã {old} (không đủ tồn) sang hàng gần giống còn tồn – CẦN KIỂM TRA",
                        "ten_dm": by_code[ma.upper()]["ten"]})
 
 

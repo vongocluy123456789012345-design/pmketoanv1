@@ -118,6 +118,19 @@ def test_sales_spill_to_same_line_in_stock():
     assert not any(r["sl_cuoi"] < 0 for r in rows)
 
 
+def test_sales_spill_to_similar_name_other_code():
+    """Thiếu "Hải Yến S90" -> xuất "Hải Yến S70" (chỉ khác mã phía sau); không lấy sang loại hàng khác."""
+    items = [{"kho": "Hàng hóa", "ma": "OCL_S90", "ten": "Ống cầu lông Hải Yến S90", "dvt": "Ống", "sl": 1, "gt": 1},
+             {"kho": "Hàng hóa", "ma": "OCL_S70", "ten": "Ống cầu lông Hải Yến S70", "dvt": "Ống", "sl": 10, "gt": 1},
+             {"kho": "Hàng hóa", "ma": "BXG", "ten": "Bình xịt vệ sinh giày Ligpro", "dvt": "Ống", "sl": 50, "gt": 1},
+             {"kho": "Hàng hóa", "ma": "V_Y_A88D", "ten": "Vợt cầu lông Yonex Astrox 88D Pro", "dvt": "Cái", "sl": 3, "gt": 1}]
+    mk = lambda t, sl: {"row": 1, "ma": "", "ten": t, "dvt": "", "sl": sl, "tt": 1, "ck": 0, "ngay": None}  # noqa: E731
+    sell = [mk("Ống cầu lông Hải Yến S90", 1), mk("Ống cầu lông Hải Yến S90", 3), mk("2024-4U5-Den bac BFR3AX88DZTZ-", 1)]
+    inv.match_codes(items, {"Bán ra": sell})
+    assert [ln["ma_ghep"] for ln in sell] == ["OCL_S90", "OCL_S70", "V_Y_A88D"]
+    assert not any(r["sl_cuoi"] < 0 for r in inv.compute(items, [], sell, []))
+
+
 def test_sales_never_create_codes():
     """Bán ra chỉ xuất hàng ĐANG CÓ: không khớp chắc chắn thì ghép vào hàng cùng loại gần nhất, không tạo mã mới."""
     items = [{"kho": "Hàng hóa", "ma": "V_Y_A77", "ten": "Vợt cầu lông Yonex Astrox 77 Pro", "dvt": "Cái", "sl": 2, "gt": 1},
