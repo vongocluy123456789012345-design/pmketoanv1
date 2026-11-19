@@ -53,7 +53,7 @@
     dùng để kiểm tra, không thay thế tờ khai nộp qua eTax / HTKK</div>
   <div class="info">
     <p>[01a] Tên hoạt động sản xuất kinh doanh: Hoạt động sản xuất kinh doanh thông thường</p>
-    <p class="b">[01b] Kỳ tính thuế: {{ r.label }}</p>
+    <p class="b">[01b] Kỳ tính thuế: {{ r.label }}{% if r.chua_het_ky %} – <span style="color:#9a6700">SỐ TẠM TÍNH ĐẾN NGÀY {{ r.den_ngay[8:10] }}/{{ r.den_ngay[5:7] }}/{{ r.den_ngay[:4] }} (kỳ chưa kết thúc)</span>{% endif %}</p>
     <p>[02] Lần đầu: <span class="chk">X</span> &nbsp;&nbsp;&nbsp; [03] Bổ sung lần thứ: ......</p>
     <p>[04] Tên người nộp thuế: <b>{{ r.company.ten or '..............................................' }}</b></p>
     <p>[05] Mã số thuế: <b>{{ r.mst }}</b></p>

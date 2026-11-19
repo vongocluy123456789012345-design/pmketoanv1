@@ -89,3 +89,40 @@ def test_related_sheets():
     assert b36["gt_sau"] == 9_000_000 and b36["lien_quan"] == "C26TAA-37"
     for n in ("HD ngan hang", "HD bi thay the", "HD thay the", "HD bi dieu chinh", "HD dieu chinh"):
         assert n in wb.sheetnames
+
+
+def test_unfinished_quarter(monkeypatch):
+    """Dự báo quý 4 vào ngày 19/11: tính đến 19/11, tháng 12 chưa tới không báo thiếu, lời nhắn 'tính tới thời điểm'."""
+    import datetime as dt
+
+    from app import vat_client
+
+    class FakeDate(dt.date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 11, 19)
+
+    monkeypatch.setattr(vat, "date", FakeDate)
+    monkeypatch.setattr(vat_client, "date", FakeDate)
+    old = settings.output_dir
+    with tempfile.TemporaryDirectory() as tmp:
+        object.__setattr__(settings, "output_dir", tmp)
+        try:
+            for m, saved in ((10, "2026-11-05"), (11, "2026-11-19")):
+                d = Path(tmp) / MST / f"2026-{m:02d}"
+                d.mkdir(parents=True)
+                rs = [row(41, 3_000_000, 1, "Hóa đơn mới") | {"thang": f"{m:02d}/2026", "ngay_lap": f"2026-{m:02d}-10",
+                                                               "shdon": str(100 + m)}]
+                (d / f".dulieu_2026-{m:02d}.json").write_text(json.dumps({"saved": saved, "rows": rs}, ensure_ascii=False),
+                                                              encoding="utf-8")
+            r = vat.compute(MST, "Q", 4, 2026, {})
+        finally:
+            object.__setattr__(settings, "output_dir", old)
+    assert r["chua_het_ky"] and r["den_ngay"] == "2026-11-19" and r["future"] == ["12/2026"] and not r["missing"]
+    assert r["label_den"] == "Quý 4/2026 (tính đến ngày 19/11/2026)"
+    assert "CHƯA KẾT THÚC" in r["warnings"][0] and "19/11/2026" in r["warnings"][0]
+    assert not any("Chưa có dữ liệu hóa đơn tháng 12" in w for w in r["warnings"])
+    r["created"] = "2026-11-19T09:00:00"
+    msg = vat_client.message(vat_client.build(r))
+    assert msg.startswith("Dạ anh/chị, em xin gửi Doanh nghiệp dự báo thuế GTGT quý 4/2026 (tính tới thời điểm 19/11/2026)")
+    assert "Đến ngày 19/11/2026 dự kiến" in msg and "đến ngày 31/12 để kịp bổ sung" in msg

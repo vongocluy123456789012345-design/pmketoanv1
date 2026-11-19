@@ -40,8 +40,10 @@ def build(res: dict[str, Any], sender: str = "ATAX", ten: str | None = None, ten
     monthly = res["kieu"] == "M"
     ky, nam = int(res["ky"]), int(res["nam"])
     d_to = _d(res.get("to")) or date.today()
-    if ngay is None:  # ngày dự báo = ngày lập dự báo (không quá cuối kỳ)
-        ngay = min(_d(res.get("created")) or date.today(), d_to)
+    if ngay is None:
+        # kỳ chưa kết thúc: ngày dữ liệu (vd quý 4 dự báo ngày 19/11 -> 19/11); kỳ đã qua: ngày lập (không quá cuối kỳ)
+        dn = _d(res.get("den_ngay"))
+        ngay = dn if dn and res.get("chua_het_ky") else min(_d(res.get("created")) or date.today(), d_to)
     ten = (ten or company_name(res)).strip()
     ten_ngan = (ten_ngan or short_name(ten)).strip()
     sender = (sender or "ATAX").strip()

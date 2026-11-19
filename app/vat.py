@@ -441,6 +441,29 @@ def compute(mst: str, kieu: str, ky: int, nam: int, inputs: dict[str, Any] | Non
     inputs = {k: round(_num((inputs or {}).get(k))) for k in INPUT_KEYS}
     root = Path(settings.output_dir) / mst
     rows, missing, partial = load_rows(root, kieu, ky, nam)
+    # ---- kỳ chưa kết thúc (vd dự báo quý 4 vào ngày 19/11): tính bằng dữ liệu đến hôm nay, ghi rõ "tính đến ngày"
+    p_from, p_to = period_range(kieu, ky, nam)
+    today = date.today()
+    chua_het_ky = today < p_to
+    future = [f"{m:02d}/{y}" for y, m in period_months(kieu, ky, nam) if date(y, m, 1) > today]  # tháng chưa tới
+    current = f"{today:%m/%Y}" if p_from <= today <= p_to else ""
+    missing = [x for x in missing if x not in future]
+    partial = [x for x in partial if not x.startswith(current or "-")]   # tháng đang diễn ra: tải giữa tháng là bình thường
+    den_ngay, doc_ngay = (min(today, p_to) if chua_het_ky else p_to), None
+    if chua_het_ky:
+        # ngày đọc dữ liệu của tháng gần nhất có dữ liệu (đọc hôm 15/11 thì số liệu chỉ đến 15/11)
+        for y, m in reversed(period_months(kieu, ky, nam)):
+            f = root / f"{y:04d}-{m:02d}" / f".dulieu_{y:04d}-{m:02d}.json"
+            if f.exists():
+                try:
+                    sv = date.fromisoformat(str(json.loads(f.read_text(encoding="utf-8")).get("saved", ""))[:10])
+                    month_end = date(y, m, monthrange(y, m)[1])
+                    if sv < min(month_end, today):
+                        doc_ngay = sv
+                        den_ngay = max(p_from, sv - timedelta(days=0))
+                except (OSError, ValueError):
+                    pass
+                break
     info: dict[str, Any] = {}
     ct = {k: 0.0 for k in CT_LABELS if k != "21"}
     bk = {"purchase": [], "sold": []}       # dòng bảng kê: 1 hóa đơn x 1 thuế suất
@@ -617,7 +640,14 @@ def compute(mst: str, kieu: str, ky: int, nam: int, inputs: dict[str, Any] | Non
     if rows:
         from .quick_read import coverage
         warnings[:0] = coverage(root, [(y, m) for y, m in period_months(kieu, ky, nam)
-                                       if f"{m:02d}/{y}" not in missing], rows)
+                                       if f"{m:02d}/{y}" not in missing and f"{m:02d}/{y}" not in future], rows)
+    if chua_het_ky:
+        warnings.insert(0, f"{period_label(kieu, ky, nam)} CHƯA KẾT THÚC: số liệu chỉ tính đến ngày {den_ngay:%d/%m/%Y}"
+                        + (f" (tháng {', '.join(future)} chưa tới)" if future else "")
+                        + f" – đây là số TẠM TÍNH, sẽ thay đổi khi phát sinh thêm hóa đơn đến hết ngày {p_to:%d/%m/%Y}.")
+        if doc_ngay:
+            warnings.insert(1, f"Dữ liệu tháng {current or den_ngay.strftime('%m/%Y')} đọc từ ngày {doc_ngay:%d/%m/%Y} – bấm "
+                               "⚡ Đọc nhanh từ cổng để cập nhật đến hôm nay.")
     if stat["loai_tru"]:
         warnings.append(f"Đã loại {stat['loai_tru']} hóa đơn không kê khai: "
                         + "; ".join(f"{_inv_name(r)} – {why}" for r, why in excluded[:30])
@@ -671,6 +701,9 @@ def compute(mst: str, kieu: str, ky: int, nam: int, inputs: dict[str, Any] | Non
                      for r, why in excluded],
         "rows": len(rows),
         "lien_quan": lien_quan,
+        "chua_het_ky": chua_het_ky, "den_ngay": den_ngay.isoformat(), "future": future,
+        "label_den": (f"{period_label(kieu, ky, nam)} (tính đến ngày {den_ngay:%d/%m/%Y})" if chua_het_ky
+                      else period_label(kieu, ky, nam)),
     }
 
 
@@ -841,7 +874,9 @@ def _write_excel(res: dict[str, Any], dest: Path) -> Path:
         ("(Áp dụng đối với người nộp thuế tính thuế theo phương pháp khấu trừ có hoạt động sản xuất kinh doanh)", False),
         ("BẢN DỰ BÁO do AWBook lập từ hóa đơn điện tử – để kiểm tra, không thay thế tờ khai nộp qua eTax/HTKK", True),
         ("[01a] Tên hoạt động sản xuất kinh doanh: Hoạt động sản xuất kinh doanh thông thường", False),
-        (f"[01b] Kỳ tính thuế: {res['label']}", False), ("[02] Lần đầu: [X]          [03] Bổ sung lần thứ: ", False),
+        (f"[01b] Kỳ tính thuế: {res['label']}" + (f"  –  SỐ TẠM TÍNH ĐẾN NGÀY "
+                                                 f"{date.fromisoformat(res['den_ngay']):%d/%m/%Y} (kỳ chưa kết thúc)"
+                                                 if res.get("chua_het_ky") else ""), False), ("[02] Lần đầu: [X]          [03] Bổ sung lần thứ: ", False),
         (f"[04] Tên người nộp thuế: {res['company']['ten']}", False), (f"[05] Mã số thuế: {res['mst']}", False),
         ("[06] Tên đại lý thuế (nếu có):          [07] Mã số thuế:", False),
         ("[08] Hợp đồng đại lý thuế: Số: ...... Ngày: ......", False),
@@ -1164,6 +1199,8 @@ def summary(res: dict[str, Any]) -> dict[str, Any]:
     ct = res["ct"]
     return {k: res[k] for k in ("mau", "mau_text", "legal", "mst", "kieu", "ky", "nam", "key", "label", "from", "to", "deadline", "company",
                                 "inputs", "ct", "ct21", "stat", "missing", "partial", "warnings", "rows", "basis")} | {
+        "chua_het_ky": res.get("chua_het_ky", False), "den_ngay": res.get("den_ngay"),
+        "label_den": res.get("label_den") or res["label"], "tom_tat": res.get("tom_tat", ""),
         "pl8": {"gt": res["pl8"]["gt"], "giam": res["pl8"]["giam"], "n": len(res["pl8"]["rows"])},
         "pl8_mua": {"gt": res["pl8_mua"]["gt"], "n": len(res["pl8_mua"]["rows"])},
         "phai_nop": ct["40"], "chuyen_ky_sau": ct["43"], "files": res.get("files", {}),
@@ -1197,6 +1234,11 @@ def forecast(mst: str, kieu: str, ky: int, nam: int, inputs: dict[str, Any] | No
     res["files"] = export(res)
     res["created"] = datetime.now().isoformat(timespec="seconds")
     res["source"] = source
+    try:  # tóm tắt theo văn mẫu gửi khách ("Dạ anh/chị, em xin gửi... tính tới thời điểm...")
+        from . import vat_client
+        res["tom_tat"] = vat_client.message(vat_client.build(res))
+    except Exception:  # noqa: BLE001
+        res["tom_tat"] = ""
     s = summary(res)
     out_folder(mst, res["key"]).mkdir(parents=True, exist_ok=True)
     (out_folder(mst, res["key"]) / "ketqua.json").write_text(json.dumps(s, ensure_ascii=False, indent=1),
@@ -1242,8 +1284,8 @@ def notify_result(s: dict[str, Any]) -> None:
     ct = s["ct"]
     head = (f"Phải nộp {fmt(ct['40'])} đ" if ct["40"] > 0 else
             f"Còn được khấu trừ chuyển kỳ sau {fmt(ct['43'])} đ" if ct["43"] > 0 else "Không phát sinh số phải nộp")
-    title = f"Dự báo VAT {s['label']} – MST {s['mst']}: {head}"
-    body = (f"Bán ra: doanh thu [34] {fmt(ct['34'])} đ, thuế [35] {fmt(ct['35'])} đ ({s['stat']['ban_ra']} HĐ). "
+    title = f"Dự báo VAT {s.get('label_den') or s['label']} – MST {s['mst']}: {head}"
+    body = ((s.get("tom_tat") + chr(10)) if s.get("tom_tat") else "") + (f"Bán ra: doanh thu [34] {fmt(ct['34'])} đ, thuế [35] {fmt(ct['35'])} đ ({s['stat']['ban_ra']} HĐ). "
             f"Mua vào: [23] {fmt(ct['23'])} đ, thuế được khấu trừ [25] {fmt(ct['25'])} đ ({s['stat']['mua_vao']} HĐ). "
             f"[22] kỳ trước chuyển sang {fmt(ct['22'])} đ. Thuế phát sinh [36] {fmt(ct['36'])} đ. "
             + (f"Phải nộp [40] {fmt(ct['40'])} đ, hạn nộp {date.fromisoformat(s['deadline']):%d/%m/%Y}."

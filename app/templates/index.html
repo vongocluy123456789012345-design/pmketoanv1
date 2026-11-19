@@ -348,6 +348,7 @@
   </section>
   <section class="card" id="vRes" style="display:none">
     <h2 id="vResTitle"></h2>
+    <div id="vTomTat" style="display:none;white-space:pre-line;background:#fff8c5;border:1px solid var(--warn);border-radius:8px;padding:8px 12px;margin-bottom:10px"></div>
     <div class="kpi" id="vKpi"></div>
     <div id="vFiles" style="margin-top:10px"></div>
     <details id="vClient" style="margin-top:10px;border:1px solid var(--b);border-radius:8px;padding:8px 10px">
@@ -1065,7 +1066,10 @@ async function loadVatInfo() {
 function renderVat(s) {
   const ct = s.ct, dl = s.deadline.split("-").reverse().join("/");
   $("vRes").style.display = "";
-  $("vResTitle").textContent = `Kết quả dự báo ${s.label} – ${s.company.ten || ""} (MST ${s.mst})`;
+  $("vResTitle").textContent = `Kết quả dự báo ${s.label_den || s.label} – ${s.company.ten || ""} (MST ${s.mst})`;
+  $("vTomTat").style.display = s.tom_tat ? "" : "none";
+  $("vTomTat").innerHTML = (s.chua_het_ky ? `<b style="color:var(--warn)">⏳ Kỳ chưa kết thúc – số tạm tính đến ngày ${esc((s.den_ngay || "").split("-").reverse().join("/"))}</b><br>` : "")
+    + esc(s.tom_tat || "");
   $("vKpi").innerHTML = [
     ct["40"] > 0 ? `<div class="big"><span>[40] Thuế GTGT còn phải nộp</span><b>${money(ct["40"])} đ</b><span>hạn nộp ${dl}</span></div>`
                  : `<div class="big"><span>[43] Còn được khấu trừ chuyển kỳ sau</span><b>${money(ct["43"])} đ</b><span>không phát sinh số phải nộp</span></div>`,
@@ -1177,7 +1181,7 @@ async function loadNoti() {
   let r; try { r = await api("/api/notifications"); } catch (e) { return; }
   $("bellN").textContent = r.unread; $("bellN").style.display = r.unread ? "" : "none";
   $("notiList").innerHTML = r.items.map(n => `<div class="noti ${n.read ? "" : "unread"}">
-    <b>${n.level === "warn" ? "⚠️ " : n.level === "ok" ? "✅ " : "ℹ️ "}${esc(n.title)}</b><div>${esc(n.body)}</div>
+    <b>${n.level === "warn" ? "⚠️ " : n.level === "ok" ? "✅ " : "ℹ️ "}${esc(n.title)}</b><div style="white-space:pre-line">${esc(n.body)}</div>
     ${(n.warnings || []).length ? `<ul>${n.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}
     <div class="muted" style="margin-top:4px">${esc(n.time.replace("T", " "))}
       ${n.kind === "vat" ? ` · <a href="#" data-nvat="${esc(n.mst)}|${esc(n.key)}">Xem dự báo</a>` : ""}
