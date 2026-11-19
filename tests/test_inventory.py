@@ -77,3 +77,17 @@ def test_match_by_standard_keywords():
     assert [ln["ma_ghep"] for ln in lines[:2]] == ["DC_G_65", "DC_G_65C"]
     assert lines[2]["ma_ghep"] != "BXG_LIG"                          # xịt mặt vợt KHÁC bình xịt vệ sinh giày
     assert lines[3]["ma_ghep"] == "V_LI_H4000" and "KIỂM TRA" in lines[3]["cach"]   # thiếu tên hãng -> cần kiểm tra
+
+
+def test_sales_never_create_codes():
+    """Bán ra chỉ xuất hàng ĐANG CÓ: không khớp chắc chắn thì ghép vào hàng cùng loại gần nhất, không tạo mã mới."""
+    items = [{"kho": "Hàng hóa", "ma": "V_Y_A77", "ten": "Vợt cầu lông Yonex Astrox 77 Pro", "dvt": "Cái", "sl": 2, "gt": 1},
+             {"kho": "Hàng hóa", "ma": "ACL_Y_1", "ten": "Áo cầu lông Yonex TRM2861", "dvt": "Cái", "sl": 5, "gt": 1}]
+    mk = lambda t, sl=1: {"row": 1, "ma": "", "ten": t, "dvt": "", "sl": sl, "tt": 1, "ck": 0, "ngay": None}  # noqa: E731
+    buy = [mk("Xịt lạnh Ligpro Fast Cold 200ml", 10)]                # hàng mới hoàn toàn khi mua -> tạo mã mới
+    sell = [mk("Vot cau long Yonex Nanoray 72 Light"), mk("Xit lanh Ligpro Fast Cold (200ml)")]
+    rep = inv.match_codes(items, {"Mua vào": buy, "Bán ra": sell})
+    assert "MỚI" in buy[0]["cach"]
+    assert not any("MỚI" in x["cach"] for x in rep if x["loai"] == "Bán ra")
+    assert sell[0]["ma_ghep"] == "V_Y_A77"                             # vợt ghép vào vợt (không vào áo)
+    assert sell[1]["ma_ghep"] == buy[0]["ma_ghep"]                     # bán đúng hàng vừa mua

@@ -341,6 +341,38 @@ def _kw_match(inv_name: str, base: list[dict[str, Any]], base_kw: list[frozenset
     return None, 0.0, ""
 
 
+_CAT_MAP = {"khung": "vot", "vot": "vot", "vet": "vot", "day": "cuoc", "cuoc": "cuoc", "cuon": "cuoc", "ao": "ao",
+            "quan": "quan", "vay": "quan", "giay": "giay", "dep": "giay", "tat": "tat", "vo": "tat", "tui": "tui",
+            "balo": "tui", "bao": "tui", "bong": "bong", "qua": "cau", "ong": "cau", "cau": "cau", "binh": "xit",
+            "xit": "xit", "bang": "bang", "mieng": "phukien", "gen": "phukien", "chi": "phukien", "boc": "phukien"}
+
+
+def _cat(name: str) -> str:
+    """Loại hàng theo chữ đầu tên (bỏ mã NCC kiểu "P-AYPU011-4-"): vợt / cước / áo / quần / giày / tất / túi..."""
+    ws = [w for w in _norm(name).split() if w.isalpha() and len(w) <= 6 and w not in ("p",)]
+    for k, w in enumerate(ws[:3]):
+        nxt = ws[k + 1] if k + 1 < len(ws) else ""
+        if w in ("quan", "boc") and nxt == "can":      # "Quấn cán" / "Bọc cán": phụ kiện, không phải quần / vợt
+            return "phukien"
+        if w in _CAT_MAP:
+            c = _CAT_MAP[w]
+            if c == "cau" and len(ws) > 1 and ws[ws.index(w) + 1:ws.index(w) + 2] == ["long"]:
+                continue     # "cầu lông" là môn, không phải loại hàng
+            return c
+    return ""
+
+
+def _available(items: list[dict[str, Any]], groups: dict[str, list[dict[str, Any]]]) -> dict[str, float]:
+    """Số lượng đang có của từng mã: tồn đầu kỳ + mua vào đã ghép mã."""
+    av: dict[str, float] = {}
+    for i in items:
+        av[i["ma"].upper()] = av.get(i["ma"].upper(), 0.0) + float(i.get("sl") or 0)
+    for ln in groups.get("Mua vào", []):
+        if ln.get("ma_ghep"):
+            av[ln["ma_ghep"].upper()] = av.get(ln["ma_ghep"].upper(), 0.0) + float(ln.get("sl") or 0)
+    return av
+
+
 def match_codes(items: list[dict[str, Any]], groups: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
     """Gắn mã hàng cho mọi dòng (sửa trực tiếp line["ma_ghep"]). Trả về bảng ghép theo từng tên hàng.
     Ưu tiên MÃ CHUẨN của file đầu kỳ: mã có sẵn -> trùng tên -> khớp từ khóa tên chuẩn -> tên gần đúng -> hàng mới."""
@@ -350,8 +382,12 @@ def match_codes(items: list[dict[str, Any]], groups: dict[str, list[dict[str, An
     by_name = {_norm(i["ten"]): i for i in items}
     used = set(by_code)
     memo: dict[str, dict[str, Any]] = {}
+    kw_cache: dict[int, frozenset[str]] = {}
+    avail: dict[str, float] = {}
     report = []
-    for kind, lines in groups.items():
+    # mua vào ghép TRƯỚC (có thể tạo mã mới), bán ra / trả lại ghép SAU vào hàng đã có
+    order = sorted(groups.items(), key=lambda kv: kv[0] != "Mua vào")
+    for kind, lines in order:
         for ln in lines:
             if ln["ma"] and ln["ma"].upper() in by_code:
                 ln["ma_ghep"], ln["cach"] = by_code[ln["ma"].upper()]["ma"], "Mã có sẵn trong file"
@@ -360,25 +396,46 @@ def match_codes(items: list[dict[str, Any]], groups: dict[str, list[dict[str, An
             if key in memo:
                 m = memo[key]
             else:
+                buying = kind == "Mua vào"
+                # mua vào: so với danh mục đầu kỳ; bán ra / trả lại: so với MỌI hàng đang có (đầu kỳ + hàng mới mua)
+                pool = base if buying else items
+                pool_kw = base_kw if buying else [kw_cache.setdefault(id(i), _kw(i["ten"])) for i in items]
                 it = by_name.get(key)
-                kw_it, kw_sc, kw_why = (None, 0.0, "") if it else _kw_match(ln["ten"], base, base_kw)
+                kw_it, kw_sc, kw_why = (None, 0.0, "") if it else _kw_match(ln["ten"], pool, pool_kw)
                 if it:
                     m = {"ma": it["ma"], "diem": 1.0, "cach": "Trùng tên trong danh mục"}
                 elif kw_it is not None:
                     m = {"ma": kw_it["ma"], "diem": round(kw_sc, 2), "cach": kw_why}
                 else:
-                    best, sc = None, 0.0
-                    # tên gần đúng: so với danh mục đầu kỳ + hàng MỚI đã gặp ở mua vào (bán ra hàng vừa mua trong kỳ)
-                    for i in (base if kind == "Mua vào" else items):
+                    scored = []
+                    for i in pool:
                         s = _score(key, _norm(i["ten"]))
                         if ln["dvt"] and i["dvt"] and _norm(ln["dvt"]) != _norm(i["dvt"]):
                             s -= 0.08
-                        if s > sc:
-                            best, sc = i, s
+                        scored.append((s, i))
+                    scored.sort(key=lambda x: -x[0])
+                    sc, best = scored[0] if scored else (0.0, None)
+                    if not buying and scored:
+                        # bán ra phải là hàng ĐANG CÓ: trong các hàng gần nhất, ưu tiên hàng còn tồn (đầu kỳ + đã mua)
+                        if not avail:
+                            avail.update(_available(items, groups))
+                        cat = _cat(ln["ten"])
+                        same = [(s, i) for s, i in scored if cat and _cat(i["ten"]) == cat]
+                        if same:                     # cùng loại hàng (vợt với vợt, áo với áo...)
+                            scored = same
+                            sc, best = scored[0]
+                        near = [i for s, i in scored if s >= sc - 0.05]
+                        stocked = [i for i in near if avail.get(i["ma"].upper(), 0) > 0]
+                        if stocked:
+                            best = stocked[0]
+                            sc = next(s for s, i in scored if i is best)
                     if best and sc >= AUTO_OK:
                         m = {"ma": best["ma"], "diem": round(sc, 2), "cach": "Tên gần đúng"}
-                    elif best and sc >= MAYBE:
-                        m = {"ma": best["ma"], "diem": round(sc, 2), "cach": "Tên gần đúng – CẦN KIỂM TRA"}
+                    elif best and (sc >= MAYBE or not buying):
+                        # bán ra KHÔNG tạo mã mới: luôn ghép vào hàng có sẵn gần nhất, đánh dấu để kiểm tra
+                        m = {"ma": best["ma"], "diem": round(sc, 2),
+                             "cach": "Tên gần đúng – CẦN KIỂM TRA" if sc >= MAYBE
+                             else "Bán ra: ghép vào hàng có sẵn gần nhất (không tạo mã mới) – CẦN KIỂM TRA"}
                     else:
                         code = ln["ma"] or new_code(ln["ten"], used)
                         used.add(code.upper())
