@@ -1490,7 +1490,8 @@ $("btnTk").onclick = async () => {
       const f = s.files, b = (k, txt) => f[k] ? `<button class="sec" data-open="${esc(f[k])}">${txt}</button>` : "";
       $("tkFiles").innerHTML = [b("tonkho", "📊 Mở Tổng hợp tồn kho"), b("buy", "Mua vào đã có mã hàng"),
         b("sell", "Bán ra đã có mã hàng"), b("ret", "Trả lại đã có mã hàng"), b("danhmuc", "Danh mục hàng MỚI (khai vào MISA)"),
-        b("ghepma", "Bảng ghép mã hàng"), b("folder", "📁 Mở thư mục")].join(" ");
+        b("ghepma", "Bảng ghép mã hàng"), b("ss_mua", "🔍 So sánh Mua vào ↔ Đầu kỳ"),
+        b("ss_ban", "🔍 So sánh Bán ra ↔ Mua vào ↔ Đầu kỳ"), b("folder", "📁 Mở thư mục")].join(" ");
       $("tkRows").innerHTML = `<tr><th>Loại</th><th>Tên hàng trên chứng từ</th><th>Mã ghép</th><th>Tên trong danh mục</th><th class="r">Độ khớp</th><th>Cách ghép</th></tr>` +
         s.report.map(x => `<tr${/KIỂM TRA|MỚI/.test(x.cach) ? ' style="background:#fff8c5"' : ""}><td>${esc(x.loai)}</td><td>${esc(x.ten)}</td>` +
           `<td><b>${esc(x.ma)}</b></td><td>${esc(x.ten_dm)}</td><td class="r">${x.diem}</td><td>${esc(x.cach)}</td></tr>`).join("");

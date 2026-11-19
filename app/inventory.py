@@ -884,6 +884,17 @@ def run(job: Job, inp: dict[str, Any]) -> None:
         f = out_dir / "Ghep_ma_hang.xlsx"
         f.write_bytes(write_match_report(report, rows))
         job.files["ghepma"] = str(f)
+        # 2 bản so sánh tên hàng ghép: mua vào ↔ đầu kỳ, bán ra ↔ mua vào ↔ đầu kỳ
+        from .inventory_compare import compare_buy, compare_sell
+        buy_l, sell_l = parsed.get("buy", {}).get("lines", []), parsed.get("sell", {}).get("lines", [])
+        if buy_l:
+            f = out_dir / "So_sanh_Mua_vao_Dau_ky.xlsx"
+            f.write_bytes(compare_buy(buy_l, items))
+            job.files["ss_mua"] = str(f)
+        if sell_l:
+            f = out_dir / "So_sanh_Ban_ra_Mua_vao_Dau_ky.xlsx"
+            f.write_bytes(compare_sell(sell_l, buy_l, items, rows))
+            job.files["ss_ban"] = str(f)
         job.files["folder"] = str(out_dir)
         job.status = "done"
         job.say("Xong.")
