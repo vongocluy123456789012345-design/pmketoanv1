@@ -121,6 +121,7 @@
   <a href="#tai" data-page="tai">Tải hóa đơn <span id="navJob" class="badge original" style="display:none">đang chạy</span></a>
   <a href="#vat" data-page="vat">Dự báo VAT</a>
   <a href="#misa" data-page="misa">Chuyển dữ liệu MISA</a>
+  <a href="#tonkho" data-page="tonkho">Tổng hợp tồn kho</a>
   <a href="#chungtu" data-page="chungtu">Sao kê &amp; chứng từ</a>
   <a href="#doichieu" data-page="doichieu">Đối chiếu tờ khai</a>
   <a href="#lich" data-page="lich">Lịch tự động</a>
@@ -375,6 +376,59 @@
   </section>
  </div>
 
+ <div class="page" id="page-tonkho">
+  <section class="card" style="border-color:var(--pri)">
+    <h2>Tổng hợp tồn kho theo mẫu MISA</h2>
+    <p class="page-intro">Tải lên <b>tồn kho đầu kỳ</b> (báo cáo Tổng hợp tồn kho kỳ trước xuất từ MISA – lấy số <b>cuối kỳ</b> làm đầu kỳ,
+      hoặc file Danh mục vật tư hàng hóa) + file <b>mua vào</b> / <b>bán ra</b> theo mẫu MISA (đã có dữ liệu – hoặc thả hóa đơn để phần mềm
+      chuyển vào mẫu như mục Chuyển dữ liệu MISA). Phần mềm tự <b>ghép mã hàng</b> của danh mục cho từng dòng mua vào / bán ra, tính
+      nhập – xuất – tồn (giá xuất kho <b>bình quân cuối kỳ</b> như MISA) rồi xuất đúng mẫu <b>TỔNG HỢP TỒN KHO</b>; kèm file mua vào / bán ra
+      đã điền mã hàng, danh mục hàng MỚI (mẫu Danh mục VTHH) và bảng ghép mã để kiểm tra.</p>
+    <div class="inline">
+      <div style="flex:2"><label>1. Tồn kho đầu kỳ / danh mục hàng hóa (*) – báo cáo Tổng hợp tồn kho kỳ trước hoặc Danh mục VTHH</label>
+        <input type="file" id="tkOpen" accept=".xlsx,.xls,.xlsm,.ods,.csv"></div>
+      <div style="flex:2"><label>2. Mẫu Tổng hợp tồn kho để xuất (bỏ trống = dùng định dạng file đầu kỳ)</label>
+        <input type="file" id="tkTpl" accept=".xlsx,.xls,.xlsm"></div>
+    </div>
+    <div class="inline" style="margin-top:6px">
+      <div><label>Kỳ báo cáo (bỏ trống = tự theo ngày chứng từ)</label><input id="tkKy" placeholder="vd Tháng 11 năm 2026"></div>
+      <div><label>Ngày ký (bỏ trống = cuối kỳ)</label><input type="date" id="tkNgay"></div>
+      <div style="flex:2"><label>Mẫu Danh mục VTHH của MISA (tùy chọn – để xuất danh mục hàng MỚI đúng mẫu)</label>
+        <input type="file" id="tkCat" accept=".xlsx,.xls"></div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:10px;margin-top:10px">
+      <div style="border:1px solid var(--b);border-radius:8px;padding:8px">
+        <b>3. Mua vào</b>
+        <label>File mẫu MISA (đã có dữ liệu, hoặc mẫu trống nếu thả hóa đơn bên dưới)</label>
+        <input type="file" id="tkBuy" accept=".xlsx,.xls,.xlsm,.ods,.csv">
+        <div id="dropTkBuy" style="margin-top:6px;border:2px dashed var(--b);border-radius:8px;padding:12px;text-align:center;cursor:pointer;background:var(--bg)">
+          Thả hóa đơn (PDF/XML/ZIP/ảnh) để chuyển vào mẫu<br><span class="muted" id="dropTkBuyInfo">Chưa chọn file</span></div>
+        <input type="file" id="tkBuyInv" multiple accept=".pdf,.xml,.zip,.jpg,.jpeg,.png,.tif,.tiff,.bmp,.webp" hidden>
+      </div>
+      <div style="border:1px solid var(--b);border-radius:8px;padding:8px">
+        <b>4. Bán ra</b>
+        <label>File mẫu MISA (đã có dữ liệu, hoặc mẫu trống nếu thả hóa đơn bên dưới)</label>
+        <input type="file" id="tkSell" accept=".xlsx,.xls,.xlsm,.ods,.csv">
+        <div id="dropTkSell" style="margin-top:6px;border:2px dashed var(--b);border-radius:8px;padding:12px;text-align:center;cursor:pointer;background:var(--bg)">
+          Thả hóa đơn (PDF/XML/ZIP/ảnh) để chuyển vào mẫu<br><span class="muted" id="dropTkSellInfo">Chưa chọn file</span></div>
+        <input type="file" id="tkSellInv" multiple accept=".pdf,.xml,.zip,.jpg,.jpeg,.png,.tif,.tiff,.bmp,.webp" hidden>
+      </div>
+      <div style="border:1px solid var(--b);border-radius:8px;padding:8px">
+        <b>5. Hàng bán trả lại</b> <span class="muted">(tùy chọn)</span>
+        <label>File mẫu MISA (đã có dữ liệu, hoặc mẫu trống nếu thả hóa đơn bên dưới)</label>
+        <input type="file" id="tkRet" accept=".xlsx,.xls,.xlsm,.ods,.csv">
+        <div id="dropTkRet" style="margin-top:6px;border:2px dashed var(--b);border-radius:8px;padding:12px;text-align:center;cursor:pointer;background:var(--bg)">
+          Thả hóa đơn (PDF/XML/ZIP/ảnh) để chuyển vào mẫu<br><span class="muted" id="dropTkRetInfo">Chưa chọn file</span></div>
+        <input type="file" id="tkRetInv" multiple accept=".pdf,.xml,.zip,.jpg,.jpeg,.png,.tif,.tiff,.bmp,.webp" hidden>
+      </div>
+    </div>
+    <div class="inline" style="margin-top:10px"><div style="flex:0 0 auto"><button id="btnTk">Tổng hợp tồn kho</button></div>
+      <span id="tkMsg" class="msg"></span></div>
+    <div id="tkLog" class="muted" style="margin-top:6px;white-space:pre-wrap"></div>
+    <div id="tkFiles" style="margin-top:8px"></div>
+    <div class="tablewrap" style="margin-top:8px;max-height:45vh"><table><tbody id="tkRows"></tbody></table></div>
+  </section>
+ </div>
  <div class="page" id="page-chungtu">
   <section class="card">
     <h2>Đọc hóa đơn hàng loạt (PDF / XML / ZIP / ảnh scan)</h2>
@@ -1381,7 +1435,7 @@ $("btnAiKeyDel").onclick = async () => { await api("/api/ai/key", {method: "POST
 aiStatus();
 
 // ----- chuyển trang theo menu (#tai, #vat, #doichieu, #lich, #nhapfile, #dulieu); #ai = mở bóng chat -----
-const PAGES = ["tai", "vat", "misa", "chungtu", "doichieu", "lich", "nhapfile", "dulieu"];
+const PAGES = ["tai", "vat", "misa", "tonkho", "chungtu", "doichieu", "lich", "nhapfile", "dulieu"];
 window.addEventListener("hashchange", () => { if (location.hash === "#ai") { aiOpen(true); history.replaceState(null, "", "#tai"); showPage(); } });
 
 // ----- trang Sao kê & chứng từ -----
@@ -1405,6 +1459,43 @@ api("/api/ocr/status").then(s => {
 }).catch(() => {});
 const openFile = p => api("/api/open-folder?path=" + encodeURIComponent(p), {method: "POST"}).catch(e => alert(e.message));
 const invZone = dropZone("dropInv", "invFiles", "dropInvInfo"), bankZone = dropZone("dropBank", "bankFiles", "dropBankInfo");
+// ----- tổng hợp tồn kho -----
+const tkBuyZ = dropZone("dropTkBuy", "tkBuyInv", "dropTkBuyInfo"), tkSellZ = dropZone("dropTkSell", "tkSellInv", "dropTkSellInfo"),
+      tkRetZ = dropZone("dropTkRet", "tkRetInv", "dropTkRetInfo");
+$("btnTk").onclick = async () => {
+  if (!$("tkOpen").files[0]) return msg($("tkMsg"), "Chọn file tồn kho đầu kỳ / danh mục hàng hóa");
+  if (!$("tkBuy").files[0] && !$("tkSell").files[0] && !tkBuyZ.files.length && !tkSellZ.files.length)
+    return msg($("tkMsg"), "Chọn file mua vào hoặc bán ra (hoặc thả hóa đơn)");
+  const fd = new FormData();
+  fd.append("opening", $("tkOpen").files[0]);
+  [["tpl", "tkTpl"], ["catalog_tpl", "tkCat"], ["buy_file", "tkBuy"], ["sell_file", "tkSell"], ["ret_file", "tkRet"]]
+    .forEach(([k, id]) => { if ($(id).files[0]) fd.append(k, $(id).files[0]); });
+  tkBuyZ.files.forEach(f => fd.append("buy_inv", f)); tkSellZ.files.forEach(f => fd.append("sell_inv", f));
+  tkRetZ.files.forEach(f => fd.append("ret_inv", f));
+  fd.append("ky_text", $("tkKy").value.trim()); fd.append("ngay", $("tkNgay").value);
+  $("btnTk").disabled = true; $("tkFiles").innerHTML = ""; $("tkRows").innerHTML = "";
+  msg($("tkMsg"), "Đang xử lý…", true);
+  try {
+    const j = await api("/api/inventory/run", {method: "POST", body: fd});
+    const t = setInterval(async () => {
+      let s; try { s = await api("/api/inventory/" + j.id); } catch (e) { return; }
+      $("tkLog").textContent = s.log.slice(-8).join(String.fromCharCode(10));
+      if (s.status === "running") return;
+      clearInterval(t); $("btnTk").disabled = false;
+      if (s.status !== "done") return msg($("tkMsg"), "Lỗi – xem nhật ký");
+      const st = s.stat;
+      msg($("tkMsg"), `Xong ${st.ky}: ${st.ma_hang} dòng hàng – ${st.moi} mã MỚI, ${st.can_kiem_tra} tên cần kiểm tra` +
+        (st.am ? `, ${st.am} dòng tồn âm` : ""), !st.can_kiem_tra && !st.am);
+      const f = s.files, b = (k, txt) => f[k] ? `<button class="sec" data-open="${esc(f[k])}">${txt}</button>` : "";
+      $("tkFiles").innerHTML = [b("tonkho", "📊 Mở Tổng hợp tồn kho"), b("buy", "Mua vào đã có mã hàng"),
+        b("sell", "Bán ra đã có mã hàng"), b("ret", "Trả lại đã có mã hàng"), b("danhmuc", "Danh mục hàng MỚI (khai vào MISA)"),
+        b("ghepma", "Bảng ghép mã hàng"), b("folder", "📁 Mở thư mục")].join(" ");
+      $("tkRows").innerHTML = `<tr><th>Loại</th><th>Tên hàng trên chứng từ</th><th>Mã ghép</th><th>Tên trong danh mục</th><th class="r">Độ khớp</th><th>Cách ghép</th></tr>` +
+        s.report.map(x => `<tr${/KIỂM TRA|MỚI/.test(x.cach) ? ' style="background:#fff8c5"' : ""}><td>${esc(x.loai)}</td><td>${esc(x.ten)}</td>` +
+          `<td><b>${esc(x.ma)}</b></td><td>${esc(x.ten_dm)}</td><td class="r">${x.diem}</td><td>${esc(x.cach)}</td></tr>`).join("");
+    }, 1500);
+  } catch (e) { msg($("tkMsg"), e.message); $("btnTk").disabled = false; }
+};
 // ----- chuyển dữ liệu MISA -----
 const misaZone = dropZone("dropMisa", "misaFiles", "dropMisaInfo");
 $("btnMisa").onclick = async () => {

@@ -249,9 +249,9 @@ APP_TOOLS = [
           {"mst": S, "thang_tu": {**S, "description": "YYYY-MM"}, "thang_den": {**S, "description": "YYYY-MM"},
            "huong": {"type": "string", "enum": ["purchase", "sold", "all"]}, "tu_khoa": S}),
     _tool("mo_trang_app", "Mở một màn hình của app cho khách xem/thao tác: tai (tải hóa đơn), vat (dự báo VAT), misa (chuyển "
-                          "hóa đơn vào mẫu MISA), chungtu (sao kê & chứng từ), doichieu, lich, nhapfile, dulieu. Với vat có "
+                          "hóa đơn vào mẫu MISA), tonkho (tổng hợp tồn kho mẫu MISA), chungtu (sao kê & chứng từ), doichieu, lich, nhapfile, dulieu. Với vat có "
                           "thể kèm kỳ (ky_key dạng YYYY-MM hoặc YYYY-Qn, để trống nếu không cần) và mst.",
-          {"trang": {"type": "string", "enum": ["tai", "vat", "misa", "chungtu", "doichieu", "lich", "nhapfile", "dulieu"]},
+          {"trang": {"type": "string", "enum": ["tai", "vat", "misa", "tonkho", "chungtu", "doichieu", "lich", "nhapfile", "dulieu"]},
            "mst": S, "ky_key": S}),
     _tool("mo_file", "Mở file kết quả (PDF/Excel) hoặc thư mục trong nơi lưu hóa đơn cho khách xem.", {"duong_dan": S}),
 ]

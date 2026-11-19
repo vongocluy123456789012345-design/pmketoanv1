@@ -71,7 +71,9 @@ FIELDS: dict[str, list[str]] = {
 # Cột dễ bị nhận nhầm (chứa cụm từ của cột khác) -> KHÔNG điền gì, để trống như mẫu
 _SKIP_HEADER = re.compile(r"kem theo|thue suat khac|ghi no|so chung tu thanh toan|so tai khoan|ngan hang|nhan vien|"
                           r"han thanh toan|giu ho|ban ho|chi phi san xuat|khoan muc|ma don vi|thanh pham|"
-                          r"don dat hang|don mua hang|ma thong ke|duong dan|quy doi|dong ghi chu")
+                          r"don dat hang|don mua hang|ma thong ke|duong dan|quy doi|dong ghi chu|kiem phieu|gia von|"
+                          r"tien von|cach lay don gia|khong cap nhat gia|don hang online|gian hang|san kenh|thue gtgt tu san|"
+                          r"thue tncn tu san|hang khuyen mai|cp khong hop ly|giam 20%|so phieu xuat|ngay phieu nhap")
 ACCOUNTS = {"purchase": {"tk_kho": "1561", "tk_cong_no": "331", "tk_thue": "1331"},
             "sold": {"tk_doanh_thu": "5111", "tk_cong_no": "131", "tk_thue": "33311", "tk_gia_von": "632", "tk_kho": "1561"}}
 
@@ -304,7 +306,14 @@ def read_template(data: bytes):
                          "Tên hàng, Số lượng, Đơn giá, Thành tiền…)")
     _, ws, hr, cols = best
     unknown = [ws.cell(hr, c).value for c, k in cols.items() if not k]
-    return wb, ws, hr, {c: k for c, k in cols.items() if k}, unknown
+    # 2 cột cùng nghĩa (vd "Số chứng từ (*)" và "Số phiếu nhập"): giữ cột bắt buộc (*) – không thì cột đầu tiên
+    keep: dict[str, int] = {}
+    for c, k in sorted(cols.items()):
+        if not k:
+            continue
+        if k not in keep or ("(*)" in str(ws.cell(hr, c).value) and "(*)" not in str(ws.cell(hr, keep[k]).value)):
+            keep[k] = c
+    return wb, ws, hr, {c: k for k, c in sorted(keep.items(), key=lambda kv: kv[1])}, unknown
 
 
 # ------------------------------------------------------------------ đọc hóa đơn

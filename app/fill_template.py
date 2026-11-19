@@ -456,7 +456,7 @@ try {
     $exText = @{}
     foreach ($col in $job.cols) { $c = [int]$col.c; $exText[$c] = ($ws.Cells.Item($start, $c).Value2 -is [string]) }
     # xóa GIÁ TRỊ mọi dòng ví dụ (mọi cột) – giữ nguyên định dạng, danh sách chọn, cột, dòng của mẫu
-    if ($endUsed -ge $start) { $ws.Range($ws.Cells.Item($start, 1), $ws.Cells.Item($endUsed, $lastCol)).ClearContents() | Out-Null }
+    if ($job.clear -ne $false -and $endUsed -ge $start) { $ws.Range($ws.Cells.Item($start, 1), $ws.Cells.Item($endUsed, $lastCol)).ClearContents() | Out-Null }
     foreach ($col in $job.cols) {
       $c = [int]$col.c; $n = $col.vals.Count
       $first = $ws.Cells.Item($start, $c)
@@ -524,7 +524,8 @@ def probe_with_excel(tpl: bytes, ext: str) -> bytes:
 
 
 def fill_with_excel(tpl: bytes, ext: str, sheet_index: int, header_row: int, cols: dict[int, str],
-                    rows: list[dict[str, Any]]) -> bytes:
+                    rows: list[dict[str, Any]], clear: bool = True) -> bytes:
+    """clear=False: chỉ ghi các cột được chọn từ dòng header_row+1, giữ nguyên mọi dữ liệu khác của file."""
     from datetime import date as _d
     jcols = []
     for c, key in cols.items():
@@ -546,5 +547,6 @@ def fill_with_excel(tpl: bytes, ext: str, sheet_index: int, header_row: int, col
         tmp = Path(td)
         dst = tmp / ("ket_qua" + ext)
         dst.write_bytes(tpl)
-        _run_excel({"mode": "fill", "path": str(dst), "sheet": sheet_index, "start": header_row + 1, "cols": jcols}, tmp)
+        _run_excel({"mode": "fill", "path": str(dst), "sheet": sheet_index, "start": header_row + 1, "cols": jcols,
+                    "clear": clear}, tmp)
         return dst.read_bytes()

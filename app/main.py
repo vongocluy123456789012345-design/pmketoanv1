@@ -627,6 +627,56 @@ def misa_status(job_id: str):
     return job.public()
 
 
+@app.post("/api/inventory/run")
+async def inventory_run(opening: UploadFile = File(...), tpl: UploadFile | None = File(None),
+                        buy_file: UploadFile | None = File(None), buy_inv: list[UploadFile] | None = File(None),
+                        sell_file: UploadFile | None = File(None), sell_inv: list[UploadFile] | None = File(None),
+                        ret_file: UploadFile | None = File(None), ret_inv: list[UploadFile] | None = File(None),
+                        catalog_tpl: UploadFile | None = File(None), mst: str = Form(""), ky_text: str = Form(""),
+                        ngay: str = Form(""), accounts: str = Form("{}")):
+    """Tổng hợp tồn kho theo mẫu MISA: đầu kỳ + mua vào + bán ra (+ hàng bán trả lại), ghép mã hàng tự động."""
+    import json as _json
+
+    from . import inventory
+
+    async def one(f: UploadFile | None) -> tuple[str, bytes] | None:
+        if f is None:
+            return None
+        data = await f.read()
+        return (f.filename or "file", data) if data else None
+
+    inp: dict = {"opening": await one(opening), "tpl": await one(tpl), "catalog_tpl": await one(catalog_tpl),
+                 "mst": mst.strip(), "ky_text": ky_text.strip(), "ngay": ngay.strip()}
+    try:
+        inp["acc"] = _json.loads(accounts or "{}")
+    except ValueError:
+        inp["acc"] = {}
+    if not inp["opening"]:
+        raise HTTPException(400, "Chọn file tồn kho đầu kỳ / danh mục hàng hóa")
+    for key, f, invs in (("buy", buy_file, buy_inv), ("sell", sell_file, sell_inv), ("ret", ret_file, ret_inv)):
+        src = await one(f)
+        inv_files = await _read_uploads([x for x in (invs or []) if x is not None]) if invs else []
+        inv_files = [(n, d) for n, d in inv_files if d]
+        if src or inv_files:
+            inp[key] = {"file": None if inv_files else src, "mau": src if inv_files else None, "invoices": inv_files}
+    if not any(k in inp for k in ("buy", "sell")):
+        raise HTTPException(400, "Cần file mua vào hoặc bán ra (hoặc hóa đơn để chuyển vào mẫu MISA)")
+    try:
+        inventory.read_opening(inp["opening"][1])
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return inventory.start(inp).public()
+
+
+@app.get("/api/inventory/{job_id}")
+def inventory_status(job_id: str):
+    from . import inventory
+    job = inventory.JOBS.get(job_id)
+    if not job:
+        raise HTTPException(404, "Không có lượt tổng hợp này")
+    return job.public()
+
+
 @app.get("/api/misa-template/{direction}")
 def misa_template(direction: Literal["purchase", "sold"]):
     from fastapi.responses import Response

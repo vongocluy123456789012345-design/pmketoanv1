@@ -23,6 +23,10 @@ dự báo thuế GTGT, đối chiếu tờ khai, đọc chứng từ và đối 
   hoặc bán hàng; không có thì dùng mẫu cơ bản) → "Chuyển dữ liệu" → file Excel đã điền từng dòng hàng đúng cột (ngày, ký hiệu,
   số HĐ, nhà cung cấp/khách hàng, MST, tên hàng, ĐVT, số lượng, đơn giá, thành tiền, % thuế, tiền thuế, TK nợ/có/thuế).
   Nguồn dữ liệu: XML gốc > bảng hàng hóa trong PDF (khớp tổng) > AI đọc. Cột "Mã hàng" để trống – khách khai mã trong MISA.
+- **tonkho – Tổng hợp tồn kho**: tải lên tồn kho đầu kỳ (báo cáo Tổng hợp tồn kho kỳ trước của MISA – lấy số cuối kỳ,
+  hoặc Danh mục VTHH), file mua vào / bán ra mẫu MISA (hoặc thả hóa đơn để chuyển vào mẫu), hàng bán trả lại (tùy chọn)
+  → "Tổng hợp tồn kho": tự ghép mã hàng theo tên, tính nhập – xuất – tồn (giá xuất bình quân cuối kỳ như MISA), xuất đúng mẫu
+  TỔNG HỢP TỒN KHO + file mua vào/bán ra đã điền mã hàng + danh mục hàng MỚI + bảng ghép mã (dòng vàng = cần kiểm tra).
 - **chungtu – Sao kê & chứng từ**: kéo thả hóa đơn PDF/XML/ZIP/ảnh scan → đọc hàng loạt ra Excel và so với dữ liệu cổng;
   kéo thả sao kê ngân hàng (Excel/CSV/PDF/ảnh) → ghép giao dịch với hóa đơn (đã khớp / chưa thanh toán / chưa có hóa đơn).
 - **doichieu – Đối chiếu tờ khai**: chọn file tờ khai 01/GTGT (XML eTax hoặc Excel HTKK) → so từng chỉ tiêu với hóa đơn đã tải.
