@@ -111,6 +111,107 @@ def _forget_window_placement(prof: Path) -> None:
         pass
 
 
+_BRANDED: set[int] = set()
+_ICON_HANDLES: dict[str, int] = {}
+
+
+def _brand_windows(icon: Path, relaunch: str) -> int:
+    """Cửa sổ phần mềm là cửa sổ Chrome/Edge chế độ app -> mặc định thanh taskbar hiện biểu tượng trình duyệt.
+    Gắn cho cửa sổ (tiêu đề "AWBook") 1 mã ứng dụng riêng (AppUserModelID) + icon AWBook -> taskbar hiện logo
+    AWBook, tách nhóm khỏi Chrome; ghim vào taskbar sẽ mở lại AWBook.exe. Trả về số cửa sổ vừa gắn."""
+    if os.name != "nt" or not icon.is_file():
+        return 0
+    try:
+        import ctypes
+        from ctypes import POINTER, Structure, byref, c_ubyte, c_ulong, c_ushort, c_void_p, wintypes
+
+        user32, shell32 = ctypes.windll.user32, ctypes.windll.shell32
+        user32.LoadImageW.restype = wintypes.HANDLE
+        user32.SendMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+        hwnds: list[int] = []
+
+        @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+        def _cb(h, _l):
+            if user32.IsWindowVisible(h):
+                t = ctypes.create_unicode_buffer(256)
+                c = ctypes.create_unicode_buffer(64)
+                user32.GetWindowTextW(h, t, 256)
+                user32.GetClassNameW(h, c, 64)
+                if c.value == "Chrome_WidgetWin_1" and t.value.strip() == "AWBook":
+                    hwnds.append(int(h))
+            return True
+
+        user32.EnumWindows(_cb, 0)
+        if not hwnds:
+            return 0
+        # icon cửa sổ (góc trái + taskbar)
+        for size, flag in ((11, "big"), (49, "small")):   # SM_CXICON / SM_CXSMICON
+            if flag not in _ICON_HANDLES:
+                px = user32.GetSystemMetrics(size) or (32 if flag == "big" else 16)
+                _ICON_HANDLES[flag] = user32.LoadImageW(None, str(icon), 1, px, px, 0x10) or 0  # IMAGE_ICON, LR_LOADFROMFILE
+
+        class GUID(Structure):
+            _fields_ = [("d1", c_ulong), ("d2", c_ushort), ("d3", c_ushort), ("d4", c_ubyte * 8)]
+
+        class PKEY(Structure):
+            _fields_ = [("fmtid", GUID), ("pid", c_ulong)]
+
+        class PROPVARIANT(Structure):
+            _fields_ = [("vt", c_ushort), ("r1", c_ushort), ("r2", c_ushort), ("r3", c_ushort),
+                        ("p", c_void_p), ("p2", c_void_p)]
+
+        iid = GUID(0x886D8EEB, 0x8CF2, 0x4446, (c_ubyte * 8)(0x8D, 0x02, 0xCD, 0xBA, 0x1D, 0xBD, 0xCF, 0x99))
+        fmt = (0x9F4C2855, 0x9F79, 0x4B39, (c_ubyte * 8)(0xA8, 0xD0, 0xE1, 0xD4, 0x2D, 0xE1, 0xD5, 0xF3))
+        props = [(2, relaunch), (4, "AWBook"), (3, f"{icon},0"), (5, "AWBook.PhanMemKeToan")]  # ID gắn sau cùng
+        n = 0
+        for h in hwnds:
+            for flag, wp in (("big", 1), ("small", 0)):
+                if _ICON_HANDLES.get(flag):
+                    user32.SendMessageW(h, 0x0080, wp, _ICON_HANDLES[flag])   # WM_SETICON
+            if h in _BRANDED:
+                continue
+            store = c_void_p()
+            if shell32.SHGetPropertyStoreForWindow(wintypes.HWND(h), byref(iid), byref(store)) != 0 or not store:
+                continue
+            vt = ctypes.cast(store, POINTER(POINTER(c_void_p)))[0]
+            set_value = ctypes.WINFUNCTYPE(ctypes.c_long, c_void_p, POINTER(PKEY), POINTER(PROPVARIANT))(vt[6])
+            commit = ctypes.WINFUNCTYPE(ctypes.c_long, c_void_p)(vt[7])
+            release = ctypes.WINFUNCTYPE(c_ulong, c_void_p)(vt[2])
+            keep = []
+            for pid, val in props:
+                buf = ctypes.create_unicode_buffer(val)
+                keep.append(buf)
+                pv = PROPVARIANT(vt=31, p=ctypes.cast(buf, c_void_p))   # VT_LPWSTR
+                set_value(store, byref(PKEY(GUID(*fmt), pid)), byref(pv))
+            commit(store)
+            release(store)
+            _BRANDED.add(h)
+            n += 1
+        return n
+    except Exception:  # noqa: BLE001 - không gắn được icon thì vẫn chạy bình thường
+        return 0
+
+
+def _brand_soon(icon: Path, relaunch: str) -> None:
+    """Gắn icon ngay khi cửa sổ vừa hiện (dò nhanh trong 40 giây đầu)."""
+    def run() -> None:
+        for _ in range(80):
+            _brand_windows(icon, relaunch)
+            time.sleep(0.5)
+    threading.Thread(target=run, daemon=True).start()
+
+
+def _icon_path() -> Path:
+    base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+    return base / "app" / "assets" / "awbook.ico"
+
+
+def _relaunch_cmd() -> str:
+    if getattr(sys, "frozen", False):
+        return f'"{sys.executable}"'
+    return f'"{sys.executable}" "{Path(__file__).resolve()}"'
+
+
 def _open_window(url: str, root: Path):
     exe = _find_browser()
     if not exe:
@@ -120,8 +221,10 @@ def _open_window(url: str, root: Path):
     prof.mkdir(parents=True, exist_ok=True)
     _forget_window_placement(prof)
     w, h, x, y = _window_geometry()
-    return subprocess.Popen([exe, f"--app={url}", f"--user-data-dir={prof}", "--no-first-run",
+    proc = subprocess.Popen([exe, f"--app={url}", f"--user-data-dir={prof}", "--no-first-run",
                              "--no-default-browser-check", f"--window-size={w},{h}", f"--window-position={x},{y}"])
+    _brand_soon(_icon_path(), _relaunch_cmd())   # logo AWBook trên thanh taskbar thay cho biểu tượng trình duyệt
+    return proc
 
 
 def main() -> None:
@@ -164,6 +267,7 @@ def main() -> None:
         time.sleep(3)
         age = time.time() - t0
         alive = _ui_alive(prof_key)
+        _brand_windows(_icon_path(), _relaunch_cmd())  # cửa sổ mở thêm / tải lại vẫn giữ logo AWBook
         if alive:
             seen_ui, gone = True, 0
         elif seen_ui:

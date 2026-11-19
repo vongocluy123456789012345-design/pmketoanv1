@@ -46,6 +46,33 @@ def index():
                         headers={"Cache-Control": "no-store, no-cache, must-revalidate", "Pragma": "no-cache"})
 
 
+# ---------- logo AWBook (icon cửa sổ / thanh taskbar thay cho biểu tượng trình duyệt)
+ASSETS = Path(__file__).resolve().parent / "assets"
+
+
+@app.get("/favicon.ico")
+def favicon():
+    return FileResponse(ASSETS / "awbook.ico", media_type="image/x-icon")
+
+
+@app.get("/assets/{name}")
+def asset(name: str):
+    if name not in ("awbook.ico", "awbook_192.png", "awbook_512.png"):
+        raise HTTPException(404)
+    return FileResponse(ASSETS / name)
+
+
+@app.get("/manifest.webmanifest")
+def manifest():
+    from fastapi.responses import JSONResponse
+    return JSONResponse({
+        "name": "AWBook", "short_name": "AWBook", "start_url": "/", "display": "standalone",
+        "background_color": "#ffffff", "theme_color": "#0b3d91",
+        "icons": [{"src": "/assets/awbook_192.png", "sizes": "192x192", "type": "image/png"},
+                  {"src": "/assets/awbook_512.png", "sizes": "512x512", "type": "image/png"}]},
+        media_type="application/manifest+json")
+
+
 # Nhịp tim từ giao diện: bản desktop tự tắt khi cửa sổ giao diện đóng (không còn nhịp tim).
 PING = {"last": 0.0}
 

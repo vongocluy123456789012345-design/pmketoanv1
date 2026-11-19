@@ -8,7 +8,7 @@ set AIKEY=
 if exist "%~dp0app\ai_builtin.json" set AIKEY=--add-data "%~dp0app\ai_builtin.json;app"
 .venv\Scripts\python -m PyInstaller desktop.py --noconfirm --clean --onedir --noconsole --name AWBook ^
   --distpath release --workpath build --specpath build --paths . ^
-  --add-data "%~dp0app\templates;app\templates" --add-data "%~dp0app\providers\providers.json;app\providers" --add-data "%~dp0app\ai_guide.md;app" --add-data "%~dp0app\ai_luat.md;app" %AIKEY% ^
+  --add-data "%~dp0app\templates;app\templates" --add-data "%~dp0app\providers\providers.json;app\providers" --add-data "%~dp0app\ai_guide.md;app" --add-data "%~dp0app\ai_luat.md;app" --add-data "%~dp0app\assets;app\assets" --icon "%~dp0app\assets\awbook.ico" %AIKEY% ^
   --collect-submodules app --collect-all playwright --collect-all winsdk --collect-all pypdfium2 ^
   --collect-all pdfplumber --collect-all pdfminer --collect-submodules uvicorn --collect-all xhtml2pdf ^
   --collect-all reportlab --collect-all svglib --collect-all html5lib --hidden-import psutil ^
