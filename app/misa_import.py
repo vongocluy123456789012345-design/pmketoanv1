@@ -901,6 +901,38 @@ def _read_all(items: list[tuple[str, bytes]], idx: dict, job: "Job") -> list[dic
     return invs  # type: ignore[return-value]
 
 
+_CACHE_VER = "1"
+
+
+def _cache_dir() -> Path:
+    return Path(settings.output_dir) / ".cache" / "hoadon"
+
+
+def _cache_key(data: bytes) -> str:
+    import hashlib
+    return hashlib.sha1(data).hexdigest() + _CACHE_VER
+
+
+def _cache_get(key: str, name: str) -> dict[str, Any] | None:
+    try:
+        v = json.loads((_cache_dir() / f"{key}.json").read_text(encoding="utf-8"))
+        return v | {"file": name}
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _cache_put(key: str, inv: dict[str, Any] | None) -> None:
+    """Chỉ lưu hóa đơn đọc được dòng hàng (không lưu file lỗi để lần sau còn đọc lại)."""
+    if not inv or not inv.get("items") or inv.get("loi"):
+        return
+    try:
+        _cache_dir().mkdir(parents=True, exist_ok=True)
+        keep = {k: v for k, v in inv.items() if k != "_text"}
+        (_cache_dir() / f"{key}.json").write_text(json.dumps(keep, ensure_ascii=False, default=str), encoding="utf-8")
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def run(job: Job, files: list[tuple[str, bytes]], tpl: bytes, direction: str, own_mst: str, acc: dict[str, str],
         tpl_name: str = "") -> None:
     from . import fill_template as ft
@@ -920,8 +952,16 @@ def run(job: Job, files: list[tuple[str, bytes]], tpl: bytes, direction: str, ow
         job.total = len(items)
         idx = local_index()
         job.say(f"Đọc {len(items)} hóa đơn (dùng XML/dữ liệu cổng trên máy nếu có – {len(idx)} hóa đơn đã tải)")
+        # hóa đơn đã đọc ở lần chạy trước (cùng nội dung file): lấy lại kết quả, không OCR / AI lại
+        keys = [_cache_key(d) for _n, d in items]
+        invs: list[dict[str, Any] | None] = [_cache_get(k, n) for k, (n, _d) in zip(keys, items)]
+        todo = [i for i, v in enumerate(invs) if v is None]
+        if len(todo) < len(items):
+            job.done += len(items) - len(todo)
+            job.say(f"{len(items) - len(todo)} hóa đơn đã đọc ở lần trước – dùng lại kết quả, đọc mới {len(todo)}")
         # bước 1: đọc nhanh không cần AI – vài tiến trình song song (đọc PDF / OCR tốn CPU, RAM)
-        invs: list[dict[str, Any]] = _read_all(items, idx, job)
+        for i, v in zip(todo, _read_all([items[i] for i in todo], idx, job) if todo else []):
+            invs[i] = v
         need_ai = [i for i, v in enumerate(invs) if not v.get("items") and not v.get("loi")]
         if need_ai:
             job.say(f"{len(need_ai)} hóa đơn bố cục lạ / bản scan – AI đang đọc (song song)")
@@ -939,7 +979,11 @@ def run(job: Job, files: list[tuple[str, bytes]], tpl: bytes, direction: str, ow
                     invs[i]["loi"] = f"{e}"[:200]
                 job.done += 1
             with ThreadPoolExecutor(4) as ex:
-                list(ex.map(ai_one, need_ai))
+                for _ in ex.map(ai_one, need_ai):
+                    if job.ai and job.ai % 5 == 0:
+                        job.say(f"AI đã đọc {job.ai}/{len(need_ai)} hóa đơn")
+        for i in todo + need_ai:
+            _cache_put(keys[i], invs[i])
         rows: list[dict[str, Any]] = []
         seq = 0
         for v in invs:

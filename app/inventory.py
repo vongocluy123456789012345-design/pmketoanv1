@@ -35,7 +35,9 @@ DEFAULT_KHO = "Hàng hóa"
 # ------------------------------------------------------------------ tiện ích
 def _norm(s: Any) -> str:
     t = fold(str(s or "")).lower()
+    t = re.sub(r"(?<=[a-z])\.(?=\d)", "", t)          # "S.70" = "S70", "N.38" = "N38"
     t = re.sub(r"[^a-z0-9]+", " ", t)
+    t = re.sub(r"\b([a-z]{5,})(\d{1,3})\b", r"\1 \2", t)     # "ARCSABER11" = "Arcsaber 11", "Calibar200"
     return re.sub(r"\s+", " ", t).strip()
 
 
@@ -292,16 +294,16 @@ def new_code(ten: str, used: set[str]) -> str:
 # "xịt vệ sinh mặt vợt", cước "Ryzonic 65 CUỘN" khác cước lẻ)
 _KW_STOP = set("""day cuoc cang vot cau long khung bo
 cai chiec doi soi cay hang hoa san pham dung cho the thao chinh hang ma made in japan china viet nam mau size sz loai moi
-nam nu tre em unisex co tron ngan dai chai goi pickleball tennis paddle paddles
+nam nu tre em unisex co tron ngan dai chai goi ong qua pickleball tennis paddle paddles
 trang den do xanh la cam hong vang tim xam bac nau be kem ngoc trai dat duong navy blue black white red pink orange
-yellow green purple gray grey silver gold pastel light dark cyan mint
+yellow green purple gray grey silver gold pastel light dark cyan mint chim tuyen dao troi thep
 s m l xl xxl xxxl 2xl 3xl 4xl 5xl 3u 4u 5u 6u 4u5 3u5 5u5 3ug5 4ug5 5ug5 cl va voi""".split())
 
 
 def _kw(name: str) -> frozenset[str]:
     """Từ khóa nhận dạng hàng: hãng, dòng, số model (bỏ từ loại hàng, màu, size, mã SKU dài, số size giày 34-46)."""
     out = set()
-    for w in _norm(name).split():
+    for w in _norm(_NCC_PREFIX.sub("", str(name or ""))).split():
         if w in _KW_STOP or _UNIT.match(w):
             continue
         if w.isdigit() and 34 <= int(w) <= 46 and len(w) == 2:   # size giày / áo
@@ -312,7 +314,15 @@ def _kw(name: str) -> frozenset[str]:
     return frozenset(out)
 
 
-def _kw_match(inv_name: str, base: list[dict[str, Any]], base_kw: list[frozenset[str]]) -> tuple[dict | None, float, str]:
+def _pick(name: str, dvt: str, cands: list[dict[str, Any]]) -> dict[str, Any]:
+    """Chọn hàng gần nhất: điểm tên -> cùng ĐVT (bán "BG 65" theo Cái thì không lấy "BG 65 cuộn") -> tên sát hơn."""
+    k, d = _norm(name), _norm(dvt)
+    return max(cands, key=lambda it: (round(_score(k, _norm(it["ten"])), 2), bool(d) and _norm(it.get("dvt")) == d,
+                                      difflib.SequenceMatcher(None, k, _norm(it["ten"])).ratio()))
+
+
+def _kw_match(inv_name: str, base: list[dict[str, Any]], base_kw: list[frozenset[str]],
+              dvt: str = "") -> tuple[dict | None, float, str]:
     """Hàng danh mục có ĐỦ từ khóa nhận dạng nằm trong tên hóa đơn (chọn hàng có nhiều từ khóa nhất – cụ thể nhất).
     Thiếu đúng 1 từ chữ (thường là tên hãng: "Lining Halbertec 4000" vs "Halbertec 4000") -> cần kiểm tra."""
     ki = _kw(inv_name)
@@ -320,7 +330,9 @@ def _kw_match(inv_name: str, base: list[dict[str, Any]], base_kw: list[frozenset
         return None, 0.0, ""
     full, near = [], []
     for it, kc in zip(base, base_kw):
-        if len(kc) < 2 or not any(any(c.isdigit() for c in t) or len(t) >= 4 for t in kc):
+        # cần ít nhất 1 từ nhận dạng thật (số hiệu model / tên dòng >= 4 chữ), không tính tên hãng ("đan … Yonex"
+        # không phải "dán … Yonex")
+        if len(kc) < 2 or not any((any(c.isdigit() for c in t) or len(t) >= 4) and t not in _FAM_WEAK for t in kc):
             continue
         miss = kc - ki
         if not miss:
@@ -334,11 +346,73 @@ def _kw_match(inv_name: str, base: list[dict[str, Any]], base_kw: list[frozenset
             best = [it for n, it in cand if n == top]
             if len(best) == 1:
                 return best[0], sc, why
-            # nhiều hàng cùng mức: chọn hàng có tên gần nhất
-            k = _norm(inv_name)
-            b = max(best, key=lambda it: _score(k, _norm(it["ten"])))
-            return b, sc - 0.05, why
+            # nhiều hàng cùng mức: chọn hàng có tên gần nhất, cùng ĐVT
+            return _pick(inv_name, dvt, best), sc - 0.05, why
     return None, 0.0, ""
+
+
+_NCC_PREFIX = re.compile(r"^\s*p\s*-\s*[a-z0-9]+\s*-\s*\d+\s*-\s*", re.I)   # mã NCC đầu tên: "P-AYPT395-4-"
+
+
+def _fam_kw(name: str) -> frozenset[str]:
+    return _kw(name)
+
+
+def _sku_models(name: str) -> set[str]:
+    """Mã model đầu SKU dài: "BAG524B0112ZJTBKZZ" -> bag524, "TRM2974ZZTW1DKGR" -> trm2974."""
+    out = set()
+    for w in _norm(name).split():
+        m = re.match(r"[a-z]{2,4}\d{3,}", w) if len(w) >= 8 else None
+        if m:
+            out.add(m.group(0))
+    return out
+
+
+def _num_toks(kw: frozenset[str]) -> set[str]:
+    """Số hiệu model (>= 2 chữ số): 300, 300b, 6000d, 72, s70, trm2988 (bỏ cc8, 4u5... chỉ 1 chữ số)."""
+    return {w for w in kw if sum(c.isdigit() for c in w) >= 2}
+
+
+def _same_model(t: str, x: str) -> bool:
+    """Số hiệu danh mục t ~ số hiệu hóa đơn x: 300 ~ 300b, 6000 ~ 6000d, trm2988 ~ 2988, trm2988 ~ trm2988zzcc8."""
+    if t == x:
+        return True
+    if x.startswith(t) and x[len(t):].isalpha() and len(x) - len(t) <= 2:
+        return True
+    if len(t) >= 5 and t[0].isalpha() and any(c.isdigit() for c in t) and x.startswith(t):
+        return True                                    # bag524 ~ bag524b0612z (cùng model, khác size / màu)
+    d = re.sub(r"^[a-z]{1,4}", "", t)
+    return len(d) >= 4 and d.isdigit() and (x == d or (t != d and x.startswith(t)))
+
+
+def _family(inv_name: str, it_name: str, inv_kw: frozenset[str] | None = None) -> bool:
+    """CÙNG DÒNG / MODEL, chỉ khác phiên bản – màu – size (Calibar 300B ~ Calibar 300, Aeronaut 6000 Max ~ Aeronaut
+    6000 Speed, BG 65 cuộn ~ BG 65 Titanium, Yonex-2988-CC8 ~ Áo Yonex TRM2988): mọi số hiệu model 2 bên trùng nhau,
+    cùng loại hàng, chung tên dòng / hãng. Khác số hiệu (Halbertec 6000 vs 1000, Axforce 9 vs 90) thì KHÔNG."""
+    ki = inv_kw if inv_kw is not None else _fam_kw(inv_name)
+    kc = _fam_kw(it_name)
+    nc = _num_toks(kc) | _sku_models(it_name)
+    if not nc or _cat(inv_name) != _cat(it_name):
+        return False
+    raw = set(_norm(_NCC_PREFIX.sub("", inv_name)).split())          # cả mã SKU dài (trm2998zzcc8...)
+    if not all(any(_same_model(t, x) for x in ki | raw) for t in nc):
+        return False
+    if not all(any(_same_model(t, x) for t in nc) for x in _num_toks(ki)):
+        return False                                                   # hóa đơn có số hiệu khác không có trong danh mục
+    if any(len(t) >= 5 and sum(c.isdigit() for c in t) >= 3 and any(c.isalpha() for c in t) for t in nc):
+        return True                                                    # mã model chữ + số (TRM2988, AYZU001) đủ nhận dạng
+    shared = {w for w in ki & kc if w.isalpha()}
+    if any(t.isdigit() and len(t) >= 4 for t in nc) and shared and \
+            not {w for w in kc - ki if w.isalpha() and w not in _FAM_WEAK}:
+        return True                                    # áo Yonex-2998 size L ~ áo Yonex-2998 TRM2998ZZCC8 size XS
+    # phải chung TÊN DÒNG hàng (Aeronaut, Calibar, BG...), không tính hãng / loại hàng / chữ phiên bản (cuộn, pro, max)
+    return bool({w for w in ki & kc if w.isalpha() and w not in _FAM_WEAK})
+
+
+_FAM_WEAK = set("""yonex lining li ning victor gosen mizuno kawasaki felet apacs joola kaiwin facolos taro asics ligpro
+arronax spikopoll diadem franklin selkirk head wilson babolat adidas nike kumpoo vnb hai yen
+cuon pro max plus light power speed control tour lite new ii iii iv game edition limited
+giay ao quan vay tui balo bao bong binh xit bang ong hop vo tat dep mieng gen chi boc thun""".split())
 
 
 _CAT_MAP = {"khung": "vot", "vot": "vot", "vet": "vot", "day": "cuoc", "cuoc": "cuoc", "cuon": "cuoc", "ao": "ao",
@@ -377,7 +451,6 @@ def match_codes(items: list[dict[str, Any]], groups: dict[str, list[dict[str, An
     """Gắn mã hàng cho mọi dòng (sửa trực tiếp line["ma_ghep"]). Trả về bảng ghép theo từng tên hàng.
     Ưu tiên MÃ CHUẨN của file đầu kỳ: mã có sẵn -> trùng tên -> khớp từ khóa tên chuẩn -> tên gần đúng -> hàng mới."""
     base = list(items)
-    base_kw = [_kw(i["ten"]) for i in base]
     by_code = {i["ma"].upper(): i for i in items}
     by_name = {_norm(i["ten"]): i for i in items}
     used = set(by_code)
@@ -395,20 +468,31 @@ def match_codes(items: list[dict[str, Any]], groups: dict[str, list[dict[str, An
             key = _norm(ln["ten"])
             if key in memo:
                 m = memo[key]
+                if kind != "Mua vào" and "MỚI" in m["cach"]:     # bán đúng hàng vừa mua (mã tạo lúc ghép mua vào)
+                    m = {**m, "cach": "Hàng mua mới trong kỳ (mã vừa tạo khi ghép mua vào)"}
             else:
                 buying = kind == "Mua vào"
                 # mua vào: so với danh mục đầu kỳ; bán ra / trả lại: so với MỌI hàng đang có (đầu kỳ + hàng mới mua)
-                pool = base if buying else items
-                pool_kw = base_kw if buying else [kw_cache.setdefault(id(i), _kw(i["ten"])) for i in items]
+                # hàng mới tạo khi mua (vd áo Yonex-2993 size XS) cũng làm mã chuẩn để size / màu sau gom vào
+                pool = items
+                pool_kw = [kw_cache.setdefault(id(i), _kw(i["ten"])) for i in items]
                 it = by_name.get(key)
-                kw_it, kw_sc, kw_why = (None, 0.0, "") if it else _kw_match(ln["ten"], pool, pool_kw)
+                kw_it, kw_sc, kw_why = (None, 0.0, "") if it else _kw_match(ln["ten"], pool, pool_kw, ln["dvt"])
                 if it:
                     m = {"ma": it["ma"], "diem": 1.0, "cach": "Trùng tên trong danh mục"}
                 elif kw_it is not None:
                     m = {"ma": kw_it["ma"], "diem": round(kw_sc, 2), "cach": kw_why}
+                elif fam := [i for i in pool if _family(ln["ten"], i["ten"], fk)] if (fk := _fam_kw(ln["ten"])) else []:
+                    if not buying:                     # bán ra: ưu tiên hàng cùng dòng còn tồn
+                        if not avail:
+                            avail.update(_available(items, groups))
+                        fam = [i for i in fam if avail.get(i["ma"].upper(), 0) > 0] or fam
+                    best = _pick(ln["ten"], ln["dvt"], fam)
+                    m = {"ma": best["ma"], "diem": 0.85,
+                         "cach": "Cùng dòng / model, khác phiên bản – màu – size: ghép mã chuẩn – CẦN KIỂM TRA"}
                 else:
                     scored = []
-                    for i in pool:
+                    for i in (base if buying else pool):
                         s = _score(key, _norm(i["ten"]))
                         if ln["dvt"] and i["dvt"] and _norm(ln["dvt"]) != _norm(i["dvt"]):
                             s -= 0.08
@@ -450,7 +534,52 @@ def match_codes(items: list[dict[str, Any]], groups: dict[str, list[dict[str, An
                 report.append({"loai": kind, "ten": ln["ten"], "dvt": ln["dvt"], "ma": m["ma"], "diem": m["diem"],
                                "cach": m["cach"], "ten_dm": by_code[m["ma"].upper()]["ten"]})
             ln["ma_ghep"], ln["cach"] = m["ma"], m["cach"]
+    _rebalance_sales(items, groups, report)
     return report
+
+
+def _rebalance_sales(items: list[dict[str, Any]], groups: dict[str, list[dict[str, Any]]],
+                     report: list[dict[str, Any]]) -> None:
+    """Bán ra VƯỢT số đang có của mã đã ghép (đầu kỳ + mua + trả lại) mà còn hàng CÙNG DÒNG / MODEL khác phiên bản đang
+    tồn (vd bán "BG 65 cuộn" hết hàng, kho còn "BG 65 Titanium" 133): chuyển dòng bán sang mã còn tồn đó."""
+    sell = groups.get("Bán ra") or []
+    if not sell:
+        return
+    left: dict[str, float] = {}
+    for i in items:
+        left[i["ma"].upper()] = left.get(i["ma"].upper(), 0.0) + float(i.get("sl") or 0)
+    for kind in ("Mua vào", "Hàng bán trả lại"):
+        for ln in groups.get(kind) or []:
+            if ln.get("ma_ghep") and ln["sl"] > 0:
+                left[ln["ma_ghep"].upper()] = left.get(ln["ma_ghep"].upper(), 0.0) + ln["sl"]
+    by_code = {i["ma"].upper(): i for i in items}
+    fam_cache: dict[str, list[dict[str, Any]]] = {}
+    moved: dict[tuple[str, str], str] = {}
+    for ln in sorted(sell, key=lambda x: (x.get("ngay") or date.min, x.get("row", 0))):
+        if ln["sl"] <= 0 or not ln.get("ma_ghep") or ln.get("cach") == "Mã có sẵn trong file":
+            continue
+        k = ln["ma_ghep"].upper()
+        if left.get(k, 0.0) >= ln["sl"]:
+            left[k] = left.get(k, 0.0) - ln["sl"]
+            continue
+        if ln["ten"] not in fam_cache:
+            fk = _fam_kw(ln["ten"])
+            cur = by_code.get(k)
+            fam_cache[ln["ten"]] = [i for i in items if i["ma"].upper() != k and (
+                _family(ln["ten"], i["ten"], fk) or (cur is not None and _family(cur["ten"], i["ten"])))]
+        alt = [i for i in fam_cache[ln["ten"]] if left.get(i["ma"].upper(), 0.0) >= ln["sl"]]
+        if not alt:
+            left[k] = left.get(k, 0.0) - ln["sl"]
+            continue
+        best = _pick(ln["ten"], ln["dvt"], alt)
+        left[best["ma"].upper()] -= ln["sl"]
+        moved[(ln["ten"], best["ma"])] = ln["ma_ghep"]
+        ln["cach"] = (f"Mã {ln['ma_ghep']} không còn đủ tồn – xuất hàng cùng dòng còn tồn {best['ma']} – CẦN KIỂM TRA")
+        ln["ma_ghep"] = best["ma"]
+    for (ten, ma), old in moved.items():
+        report.append({"loai": "Bán ra", "ten": ten, "dvt": by_code[ma.upper()]["dvt"], "ma": ma, "diem": 0.8,
+                       "cach": f"Chuyển từ mã {old} (hết tồn) sang hàng cùng dòng còn tồn – CẦN KIỂM TRA",
+                       "ten_dm": by_code[ma.upper()]["ten"]})
 
 
 # ------------------------------------------------------------------ tính tồn kho
@@ -816,7 +945,16 @@ def run(job: Job, inp: dict[str, Any]) -> None:
                     tpl_name = f"MISA_{key}.xlsx"
                 job.say(f"{labels[key]}: chuyển {len(part['invoices'])} hóa đơn vào mẫu MISA {tpl_name}…")
                 mj = mi.Job(id=uuid.uuid4().hex)
-                mi.run(mj, part["invoices"], tpl, direction, inp.get("mst", ""), inp.get("acc") or {}, tpl_name)
+                import threading
+                th = threading.Thread(target=mi.run, args=(mj, part["invoices"], tpl, direction, inp.get("mst", ""),
+                                                            inp.get("acc") or {}, tpl_name), daemon=True)
+                th.start()
+                seen = 0
+                while th.is_alive() or seen < len(mj.log):     # báo tiến độ đọc hóa đơn ra màn hình (không "đứng")
+                    th.join(2)
+                    for m in mj.log[seen:]:
+                        job.log.append(f"{m[:9]}{labels[key]}: {m[9:]}")
+                    seen = len(mj.log)
                 if mj.status != "done":
                     raise RuntimeError(f"Chuyển hóa đơn {labels[key].lower()} lỗi: " + " | ".join(mj.log[-3:]))
                 src = (Path(mj.file).name, Path(mj.file).read_bytes())

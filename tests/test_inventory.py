@@ -79,6 +79,45 @@ def test_match_by_standard_keywords():
     assert lines[3]["ma_ghep"] == "V_LI_H4000" and "KIỂM TRA" in lines[3]["cach"]   # thiếu tên hãng -> cần kiểm tra
 
 
+def test_same_line_other_variant():
+    """Cùng dòng / model khác phiên bản – màu – size vẫn ghép mã chuẩn; khác số model hay khác dòng thì KHÔNG."""
+    mk_i = lambda m, t, d="Cái", sl=5: {"kho": "Hàng hóa", "ma": m, "ten": t, "dvt": d, "sl": sl, "gt": 1}  # noqa: E731
+    items = [mk_i("V_LI_C300", "Vợt cầu lông Lining Calibar 300"),
+             mk_i("V_LI_AE6000", "P-AYPR285-3- Khung vợt cầu lông Aeronaut 6000 Speed"),
+             mk_i("ACL_Y_TRM2988", "Áo cầu lông Yonex TRM2988"),
+             mk_i("OCL_S70", "Ống cầu lông Hải Yến S70", "Ống"),
+             mk_i("BALO_Y_524", "Balo Yonex BAG524B0112ZJTBKZZZZZZ"),
+             mk_i("V_Y_A11PRO", "Vợt cầu lông Yonex Arcsaber 11 Pro  - 4U5"),
+             mk_i("DC_G_P17C", "Cước căng vợt Tennis Gosen Polylon 17 cuộn 200m", "Cuộn")]
+    mk = lambda t: {"row": 1, "ma": "", "ten": t, "dvt": "", "sl": 1, "tt": 1, "ck": 0, "ngay": None}  # noqa: E731
+    buy = [mk("P-AYPT395-4- Vợt cầu lông 3D Calibar 300B"), mk("Khung vợt cầu lông Aeronaut 6000 Max"),
+           mk("Áo thun cổ tròn Yonex-2988-CC8- L-Xanh da trời"), mk("Cầu lông Hải Yến (S.70)"),
+           mk("Túi/balo Yonex-All Day-Trắng thép BAG524B0612Z-STARWT- ZZZZ"),
+           mk("Vợt cầu lông Yonex- ARCSABER11 PRO-4U5- Xám ngọc trai BFRARC11ZPZZ"),
+           mk("Khung vợt cầu lông Halbertec 6000 - 4U"),                 # khác dòng (Halbertec ≠ Aeronaut)
+           mk("Comfort 17 cuộn 220m - Trắng"),                            # khác dòng (Comfort ≠ Polylon)
+           mk("Áo thun cổ tròn Yonex-2993-CC8- XS-Đen/vàng"), mk("Áo thun cổ tròn Yonex-2993-CC8- 2XL-Xanh dương chìm")]
+    inv.match_codes(items, {"Mua vào": buy})
+    got = [ln["ma_ghep"] for ln in buy]
+    assert got[:6] == ["V_LI_C300", "V_LI_AE6000", "ACL_Y_TRM2988", "OCL_S70", "BALO_Y_524", "V_Y_A11PRO"]
+    assert "MỚI" in buy[6]["cach"] and "MỚI" in buy[7]["cach"]
+    assert got[8] == got[9] and "MỚI" in buy[8]["cach"]                 # cùng model áo mới, khác size / màu: 1 mã
+
+
+def test_sales_spill_to_same_line_in_stock():
+    """Bán "BG 65" vượt tồn mã đã ghép (BG 65 cuộn) -> xuất hàng cùng dòng còn tồn (BG 65 Titanium)."""
+    items = [{"kho": "Hàng hóa", "ma": "DC_Y_65C", "ten": "Dây cước căng vợt Yonex BG 65 cuộn", "dvt": "Cuộn", "sl": 2, "gt": 1},
+             {"kho": "Hàng hóa", "ma": "DC_Y_65T", "ten": "Dây cước căng vợt Yonex BG 65 TITANIUM", "dvt": "Cái", "sl": 133, "gt": 1},
+             {"kho": "Hàng hóa", "ma": "DC_Y_80", "ten": "Dây cước căng vợt Yonex BG 80", "dvt": "Cái", "sl": 100, "gt": 1}]
+    sell = [{"row": r, "ma": "", "ten": "Dây cước căng vợt Yonex BG 65 cuộn", "dvt": "Cuộn", "sl": 2, "tt": 1, "ck": 0,
+             "ngay": None} for r in range(5)]
+    inv.match_codes(items, {"Bán ra": sell})
+    assert sell[0]["ma_ghep"] == "DC_Y_65C"
+    assert all(ln["ma_ghep"] == "DC_Y_65T" and "KIỂM TRA" in ln["cach"] for ln in sell[1:])
+    rows = inv.compute(items, [], sell, [])
+    assert not any(r["sl_cuoi"] < 0 for r in rows)
+
+
 def test_sales_never_create_codes():
     """Bán ra chỉ xuất hàng ĐANG CÓ: không khớp chắc chắn thì ghép vào hàng cùng loại gần nhất, không tạo mã mới."""
     items = [{"kho": "Hàng hóa", "ma": "V_Y_A77", "ten": "Vợt cầu lông Yonex Astrox 77 Pro", "dvt": "Cái", "sl": 2, "gt": 1},
