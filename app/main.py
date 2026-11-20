@@ -401,6 +401,29 @@ def vat_config(body: VatCfgIn):
     return vat.set_cfg(_vat_mst(body.mst), kieu=body.kieu, auto=body.auto)
 
 
+class VatLichIn(BaseModel):
+    bat: bool = True
+    ngay: str | list[int] = ""
+    gio: str = "08:00"
+
+
+@app.get("/api/vat/lich")
+def vat_lich_get():
+    from . import vat_lich
+    d = vat_lich.get()
+    return {**d, "mo_ta": vat_lich.describe(d), "windows_ok": vat_lich.task_exists()}
+
+
+@app.post("/api/vat/lich")
+def vat_lich_save(body: VatLichIn):
+    from . import vat_lich
+    try:
+        d = vat_lich.save(body.bat, body.ngay, body.gio)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    return {**d, "mo_ta": vat_lich.describe(d), "windows_ok": vat_lich.task_exists()}
+
+
 class VatClientIn(BaseModel):
     mst: str
     key: str

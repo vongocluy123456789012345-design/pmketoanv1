@@ -243,6 +243,14 @@ def main() -> None:
         _setup_logging(ROOT)
 
     port = settings.port
+    if "--nhac-vat" in sys.argv:   # Windows Task Scheduler gọi đúng ngày giờ đã đặt: hiện bảng nhắc dự báo VAT
+        from app import vat_lich
+        running = not _port_free(port) and _is_our_app(port)
+        if not vat_lich.show_reminder(running):
+            return
+        if running:
+            _open_window(f"http://127.0.0.1:{port}/#vat", ROOT)
+            return
     if not _port_free(port):
         if _is_our_app(port):  # đã có một cửa sổ phần mềm đang chạy -> chỉ mở thêm cửa sổ
             _open_window(f"http://127.0.0.1:{port}/", ROOT)

@@ -320,6 +320,16 @@
       <div style="flex:0 0 auto"><label><input type="checkbox" id="vAuto" style="width:auto"> Tự dự báo đầu kỳ sau (00:00)</label>
         <button id="btnVCfg" class="sec" style="padding:3px 9px;font-size:12px">Lưu cài đặt</button></div>
     </div>
+    <div class="inline" id="vLichBox" style="margin-top:6px;padding:8px 10px;border:1px dashed var(--pri);border-radius:8px;align-items:flex-end">
+      <div style="flex:0 0 auto"><label><input type="checkbox" id="vlBat" style="width:auto"> <b>Lịch nhắc dự báo VAT</b></label>
+        <span class="muted">kể cả khi chưa mở phần mềm</span></div>
+      <div style="flex:1;min-width:180px"><label>Các ngày trong tháng (cách nhau dấu phẩy)</label>
+        <input id="vlNgay" placeholder="vd: 1, 15, 25"></div>
+      <div style="flex:0 0 110px"><label>Giờ</label><input id="vlGio" type="time" value="08:00"></div>
+      <div style="flex:0 0 auto"><button id="btnVLich" class="sec">Lưu lịch nhắc</button></div>
+      <div style="flex-basis:100%" class="muted" id="vlInfo">Đến ngày giờ đã đặt: phần mềm đang mở thì tự dự báo kỳ đang chạy (tính đến hôm đó) cho các MST bật “Tự dự báo”;
+        chưa mở thì Windows tự hiện bảng nhắc <b>“Hãy vào phần mềm để tải hóa đơn và dự báo VAT”</b> (máy tắt lúc đó thì nhắc khi bật máy lại).</div>
+    </div>
     <div class="inline" style="margin-top:6px">
       <div style="flex:2"><label>[22] Thuế GTGT còn được khấu trừ kỳ trước chuyển sang (đ)</label><input id="v22" inputmode="numeric" class="vnum">
         <span class="muted" id="v22Hint"></span></div>
@@ -1196,6 +1206,21 @@ $("btnVCfg").onclick = async () => {
         msg($("vMsg"), `Đã lưu: kê khai theo ${$("vKieu").value === "Q" ? "quý" : "tháng"}, ${$("vAuto").checked ? "tự dự báo lúc 00:00 ngày đầu kỳ sau" : "không tự dự báo"}`, true);
         loadVatMsts(); } catch (e) { msg($("vMsg"), e.message); }
 };
+function showVatLich(r) {
+  $("vlBat").checked = r.bat; $("vlNgay").value = (r.ngay || []).join(", "); $("vlGio").value = r.gio || "08:00";
+  $("vlInfo").dataset.base = $("vlInfo").dataset.base || $("vlInfo").innerHTML;
+  $("vlInfo").innerHTML = `<b>${esc(r.mo_ta)}</b>` + (r.bat ? (r.windows_ok ? " · ✅ đã đặt lịch trên Windows" :
+    ` · ⚠️ ${esc(r.windows || "chưa đặt lịch trên Windows – bấm Lưu lịch nhắc")}`) : "") + "<br>" + $("vlInfo").dataset.base;
+}
+async function loadVatLich() { try { showVatLich(await api("/api/vat/lich")); } catch (e) {} }
+$("btnVLich").onclick = async () => {
+  try {
+    const r = await api("/api/vat/lich", {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({bat: $("vlBat").checked, ngay: $("vlNgay").value, gio: $("vlGio").value})});
+    showVatLich(r); msg($("vMsg"), `${r.mo_ta}. ${r.windows || ""}`, true);
+  } catch (e) { msg($("vMsg"), e.message); }
+};
+loadVatLich();
 $("btnVat").onclick = async () => {
   const p = vatPeriod(); if (!p.ky || !p.nam) return msg($("vMsg"), "Chọn kỳ tính thuế");
   const inputs = {}; Object.entries(VAT_INPUTS).forEach(([k, id]) => inputs[k] = parseVn($(id).value));
