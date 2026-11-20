@@ -84,19 +84,47 @@ def encode_action(action: str | None) -> str:
     return quote(action or "", safe="-_.!~*'()")
 
 
-def find_browser() -> str:
+def find_browsers() -> list[str]:
+    """Mọi Chrome / Edge có trên máy (Chrome trước). Chrome không mở được cổng debug thì thử Edge."""
     cands = [settings.chrome_path] if settings.chrome_path else []
     for base in (os.environ.get("PROGRAMFILES"), os.environ.get("PROGRAMFILES(X86)"),
                  os.environ.get("LOCALAPPDATA")):
         if base:
             cands.append(str(Path(base) / "Google/Chrome/Application/chrome.exe"))
-    for base in (os.environ.get("PROGRAMFILES(X86)"), os.environ.get("PROGRAMFILES")):
+    for base in (os.environ.get("PROGRAMFILES(X86)"), os.environ.get("PROGRAMFILES"), os.environ.get("LOCALAPPDATA")):
         if base:
             cands.append(str(Path(base) / "Microsoft/Edge/Application/msedge.exe"))
+    try:  # Chrome cài ở chỗ khác: lấy theo đăng ký của Windows (App Paths)
+        import winreg
+        for hive in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+            for exe in ("chrome.exe", "msedge.exe"):
+                try:
+                    with winreg.OpenKey(hive, rf"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\{exe}") as k:
+                        cands.append(str(winreg.QueryValue(k, None)).strip('"'))
+                except OSError:
+                    pass
+    except ImportError:
+        pass
+    out: list[str] = []
     for c in cands:
-        if c and Path(c).is_file():
-            return c
-    raise BrowserError("Không tìm thấy Chrome hoặc Edge. Điền đường dẫn vào CHROME_PATH trong file .env")
+        if c and Path(c).is_file() and c.lower() not in (x.lower() for x in out):
+            out.append(c)
+    return out
+
+
+def find_browser() -> str:
+    found = find_browsers()
+    if found:
+        return found[0]
+    raise BrowserError("Không tìm thấy Chrome hoặc Edge trên máy. Cài Google Chrome (chrome.com) rồi mở lại phần mềm, "
+                       "hoặc điền đường dẫn chrome.exe vào CHROME_PATH trong file .env cạnh AWBook.exe")
+
+
+def _pw_error(e: BaseException) -> str:
+    return ("Bộ điều khiển trình duyệt (Playwright) trong phần mềm không chạy được: "
+            f"{str(e).splitlines()[0][:300] if str(e) else type(e).__name__}. Thường do phần mềm diệt virus / Windows "
+            "Defender chặn hoặc xóa file _internal\\playwright\\driver\\node.exe – hãy thêm cả thư mục AWBook vào danh sách "
+            "ngoại lệ (Exclusions) của diệt virus, giải nén lại bản đầy đủ rồi mở lại phần mềm.")
 
 
 def _jwt_payload(token: str) -> dict[str, Any]:
@@ -156,6 +184,8 @@ class BrowserWorker:
         self._lock = threading.Lock()
         self.profile_name: str | None = None
         self.hidden = False
+        self.start_error: BaseException | None = None
+        self.last_error = ""
 
     # ---------- luồng riêng cho Playwright ----------
     def _ensure_thread(self) -> None:
@@ -166,8 +196,19 @@ class BrowserWorker:
             self._thread.start()
 
     def _loop(self) -> None:
-        from playwright.sync_api import sync_playwright
-        self._pw = sync_playwright().start()
+        try:
+            from playwright.sync_api import sync_playwright
+            self._pw = sync_playwright().start()
+            self.start_error = None
+        except BaseException as e:  # noqa: BLE001 - node.exe bị diệt virus chặn, thiếu file... -> báo ngay, không treo
+            log.exception("Không khởi động được Playwright")
+            self.start_error = e
+            self.last_error = _pw_error(e)
+            while not self._q.empty():               # trả lỗi cho các lệnh đang chờ
+                _, box, ev = self._q.get()
+                box["error"] = BrowserError(self.last_error)
+                ev.set()
+            return
         while True:
             fn, box, ev = self._q.get()
             try:
@@ -181,8 +222,12 @@ class BrowserWorker:
         box: dict[str, Any] = {}
         ev = threading.Event()
         self._q.put((fn, box, ev))
-        if not ev.wait(timeout):
-            raise BrowserError("Trình duyệt không phản hồi (quá thời gian chờ)")
+        end = time.time() + timeout
+        while not ev.wait(0.5):
+            if self.start_error is not None and not (self._thread and self._thread.is_alive()):
+                raise BrowserError(_pw_error(self.start_error))
+            if time.time() > end:
+                raise BrowserError("Trình duyệt không phản hồi (quá thời gian chờ)")
         if "error" in box:
             raise box["error"]
         return box["result"]
@@ -196,7 +241,9 @@ class BrowserWorker:
 
     def _cdp_alive(self) -> bool:
         try:
-            return httpx.get(f"http://127.0.0.1:{settings.cdp_port}/json/version", timeout=2).status_code == 200
+            # trust_env=False: máy có cài proxy (công ty, VPN) thì vẫn gọi thẳng 127.0.0.1, không đi qua proxy
+            return httpx.get(f"http://127.0.0.1:{settings.cdp_port}/json/version", timeout=2,
+                             trust_env=False).status_code == 200
         except httpx.HTTPError:
             return False
 
@@ -248,28 +295,69 @@ class BrowserWorker:
             aux[key] = p
         return p
 
-    def _open(self, hidden: bool = False) -> dict[str, Any]:
-        if not self._connected():
-            if not self._cdp_alive():
-                exe = find_browser()
-                self.profile_name = Path(exe).stem
-                PROFILE_DIR.mkdir(parents=True, exist_ok=True)
-                # hidden: tải tự động theo lịch khi chưa mở phần mềm – Chrome chạy ẩn, dùng lại phiên đăng nhập đã lưu
-                subprocess.Popen([
-                    exe, f"--remote-debugging-port={settings.cdp_port}",
+    def _kill_profile(self) -> None:
+        """Chrome cũ (do phần mềm mở lần trước, bị treo / mở không có cổng debug) đang giữ hồ sơ cổng thuế: Chrome
+        mới sẽ chỉ chuyển sang cửa sổ cũ và cổng debug không bao giờ mở -> dừng hẳn trước khi mở lại."""
+        try:
+            import psutil
+            key = str(PROFILE_DIR).lower()
+            for proc in psutil.process_iter(["cmdline"]):
+                if any(key in str(x).lower() for x in (proc.info["cmdline"] or [])):
+                    proc.kill()
+            time.sleep(1)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _launch(self, hidden: bool) -> None:
+        try:
+            PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+            (PROFILE_DIR / ".ghi_thu").write_text("ok", encoding="utf-8")
+        except OSError as e:
+            raise BrowserError(f"Không ghi được thư mục {PROFILE_DIR} ({e}). Giải nén phần mềm vào thư mục có quyền ghi, "
+                               "ví dụ C:\\AWBook hoặc Documents (không để trong C:\\Program Files, không chạy thẳng trong "
+                               "file .zip).") from e
+        browsers = find_browsers()
+        if not browsers:
+            find_browser()                               # báo lỗi không có Chrome / Edge
+        self._kill_profile()
+        errs = []
+        for exe in browsers:
+            # hidden: tải tự động theo lịch khi chưa mở phần mềm – Chrome chạy ẩn, dùng lại phiên đăng nhập đã lưu
+            try:
+                proc = subprocess.Popen([
+                    exe, f"--remote-debugging-port={settings.cdp_port}", "--remote-allow-origins=*",
                     f"--user-data-dir={PROFILE_DIR}", "--no-first-run", "--no-default-browser-check",
                     *(["--headless=new", "--window-size=1366,900"] if hidden else []),
                     PORTAL + "/",
                 ])
-                self.hidden = hidden
-                for _ in range(180 if hidden else 60):     # Chrome chạy ẩn lần đầu khởi động chậm
-                    if self._cdp_alive():
-                        break
-                    time.sleep(0.5)
-                else:
-                    raise BrowserError("Mở được trình duyệt nhưng không kết nối được (cổng debug). "
-                                       "Hãy tắt hết cửa sổ Chrome do phần mềm mở rồi thử lại.")
-            self._browser = self._pw.chromium.connect_over_cdp(f"http://127.0.0.1:{settings.cdp_port}")
+            except OSError as e:
+                errs.append(f"{Path(exe).name}: không chạy được ({e})")
+                continue
+            for _ in range(180 if hidden else 70):     # lần đầu tạo hồ sơ mới / máy chậm: khởi động lâu
+                if self._cdp_alive():
+                    self.profile_name = Path(exe).stem
+                    self.hidden = hidden
+                    return
+                time.sleep(0.5)
+            code = proc.poll()
+            errs.append(f"{Path(exe).name}: " + ("đã tự tắt ngay (mã " + str(code) + ")" if code is not None else
+                                                 f"mở nhưng không bật cổng debug {settings.cdp_port}"))
+            log.warning("Mở %s không kết nối được cổng debug %s (poll=%s)", exe, settings.cdp_port, code)
+            self._kill_profile()
+        raise BrowserError("Không mở được trình duyệt để kết nối cổng thuế – " + "; ".join(errs) + ". Cách xử lý: tắt hết "
+                           "cửa sổ Chrome / Edge rồi bấm lại; nếu là máy công ty có chính sách chặn chế độ gỡ lỗi "
+                           "(RemoteDebuggingAllowed) thì cài thêm Google Chrome bản thường; kiểm tra phần mềm diệt virus "
+                           "có chặn AWBook không. Bấm 'Kiểm tra lỗi' để xem chi tiết.")
+
+    def _open(self, hidden: bool = False) -> dict[str, Any]:
+        if not self._connected():
+            if not self._cdp_alive():
+                self._launch(hidden)
+            try:
+                self._browser = self._pw.chromium.connect_over_cdp(f"http://127.0.0.1:{settings.cdp_port}", timeout=60000)
+            except Exception as e:  # noqa: BLE001
+                raise BrowserError(f"Trình duyệt đã mở nhưng phần mềm không nối vào được: {str(e).splitlines()[0][:300]}. "
+                                   "Tắt hết cửa sổ Chrome do phần mềm mở rồi bấm lại.") from e
         page = self._portal_page()
         try:
             page.bring_to_front()
@@ -278,9 +366,36 @@ class BrowserWorker:
         return self._status()
 
     def open(self, hidden: bool = False) -> dict[str, Any]:
-        if not hidden and self.hidden:
-            return self.show_for_login()        # người dùng bấm mở cổng mà Chrome đang chạy ẩn -> hiện lên
-        return self.call(lambda: self._open(hidden), 120)
+        try:
+            if not hidden and self.hidden:
+                r = self.show_for_login()        # người dùng bấm mở cổng mà Chrome đang chạy ẩn -> hiện lên
+            else:
+                r = self.call(lambda: self._open(hidden), 240)
+            self.last_error = ""
+            return r
+        except Exception as e:
+            log.exception("Mở trình duyệt lỗi")
+            self.last_error = str(e)
+            raise
+
+    def diagnose(self) -> dict[str, Any]:
+        """Thông tin để tìm lỗi không mở được Chrome trên máy khách."""
+        import sys
+        drv = Path(getattr(sys, "_MEIPASS", ROOT)) / "playwright" / "driver" / "node.exe"
+        port_owner = ""
+        try:
+            import psutil
+            for c in psutil.net_connections("tcp"):
+                if c.laddr and c.laddr.port == settings.cdp_port and c.status == "LISTEN":
+                    port_owner = psutil.Process(c.pid).name() if c.pid else "?"
+        except Exception:  # noqa: BLE001
+            pass
+        return {"trinh_duyet_tim_thay": find_browsers(), "playwright_driver": str(drv),
+                "driver_con_file": drv.exists() if getattr(sys, "frozen", False) else True,
+                "playwright_loi": _pw_error(self.start_error) if self.start_error else "",
+                "cong_debug": settings.cdp_port, "cong_debug_dang_mo": self._cdp_alive(), "chuong_trinh_giu_cong": port_owner,
+                "thu_muc_ho_so": str(PROFILE_DIR), "proxy": {k: v for k, v in os.environ.items() if "proxy" in k.lower() and k.lower() != "no_proxy"},
+                "loi_gan_nhat": self.last_error, "thu_muc_phan_mem": str(ROOT)}
 
     def _shutdown(self) -> None:
         """Tắt hẳn Chrome cổng thuế do phần mềm mở (để mở lại ở chế độ khác: ẩn <-> hiện)."""
@@ -383,9 +498,12 @@ class BrowserWorker:
 
     def status(self) -> dict[str, Any]:
         if not (self._thread and self._thread.is_alive()):
-            return {"open": False, "logged_in": False}
+            return {"open": False, "logged_in": False, "error": self.last_error}
         try:
-            return self.call(self._status, 20)
+            st = self.call(self._status, 20)
+            if not st.get("open") and self.last_error:
+                st["error"] = self.last_error
+            return st
         except Exception as e:  # noqa: BLE001
             return {"open": False, "logged_in": False, "error": str(e)}
 

@@ -12,6 +12,9 @@ FROZEN = bool(getattr(sys, "frozen", False))
 ROOT = Path(sys.executable).resolve().parent if FROZEN else Path(__file__).resolve().parent.parent
 RES = Path(getattr(sys, "_MEIPASS", ROOT)) if FROZEN else ROOT
 load_dotenv(ROOT / ".env")
+# máy có proxy (công ty / VPN): mọi kết nối tới chính máy này (giao diện, cổng debug Chrome) không đi qua proxy
+os.environ["NO_PROXY"] = ",".join(x for x in (os.environ.get("NO_PROXY", ""), "127.0.0.1,localhost,::1") if x)
+os.environ["no_proxy"] = os.environ["NO_PROXY"]
 
 
 def _documents_dir() -> Path:

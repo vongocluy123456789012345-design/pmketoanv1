@@ -249,7 +249,7 @@
     <h2>Tự động tải hóa đơn từ cổng thuế (bạn tự đăng nhập trên Chrome)</h2>
     <div class="inline">
       <div style="flex:0 0 auto"><button id="btnOpen">1. Mở trang hóa đơn điện tử</button></div>
-      <div style="flex:2"><span id="bState" class="badge pending">Chưa mở trình duyệt</span>
+      <div style="flex:2"><span id="bState" class="badge pending">Chưa mở trình duyệt</span> <a href="#" id="bDiag" class="muted">Kiểm tra lỗi</a>
         <span class="muted" id="bHint">Bấm nút để mở Chrome, rồi đăng nhập (tự nhập mật khẩu + captcha) như bình thường.</span></div>
     </div>
     <div class="inline" style="margin-top:10px">
@@ -1050,13 +1050,27 @@ let autoJob = null, autoTimer = null, outDir = "", lastCapImg = null;
 async function refreshBrowser() {
   let s; try { s = await api("/api/browser/status"); } catch (e) { return; }
   outDir = s.output_dir; $("aFolder").textContent = outDir;
-  if (!s.open) { $("bState").textContent = "Chưa mở trình duyệt"; $("bState").className = "badge pending"; }
+  if (!s.open) { $("bState").textContent = s.error ? "Chưa mở được trình duyệt – bấm Kiểm tra lỗi" : "Chưa mở trình duyệt"; $("bState").className = "badge pending"; $("bState").title = s.error || ""; }
   else if (!s.logged_in) { $("bState").textContent = s.expired ? "Phiên đã hết hạn – đăng nhập lại" : "Chờ bạn đăng nhập trên Chrome..."; $("bState").className = "badge rendered"; }
   else { $("bState").textContent = "Đã đăng nhập MST " + (s.mst || ""); $("bState").className = "badge original"; }
   $("bHint").style.display = s.logged_in ? "none" : "";
   $("btnAuto").disabled = !s.logged_in || !!autoJob;
   if (s.job_id && !autoJob && !String(s.job_id).startsWith("quick-")) watchAuto(s.job_id);  // đọc nhanh VAT: ô captcha hiện ở tab VAT (watchQuick)
 }
+$("bDiag").onclick = async e => {
+  e.preventDefault();
+  try {
+    const d = await api("/api/browser/diag");
+    alert("KIỂM TRA MỞ TRÌNH DUYỆT\n\n" +
+      "Chrome / Edge tìm thấy: " + (d.trinh_duyet_tim_thay.join("\n   ") || "KHÔNG CÓ – cần cài Google Chrome") +
+      "\nBộ điều khiển (node.exe): " + (d.driver_con_file ? "có" : "MẤT FILE – diệt virus đã xóa? Thêm thư mục AWBook vào ngoại lệ rồi giải nén lại") +
+      (d.playwright_loi ? "\nLỗi bộ điều khiển: " + d.playwright_loi : "") +
+      "\nCổng debug " + d.cong_debug + ": " + (d.cong_debug_dang_mo ? "đang mở" : "chưa mở") + (d.chuong_trinh_giu_cong ? " (đang dùng bởi " + d.chuong_trinh_giu_cong + ")" : "") +
+      (Object.keys(d.proxy).length ? "\nMáy có proxy: " + JSON.stringify(d.proxy) : "") +
+      "\nThư mục phần mềm: " + d.thu_muc_phan_mem +
+      (d.loi_gan_nhat ? "\n\nLỖI GẦN NHẤT:\n" + d.loi_gan_nhat : "\n\nChưa ghi nhận lỗi – bấm 'Mở trang hóa đơn điện tử' rồi chờ tối đa 1 phút."));
+  } catch (err) { alert(err.message); }
+};
 $("btnOpen").onclick = async () => {
   $("btnOpen").disabled = true; $("bState").textContent = "Đang mở Chrome...";
   try { await api("/api/browser/open", {method: "POST"}); } catch (e) { alert(e.message); }

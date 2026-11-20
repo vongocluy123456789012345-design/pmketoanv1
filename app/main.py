@@ -168,6 +168,12 @@ def browser_open():
         raise HTTPException(500, "Thiếu thư viện playwright. Chạy: .venv\\Scripts\\pip install playwright")
 
 
+@app.get("/api/browser/diag")
+def browser_diag():
+    from .gdt.browser import BROWSER
+    return BROWSER.diagnose()
+
+
 @app.get("/api/browser/status")
 def browser_status():
     from .auto_download import running_job
