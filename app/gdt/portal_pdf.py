@@ -98,17 +98,19 @@ _RENDER_JS = """async ({row, tab, needCss}) => {
   return {html, css, ok: !!(m && /Tổng tiền thanh toán|Tổng cộng tiền thanh toán/.test(m.innerText))};
 }"""
 
-_state: dict[str, Any] = {"unavailable": None, "cdp": None, "cdp_page": None, "css": None}
+_state: dict[str, Any] = {"css": None}
+_unavailable: dict[int, str] = {}      # theo trang HĐĐT (tải nhiều công ty: mỗi công ty 1 cửa sổ)
+_cdp: dict[int, Any] = {}              # id(tab) -> phiên CDP để in
 
 
-def reset() -> None:
+def reset(slot: int = 0) -> None:
     """Gọi đầu mỗi lần tải: thử lại chức năng in từ cổng."""
-    _state["unavailable"] = None
+    _unavailable.pop(slot, None)
 
 
-def _lookup_page():
+def _lookup_page(slot: int = 0):
     """Tab cổng đã đăng nhập, đang có chức năng Xem hóa đơn. Không mở tab mới, không reload."""
-    p = BROWSER._logged_page()
+    p = BROWSER._slot_page(slot)
     if p.evaluate("(" + _FIND + ")() === null"):
         # Chuyển trang bằng bộ định tuyến của web cổng (Next.js) -> giữ nguyên phiên đăng nhập.
         moved = p.evaluate("""(path) => { const r = window.next && window.next.router;
@@ -124,22 +126,22 @@ def _lookup_page():
 
 def render(row: dict[str, Any], sco: bool) -> bytes:
     """row: dữ liệu hóa đơn (nên là JSON chi tiết từ /invoices/detail). Trả về PDF."""
-    if _state["unavailable"]:
-        raise BrowserError(_state["unavailable"])
-    BROWSER.login_free.wait(3600)   # đang đăng nhập lần lượt nhiều công ty trên tab cổng -> chờ xong mới in
+    slot = BROWSER.thread_slot()
+    if _unavailable.get(slot):
+        raise BrowserError(_unavailable[slot])
 
     def run() -> bytes:
-        p = _lookup_page()
+        p = _lookup_page(slot)
         try:
             res = p.evaluate(_OPEN_JS, {"row": row, "tab": 2 if sco else 1})
             if res.get("err"):
                 raise BrowserError("Không tìm thấy chức năng xem hóa đơn trên trang cổng")
             if not res.get("ok"):
                 raise BrowserError("Cổng không hiển thị được hóa đơn")
-            cdp = _state.get("cdp")
-            if not cdp or _state.get("cdp_page") is not p:
+            cdp = _cdp.get(id(p))
+            if not cdp:
                 cdp = p.context.new_cdp_session(p)
-                _state["cdp"], _state["cdp_page"] = cdp, p
+                _cdp[id(p)] = cdp
             out = cdp.send("Page.printToPDF", {"printBackground": True, "preferCSSPageSize": True})
             return base64.b64decode(out["data"])
         finally:
@@ -159,16 +161,17 @@ def render(row: dict[str, Any], sco: bool) -> bytes:
         if isinstance(e, BrowserAuthError):
             raise
         if "trang" in str(e).lower() and "Tra cứu" in str(e):
-            _state["unavailable"] = str(e)  # không mở được trang -> các hóa đơn sau khỏi thử lại
+            _unavailable[slot] = str(e)  # không mở được trang -> các hóa đơn sau khỏi thử lại
         raise
 
 
 def capture(row: dict[str, Any], sco: bool) -> str:
     """Chỉ lấy HTML hóa đơn đã vẽ trên trang cổng (nhanh); việc in ra PDF làm song song ở Chrome chạy ẩn."""
-    BROWSER.login_free.wait(3600)
+
+    slot = BROWSER.thread_slot()
 
     def run() -> str:
-        p = _lookup_page()
+        p = _lookup_page(slot)
         res = p.evaluate(_RENDER_JS, {"row": row, "tab": 2 if sco else 1, "needCss": _state["css"] is None})
         if res.get("err"):
             raise BrowserError("Không tìm thấy chức năng xem hóa đơn trên trang cổng")

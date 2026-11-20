@@ -218,8 +218,7 @@ class BrowserWorker:
         self.start_error: BaseException | None = None
         self.last_error = ""
         self._tl = threading.local()          # token riêng của luồng (tải nhiều công ty cùng lúc)
-        self.login_free = threading.Event()   # xóa khi đang đăng nhập lần lượt nhiều công ty trên tab cổng
-        self.login_free.set()
+        self._slots: dict[int, dict[str, Any]] = {}   # trang HĐĐT số 2, 3...: {"ctx", "page"} – cookie riêng từng cửa sổ
         # nhịp gọi cổng dùng chung mọi luồng: cổng giới hạn theo máy (HTTP 429) -> gặp 429 thì tất cả cùng giãn ra
         self._rate_lock = threading.Lock()
         self._next_slot = 0.0
@@ -292,7 +291,11 @@ class BrowserWorker:
         ctxs = self._browser.contexts
         if not ctxs:
             raise BrowserError("Trình duyệt đã đóng. Bấm 'Mở trang hóa đơn điện tử' lại.")
-        return ctxs[0]
+        mine = [s["ctx"] for s in self._slots.values()]
+        main = [c for c in ctxs if c not in mine]   # cửa sổ cổng thuế chính, không phải các trang HĐĐT 2, 3...
+        if not main:
+            raise BrowserError("Trình duyệt đã đóng. Bấm 'Mở trang hóa đơn điện tử' lại.")
+        return main[0]
 
     def _portal_page(self, create: bool = True):
         ctx = self._context()
@@ -477,11 +480,11 @@ class BrowserWorker:
             pass
 
     # ---------- đăng nhập: người dùng tự gõ captcha và tự bấm "Đăng nhập" trên trang cổng ----------
-    def prefill_login(self, username: str, password: str) -> bool:
+    def prefill_login(self, username: str, password: str, slot: int = 0) -> bool:
         """Mở form đăng nhập trên trang cổng (cửa sổ Chrome thật), điền sẵn tài khoản + mật khẩu đã lưu và đặt con trỏ
         vào ô captcha. Người dùng tự nhập captcha và tự bấm Đăng nhập."""
         def run() -> bool:
-            page = self._portal_page()
+            page = self._slot_page(slot, create=True)
             try:
                 page.bring_to_front()
             except Exception:  # noqa: BLE001
@@ -521,6 +524,130 @@ class BrowserWorker:
     def thread_token(self) -> str | None:
         return getattr(self._tl, "token", None)
 
+    def use_slot(self, slot: int) -> None:
+        """Luồng hiện tại gọi cổng trên trang HĐĐT số `slot` (0/1 = cửa sổ cổng thuế chính)."""
+        self._tl.slot = int(slot or 0)
+
+    def thread_slot(self) -> int:
+        return getattr(self._tl, "slot", 0)
+
+    # ---------- nhiều trang HĐĐT: mỗi trang 1 cửa sổ Chrome riêng (cookie riêng) để đăng nhập 1 công ty ----------
+    def _slot_ctx(self, n: int):
+        if n <= 1:
+            return self._context()
+        s = self._slots.get(n)
+        if not s:
+            raise BrowserAuthError(f"Chưa mở trang HĐĐT số {n}")
+        return s["ctx"]
+
+    def _slot_page(self, n: int, create: bool = False):
+        """Tab cổng thuế của trang HĐĐT số n. Chỉ gọi bên trong call()."""
+        if n <= 1:
+            return self._portal_page() if create else self._logged_page()
+        s = self._slots.get(n)
+        if s:
+            try:
+                if not s["page"].is_closed():
+                    return s["page"]
+                for p in s["ctx"].pages:
+                    if not p.is_closed() and p.url.startswith(PORTAL):
+                        s["page"] = p
+                        return p
+                if create:
+                    p = s["ctx"].new_page()
+                    p.goto(PORTAL + "/", wait_until="domcontentloaded", timeout=45000)
+                    s["page"] = p
+                    return p
+            except Exception:  # noqa: BLE001 - cửa sổ / context đã bị đóng
+                self._slots.pop(n, None)
+                if create:
+                    return self._slot_page(n, True)
+        elif create:
+            ctx = self._browser.new_context(no_viewport=True)
+            p = ctx.new_page()
+            self._slots[n] = {"ctx": ctx, "page": p}
+            for i in range(3):
+                try:
+                    p.goto(PORTAL + "/", wait_until="domcontentloaded", timeout=45000)
+                    break
+                except Exception as e:  # noqa: BLE001
+                    log.warning("Mở cổng thuế (trang %d) lỗi lần %d: %s", n, i + 1, str(e).splitlines()[0])
+                    time.sleep(2 + 3 * i)
+            return p
+        raise BrowserAuthError(f"Cửa sổ trang HĐĐT số {n} đã đóng – bấm 'Mở trang HĐĐT {n}' và đăng nhập lại.")
+
+    def _slot_jwt(self, n: int) -> str | None:
+        if n <= 1:
+            return self._jwt()
+        for c in self._slot_ctx(n).cookies(PORTAL):
+            if c.get("name") == "jwt" and c.get("value"):
+                return c["value"]
+        return None
+
+    def _slot_status(self, n: int) -> dict[str, Any]:
+        if n <= 1:
+            st = self._status()
+            if st.get("open") and self._portal_page(create=False) is None:
+                st = {"open": False, "logged_in": False}
+            return st
+        if not self._connected() or n not in self._slots:
+            return {"open": False, "logged_in": False}
+        try:
+            self._slot_page(n)
+            token = self._slot_jwt(n)
+        except Exception:  # noqa: BLE001
+            return {"open": False, "logged_in": False}
+        if not token:
+            return {"open": True, "logged_in": False}
+        info = self.token_info(token)
+        if info["exp"] and info["exp"] < time.time():
+            return {"open": True, "logged_in": False, "expired": True}
+        return {"open": True, "logged_in": True, "mst": info["mst"], "expires": info["exp"]}
+
+    def open_slot(self, n: int) -> dict[str, Any]:
+        """Mở (hoặc đưa lên trước) cửa sổ Chrome của trang HĐĐT số n để đăng nhập 1 công ty."""
+        if n <= 1:
+            return self.open()
+
+        def run() -> dict[str, Any]:
+            if not self._connected():
+                self._open(False)
+            page = self._slot_page(n, create=True)
+            try:
+                page.bring_to_front()
+            except Exception:  # noqa: BLE001
+                pass
+            return self._slot_status(n)
+        try:
+            r = self.call(run, 240)
+            self.last_error = ""
+            return r
+        except Exception as e:
+            self.last_error = str(e)
+            raise
+
+    def close_slot(self, n: int) -> None:
+        def run() -> None:
+            s = self._slots.pop(n, None)
+            if s:
+                try:
+                    s["ctx"].close()
+                except Exception:  # noqa: BLE001
+                    pass
+        if n > 1 and self._thread and self._thread.is_alive():
+            self.call(run, 60)
+
+    def slots_status(self, ns: list[int]) -> dict[int, dict[str, Any]]:
+        if not (self._thread and self._thread.is_alive()):
+            return {n: {"open": False, "logged_in": False} for n in ns}
+        try:
+            return self.call(lambda: {n: self._slot_status(n) for n in ns}, 30)
+        except Exception as e:  # noqa: BLE001
+            return {n: {"open": False, "logged_in": False, "error": str(e)} for n in ns}
+
+    def slot_token(self, n: int) -> str | None:
+        return self.call(lambda: self._slot_jwt(n), 30)
+
     def current_token(self) -> str | None:
         """Token của công ty đang đăng nhập trên Chrome."""
         return self.call(self._jwt, 20)
@@ -534,9 +661,10 @@ class BrowserWorker:
         """Chạy các fetch trong tab cổng mà không chiếm luồng trình duyệt suốt lúc chờ mạng."""
         rid = uuid.uuid4().hex
         args = {"id": rid, "reqs": reqs, "timeoutMs": int(timeout * 1000)}
+        slot = self.thread_slot()
         lost = [{"status": 0, "ctype": "", "b64": "", "error": "Trang cổng vừa tải lại"}] * len(reqs)
         try:
-            self.call(lambda: self._logged_page().evaluate(_START_JS, args), 60)
+            self.call(lambda: self._slot_page(slot).evaluate(_START_JS, args), 60)
         except BrowserAuthError:
             raise
         except BrowserError as e:
@@ -550,7 +678,7 @@ class BrowserWorker:
             time.sleep(delay)
             delay = min(0.3, delay * 1.6)
             try:
-                r = self.call(lambda: self._logged_page().evaluate(_POLL_JS, rid), 60)
+                r = self.call(lambda: self._slot_page(slot).evaluate(_POLL_JS, rid), 60)
             except BrowserAuthError:
                 raise
             except Exception as e:  # noqa: BLE001
@@ -589,7 +717,8 @@ class BrowserWorker:
         return h
 
     def _auth_token(self) -> str:
-        token = self.thread_token() or self.call(self._jwt, 30)
+        slot = self.thread_slot()
+        token = self.thread_token() or self.call(lambda: self._slot_jwt(slot), 30)
         if not token:
             raise BrowserAuthError("Chưa đăng nhập cổng thuế trên trình duyệt (hoặc phiên đã hết hạn).")
         return token
@@ -657,7 +786,8 @@ class BrowserWorker:
             # "Failed to fetch" thoáng qua (trang đang tải / mạng chập chờn / cổng ngắt kết nối) -> chờ rồi thử lại
             time.sleep(4 * attempt)
             try:
-                self.call(lambda: self._logged_page().wait_for_load_state("domcontentloaded", timeout=15000), 30)
+                slot = self.thread_slot()
+                self.call(lambda: self._slot_page(slot).wait_for_load_state("domcontentloaded", timeout=15000), 30)
             except BrowserAuthError:
                 raise
             except Exception:  # noqa: BLE001

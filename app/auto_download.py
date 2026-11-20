@@ -142,8 +142,9 @@ class AutoJob:
     manual_captcha: bool = False  # tải theo lịch: captcha hiện bảng cho người dùng tự nhập (không tự đọc)
     mst: str = ""
     out_dir: str = ""
-    token: str = ""      # tải nhiều công ty cùng lúc: token riêng của công ty này ("" = phiên đang đăng nhập)
-    user: str = ""       # tên đăng nhập cổng thuế của công ty (tải nhiều công ty)
+    token: str = ""      # tải nhiều công ty: token riêng của công ty này, giữ cố định cả lượt ("" = phiên đang đăng nhập)
+    user: str = ""
+    slot: int = 0        # tải nhiều công ty: số trang HĐĐT (cửa sổ Chrome riêng) của công ty này
     status: str = "running"  # running | done | error | auth_error | cancelled
     total: int = 0
     done: int = 0
@@ -413,6 +414,7 @@ def run(job: AutoJob) -> None:
     try:
         if job.token:
             BROWSER.use_token(job.token)
+            BROWSER.use_slot(job.slot)
             info = BROWSER.token_info(job.token)
             if info["exp"] and info["exp"] < time.time():
                 raise BrowserAuthError("Phiên đăng nhập cổng thuế của công ty này đã hết hạn – đăng nhập lại.")
@@ -423,7 +425,7 @@ def run(job: AutoJob) -> None:
                 raise BrowserAuthError("Chưa đăng nhập cổng thuế trên trình duyệt.")
         job.mst = _s(st.get("mst")) or "chua-ro-MST"
         from .gdt import portal_pdf
-        portal_pdf.reset()
+        portal_pdf.reset(job.slot)
         root = Path(settings.output_dir) / _safe(job.mst)
         job.out_dir = str(root)
         job.say(f"MST {job.mst} – lưu vào {root}")
@@ -483,6 +485,7 @@ def run(job: AutoJob) -> None:
         job.err(f"{e}\n{traceback.format_exc()[-1200:]}")
     finally:
         BROWSER.use_token(None)
+        BROWSER.use_slot(0)
         job.captcha = None
         if job._rows and job.out_dir:
             try:
@@ -1240,16 +1243,13 @@ def _month_sheet(wb, rows: list[dict[str, Any]], bold, fill) -> None:
 
 
 def running_job() -> AutoJob | None:
-    """Lượt tải 1 công ty đang chạy (không tính các lượt của "tải nhiều công ty cùng lúc")."""
+    """Lượt tải ở trang Tải hóa đơn đang chạy (không tính các trang HĐĐT của "Tải nhiều công ty")."""
     return next((j for j in JOBS.values() if j.status == "running" and not j.token), None)
 
 
-MULTI = {"active": False}   # đang chạy "tải nhiều công ty cùng lúc" (app/multi_sync.py)
-
-
 def busy() -> bool:
-    """Có lượt tải nào đang chạy (1 công ty hoặc nhiều công ty) -> không bắt đầu lượt khác dùng phiên Chrome."""
-    return bool(running_job() or MULTI["active"])
+    """Có lượt tải nào đang chạy (kể cả các trang HĐĐT của "Tải nhiều công ty") -> không bắt đầu lượt khác."""
+    return bool(running_any())
 
 
 def running_any() -> list[AutoJob]:
@@ -1258,9 +1258,9 @@ def running_any() -> list[AutoJob]:
 
 def start(d_from: date, d_to: date, kinds: list[str], get_excel: bool, get_xml: bool,
           get_pdf: bool, easy_captcha: bool = False, manual_captcha: bool = False, token: str = "",
-          user: str = "") -> AutoJob:
+          user: str = "", slot: int = 0) -> AutoJob:
     job = AutoJob(uuid.uuid4().hex, date_chunks(d_from, d_to), kinds, get_excel, get_xml, get_pdf, easy_captcha,
-                  manual_captcha=manual_captcha, token=token, user=user)
+                  manual_captcha=manual_captcha, token=token, user=user, slot=slot)
     JOBS[job.id] = job
     threading.Thread(target=run, args=(job,), daemon=True, name=f"auto-{job.id[:6]}").start()
     return job

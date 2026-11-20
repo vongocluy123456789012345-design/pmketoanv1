@@ -137,6 +137,7 @@
   <a href="#dulieu" data-page="dulieu">Kho dữ liệu (Supabase)</a>
   <div class="tiMenu" id="tiMenu"><a href="#" id="tiBtn">☰ Tiện ích ▾</a>
     <div class="tiDrop">
+      <a href="#tainhieu" data-page="tainhieu">⬇️ Tải hóa đơn nhiều công ty cùng lúc</a>
       <a href="#tongquan" data-page="tongquan">📊 Bảng điều khiển tất cả khách hàng</a>
       <a href="#hannop" data-page="hannop">📅 Lịch hạn nộp thuế &amp; nhắc việc</a>
       <a href="#kiemxuat" data-page="kiemxuat">🔎 Kiểm tra đầu vào trước khi xuất HĐ</a>
@@ -149,6 +150,39 @@
     </div></div>
 </nav>
 <main>
+ <div class="page" id="page-tainhieu">
+  <section class="card" style="border-color:var(--pri)">
+    <h2>Tải hóa đơn nhiều công ty cùng lúc</h2>
+    <p class="muted">Mỗi <b>trang HĐĐT</b> là một cửa sổ Chrome riêng: bấm <b>Mở trang HĐĐT</b> rồi đăng nhập 1 công ty trên cửa sổ đó
+      (tự nhập captcha). Cần thêm công ty thì bấm <b>+ Thêm trang HĐĐT</b>. Đăng nhập xong hết thì bấm <b>Bắt đầu tải tất cả</b> –
+      các trang tải song song, mỗi trang có bảng tiến trình riêng, hóa đơn lưu vào thư mục MST của từng công ty.
+      Chọn "Tài khoản đã lưu" (lưu ở mục <a href="#lich" data-page="lich">Lịch tự động</a>) để phần mềm điền sẵn tài khoản + mật khẩu.</p>
+    <div class="inline">
+      <div><label>Từ ngày</label><input id="tnFrom" type="date"></div>
+      <div><label>Đến ngày</label><input id="tnTo" type="date"></div>
+      <div style="flex:3"><label>Loại hóa đơn</label>
+        <label style="display:inline;margin-right:10px"><input type="checkbox" class="tnKind" value="mua-vao" checked style="width:auto"> Mua vào (có mã)</label>
+        <label style="display:inline;margin-right:10px"><input type="checkbox" class="tnKind" value="mua-vao-khong-ma" checked style="width:auto"> Mua vào (không mã)</label>
+        <label style="display:inline;margin-right:10px"><input type="checkbox" class="tnKind" value="ban-ra" checked style="width:auto"> Bán ra</label>
+        <label style="display:inline;margin-right:10px"><input type="checkbox" class="tnKind" value="mua-vao-mtt" style="width:auto"> Mua vào máy tính tiền</label>
+        <label style="display:inline"><input type="checkbox" class="tnKind" value="ban-ra-mtt" style="width:auto"> Bán ra máy tính tiền</label>
+      </div>
+    </div>
+    <div class="inline" style="margin-top:6px">
+      <div style="flex:3">
+        <label style="display:inline;margin-right:10px"><input id="tnExcel" type="checkbox" checked style="width:auto"> Bảng kê Excel</label>
+        <label style="display:inline;margin-right:10px"><input id="tnXml" type="checkbox" checked style="width:auto"> XML</label>
+        <label style="display:inline;margin-right:10px"><input id="tnPdf" type="checkbox" checked style="width:auto"> PDF gốc</label>
+        <label style="display:inline"><input id="tnEasy" type="checkbox" checked style="width:auto"> Tự giải captcha từng hóa đơn (EasyInvoice…)</label>
+      </div>
+      <div style="flex:0 0 auto"><button id="tnAdd" class="sec">+ Thêm trang HĐĐT</button></div>
+      <div style="flex:0 0 auto"><button id="tnAll">Bắt đầu tải tất cả</button></div>
+      <div style="flex:0 0 auto"><button id="tnStopAll" class="sec">Dừng tất cả</button></div>
+    </div>
+    <div id="tnMsg" class="muted" style="margin-top:6px"></div>
+  </section>
+  <div id="tnGrid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(480px,1fr));gap:14px"></div>
+ </div>
  <div class="page" id="page-tongquan">
   <section class="card">
     <h2>Bảng điều khiển tất cả khách hàng</h2>
@@ -292,24 +326,6 @@
     <div style="margin-top:10px"><progress id="aProg" value="0" max="1"></progress>
       <span id="aText" class="muted"></span> <a href="#" id="aSummary" style="display:none">Mở file tổng hợp</a></div>
     <div id="aLog" style="background:#0d1117;color:#c9d1d9;font:12px Consolas,monospace;padding:8px;height:180px;overflow:auto;border-radius:6px;white-space:pre-wrap;margin-top:6px"></div>
-  </section>
-
-  <section class="card" id="muCard">
-    <h2>Tải nhiều công ty cùng lúc</h2>
-    <p class="muted">Chọn các công ty đã lưu tài khoản (thêm ở mục <a href="#lich" data-page="lich">Lịch tự động</a>). Phần mềm cho đăng nhập
-      <b>lần lượt</b> từng công ty trên Chrome (tự điền tài khoản + mật khẩu, bạn chỉ nhập captcha rồi bấm Đăng nhập).
-      Đăng nhập xong công ty nào là <b>tải ngay</b> công ty đó, các công ty đã đăng nhập <b>tải song song</b> (tối đa 4 công ty một lúc).
-      Dùng khoảng ngày, loại hóa đơn và tùy chọn Excel/XML/PDF ở khung trên. Mỗi công ty lưu vào thư mục MST riêng.</p>
-    <div class="inline">
-      <div style="flex:3" id="muList" class="muted">Đang tải danh sách công ty…</div>
-      <div style="flex:0 0 auto"><label style="display:inline"><input type="checkbox" id="muAll" style="width:auto"> Chọn tất cả</label></div>
-      <div style="flex:0 0 auto"><button id="muRun">Tải các công ty đã chọn</button> <button id="muStop" class="sec" disabled>Dừng tất cả</button></div>
-    </div>
-    <div id="muLogin" style="display:none;margin-top:10px;padding:10px;border:1px solid var(--warn);border-radius:6px;background:#fff8c5">
-      <b id="muLoginText"></b> <div class="muted" id="muLoginMsg"></div>
-      <div style="margin-top:6px"><button class="sec" id="muRefill">Điền lại tài khoản</button> <button class="sec" id="muSkip">Bỏ qua công ty này</button></div>
-    </div>
-    <div id="muOut" style="margin-top:10px"></div>
   </section>
 
   <section class="card">
@@ -1156,68 +1172,6 @@ $("btnAuto").onclick = async () => {
   } catch (e) { alert(e.message); }
 };
 $("btnStop").onclick = () => autoJob && api(`/api/auto/${autoJob}/stop`, {method: "POST"});
-// ----- tải nhiều công ty cùng lúc -----
-let muTimer = null;
-async function muAccounts() {
-  const r = await api("/api/gdt-accounts").catch(() => ({items: []}));
-  const items = r.items || [];
-  $("muList").innerHTML = items.length ? items.map(a => `<label style="display:inline-block;margin:0 14px 4px 0">
-      <input type="checkbox" class="muU" value="${esc(a.username)}" style="width:auto"> ${esc(a.ten || a.username)}
-      <span class="muted">${esc(a.ten ? a.username : "")}${a.ok ? "" : " (chưa lưu mật khẩu)"}</span></label>`).join("")
-    : `Chưa lưu tài khoản công ty nào – thêm ở mục <a href="#lich" data-page="lich">Lịch tự động</a> (MST + mật khẩu cổng thuế).`;
-}
-$("muAll").onchange = () => document.querySelectorAll(".muU").forEach(c => c.checked = $("muAll").checked);
-const muIcon = {cho: "⏳", login: "🔑", cho_tai: "🕒", dang_tai: "⬇️", xong: "✅", thieu: "⚠️", loi: "❌", bo_qua: "⏭️", dung: "⏹️"};
-function muRender(r) {
-  if (!r || !r.id) { $("muOut").innerHTML = ""; $("muLogin").style.display = "none"; return; }
-  const live = r.status === "running";
-  $("muRun").disabled = live; $("muStop").disabled = !live;
-  const cur = r.cur != null ? r.items[r.cur] : null;
-  $("muLogin").style.display = live && cur && cur.state === "login" ? "" : "none";
-  if (cur) { $("muLoginText").textContent = `🔑 Đăng nhập ${cur.ten || cur.user} (${cur.user}) trên cửa sổ Chrome cổng thuế`; $("muLoginMsg").textContent = cur.msg || ""; }
-  $("muOut").innerHTML = `<p class="muted">Kỳ ${r.tu} – ${r.den} · đang tải ${r.running}/${r.max} công ty cùng lúc${live ? "" : " · đã kết thúc"}</p>
-    <div style="overflow:auto"><table><tr><th>Công ty</th><th>Trạng thái</th><th style="min-width:170px">Tiến độ</th><th>XML</th><th>PDF gốc</th><th>PDF bản in</th><th>Ghi chú</th><th></th></tr>` +
-    r.items.map(it => { const j = it.job || {};
-      const miss = it.ket_qua && it.ket_qua.missing && it.ket_qua.missing.length ? it.ket_qua.missing.slice(0, 3).join("; ") : "";
-      return `<tr class="${it.state === "loi" ? "lvLOI" : it.state === "thieu" ? "lvCB" : ""}"><td><b>${esc(it.ten || it.user)}</b><br><span class="muted">${esc(it.user)}</span></td>
-      <td>${muIcon[it.state] || ""} ${esc(it.state_text)}</td>
-      <td>${it.job ? `<progress value="${j.done}" max="${j.total || 1}" style="width:110px"></progress> ${j.done}/${j.total}` : ""}</td>
-      <td style="text-align:right">${it.job ? j.xml_ok : ""}</td><td style="text-align:right">${it.job ? j.pdf_ok : ""}</td><td style="text-align:right">${it.job ? j.pdf_hddt : ""}</td>
-      <td class="muted" style="max-width:420px">${esc(it.state === "dang_tai" ? (j.last || "") : (miss || it.msg || ""))}
-        ${j.captcha ? `<div style="margin-top:4px"><img src="${j.captcha.image}" style="height:36px;background:#fff;border:1px solid var(--b);border-radius:4px;vertical-align:middle">
-          <input data-mucap="${j.id}" placeholder="Nhập captcha" style="width:110px;display:inline-block"> <button data-mucapok="${j.id}" style="padding:2px 8px">Gửi</button></div>` : ""}</td>
-      <td>${j.out_dir ? `<a href="#" data-muopen="${esc(j.summary_file || j.out_dir)}">Mở</a>` : ""}
-        ${it.state === "dang_tai" ? ` <a href="#" data-mustop="${j.id}" class="muted">Dừng</a>` : ""}</td></tr>`; }).join("") +
-    `</table></div>`;
-  if (!live && muTimer) { clearInterval(muTimer); muTimer = null; }
-}
-const muPoll = () => api("/api/multi").then(r => { if (!document.activeElement || !document.activeElement.dataset || !document.activeElement.dataset.mucap) muRender(r); }).catch(() => {});
-function muWatch() { if (!muTimer) muTimer = setInterval(muPoll, 2000); muPoll(); }
-$("muRun").onclick = async () => {
-  unlockAlerts();
-  const users = [...document.querySelectorAll(".muU:checked")].map(c => c.value);
-  if (!users.length) return alert("Chọn ít nhất một công ty");
-  const kinds = [...document.querySelectorAll(".aKind:checked")].map(c => c.value);
-  try {
-    muRender(await api("/api/multi/start", {method: "POST", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({users, date_from: $("aFrom").value, date_to: $("aTo").value, kinds,
-        excel: $("aExcel").checked, xml: $("aXml").checked, pdf: $("aPdf").checked, easy_captcha: $("aEasyCap").checked})}));
-    muWatch();
-  } catch (e) { alert(e.message); }
-};
-$("muStop").onclick = () => confirm("Dừng tải tất cả các công ty?") && api("/api/multi/stop", {method: "POST"}).then(muPoll);
-$("muSkip").onclick = () => api("/api/multi/skip", {method: "POST"}).then(muPoll);
-$("muRefill").onclick = async () => { const r = await api("/api/multi/refill", {method: "POST"}).catch(e => ({message: e.message})); if (!r.ok) alert(r.message); };
-$("muOut").addEventListener("click", ev => {
-  const d = ev.target.dataset;
-  if (d.muopen) { ev.preventDefault(); openFile(d.muopen); }
-  if (d.mustop) { ev.preventDefault(); if (confirm("Dừng tải công ty này?")) api(`/api/auto/${d.mustop}/stop`, {method: "POST"}).then(muPoll); }
-  if (d.mucapok) { const inp = document.querySelector(`[data-mucap="${d.mucapok}"]`);
-    api(`/api/auto/${d.mucapok}/captcha`, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({value: inp.value})}).then(() => { inp.blur(); muPoll(); }); }
-});
-$("muOut").addEventListener("keydown", ev => { if (ev.key === "Enter" && ev.target.dataset.mucap) document.querySelector(`[data-mucapok="${ev.target.dataset.mucap}"]`).click(); });
-muAccounts();
-api("/api/multi").then(r => { muRender(r); if (r && r.status === "running") muWatch(); }).catch(() => {});
 
 // Chép ảnh captcha (SVG -> PNG) vào clipboard
 $("capCopy").onclick = async () => {
@@ -1385,7 +1339,6 @@ function showGa(r) {
     <td><button class="sec" style="padding:2px 8px" data-gadel="${esc(a.username)}">Xóa</button></td></tr>`).join("")
     || `<tr><td colspan="5" class="muted">Chưa có công ty nào</td></tr>`;
   const n = items.filter(a => a.auto && a.ok).length;
-  if (typeof muAccounts === "function") muAccounts();
   $("gaInfo").textContent = n ? `Tới lịch sẽ tải ${n} công ty: ` + items.filter(a => a.auto && a.ok).map(a => a.ten || a.username).join(", ") : "";
 }
 const loadGa = () => api("/api/gdt-accounts").then(showGa).catch(() => {});
@@ -1786,9 +1739,9 @@ $("btnAiKeyDel").onclick = async () => { await api("/api/ai/key", {method: "POST
 aiStatus();
 
 // ----- chuyển trang theo menu (#tai, #vat, #doichieu, #lich, #nhapfile, #dulieu); #ai = mở bóng chat -----
-const PAGES = ["tai", "vat", "misa", "tonkho", "chungtu", "doichieu", "lich", "nhapfile", "dulieu", "tongquan", "hannop", "ruiro", "laulo", "bbcn", "dinhkhoan", "xmltk", "kiemxuat"];
+const PAGES = ["tai", "vat", "misa", "tonkho", "chungtu", "doichieu", "lich", "nhapfile", "dulieu", "tongquan", "hannop", "ruiro", "laulo", "bbcn", "dinhkhoan", "xmltk", "kiemxuat", "tainhieu"];
 // ----- ☰ Tiện ích -----
-const TI_PAGES = ["tongquan", "hannop", "ruiro", "laulo", "bbcn", "dinhkhoan", "xmltk", "kiemxuat"];
+const TI_PAGES = ["tongquan", "hannop", "ruiro", "laulo", "bbcn", "dinhkhoan", "xmltk", "kiemxuat", "tainhieu"];
 let tiCos = null;
 $("tiBtn").onclick = e => { e.preventDefault(); $("tiMenu").classList.toggle("open"); };
 document.addEventListener("click", e => { if (!$("tiMenu").contains(e.target)) $("tiMenu").classList.remove("open"); });
@@ -1821,7 +1774,122 @@ async function tiEnter(p) {
   if (p === "laulo" && !$("llNhom").options.length) api("/api/ti/nhom-hkd").then(r => { $("llNhom").innerHTML = r.rows.map(x => `<option value="${x.ma}">${esc(x.ten)} (GTGT ${x.gtgt}% + TNCN ${x.tncn}%)</option>`).join(""); });
   if (p === "xmltk") xmLoadKy();
   if (p === "kiemxuat") kxKhoInfo();
+  if (p === "tainhieu") tnEnter();
 }
+// ----- tải nhiều công ty: nhiều trang HĐĐT (mỗi trang 1 cửa sổ Chrome riêng) -----
+let tnSlots = [1, 2], tnTimer = null, tnAccs = [];
+try { const v = JSON.parse(localStorage.getItem("tnSlots") || "null"); if (Array.isArray(v) && v.length) tnSlots = v; } catch (e) {}
+const tnSave = () => { try { localStorage.setItem("tnSlots", JSON.stringify(tnSlots)); } catch (e) {} };
+function tnCard(n) {
+  let el = document.querySelector(`.tnSlot[data-n="${n}"]`);
+  if (el) return el;
+  el = document.createElement("section");
+  el.className = "card tnSlot"; el.dataset.n = n; el.style.margin = "0";
+  el.innerHTML = `<div class="inline" style="align-items:center">
+      <div style="flex:0 0 auto"><b style="font-size:15px">Trang HĐĐT ${n}</b></div>
+      <div style="flex:1;min-width:150px"><select class="tnUser"><option value="">– Tài khoản đã lưu (tùy chọn) –</option></select></div>
+      <div style="flex:0 0 auto"><button class="tnOpen">Mở trang HĐĐT ${n}</button></div>
+    </div>
+    <div style="margin-top:6px"><span class="badge pending tnState">Chưa mở</span> <span class="muted tnInfo"></span></div>
+    <div class="inline" style="margin-top:6px;align-items:center">
+      <div style="flex:1"><progress class="tnProg" value="0" max="1" style="width:100%"></progress></div>
+      <div style="flex:0 0 auto"><button class="sec tnStart" style="padding:3px 10px">Tải trang này</button>
+        <button class="sec tnStop" style="padding:3px 10px" disabled>Dừng</button>
+        <a href="#" class="tnFolder" style="display:none">Mở thư mục</a>
+        ${n > 1 ? `<a href="#" class="tnDel muted" title="Đóng cửa sổ và bỏ trang này">✕</a>` : ""}</div>
+    </div>
+    <div class="muted tnText"></div>
+    <div class="tnCap" style="display:none;margin-top:6px;padding:8px;border:1px solid var(--warn);border-radius:6px;background:#fff8c5">
+      <b>Nhập captcha</b> <span class="muted tnCapWhy"></span><br>
+      <img class="tnCapImg" style="height:40px;background:#fff;border:1px solid var(--b);border-radius:6px;vertical-align:middle">
+      <input class="tnCapVal" autocomplete="off" placeholder="Mã trong ảnh" style="width:130px;display:inline-block">
+      <button class="tnCapOk" style="padding:3px 10px">Gửi</button> <button class="sec tnCapSkip" style="padding:3px 10px">Bỏ qua</button></div>
+    <div class="tnLog" style="background:#0d1117;color:#c9d1d9;font:12px Consolas,monospace;padding:8px;height:190px;overflow:auto;border-radius:6px;white-space:pre-wrap;margin-top:6px"></div>`;
+  $("tnGrid").appendChild(el);
+  tnFillUsers(el);
+  return el;
+}
+function tnFillUsers(el) {
+  const sel = el.querySelector(".tnUser"), cur = sel.value;
+  sel.innerHTML = `<option value="">– Tài khoản đã lưu (tùy chọn) –</option>` +
+    tnAccs.map(a => `<option value="${esc(a.username)}">${esc(a.ten ? a.ten + " – " + a.username : a.username)}</option>`).join("");
+  sel.value = cur;
+}
+function tnRender(items) {
+  for (const it of items) {
+    const el = tnCard(it.n), q = c => el.querySelector(c), j = it.job;
+    const st = q(".tnState");
+    if (!it.open) { st.textContent = "Chưa mở"; st.className = "badge pending tnState"; }
+    else if (!it.logged_in) { st.textContent = it.expired ? "Phiên hết hạn – đăng nhập lại" : "Chờ đăng nhập trên cửa sổ Chrome…"; st.className = "badge rendered tnState"; }
+    else { st.textContent = "Đã đăng nhập MST " + (it.mst || ""); st.className = "badge original tnState"; }
+    const run = j && j.status === "running";
+    q(".tnStart").disabled = run || !it.logged_in; q(".tnStop").disabled = !run; q(".tnOpen").disabled = false;
+    if (!j) { q(".tnText").textContent = ""; continue; }
+    q(".tnProg").max = j.total || 1; q(".tnProg").value = j.done;
+    const stt = {running: "Đang tải", done: "Xong", error: "Lỗi", auth_error: "Hết phiên đăng nhập", cancelled: "Đã dừng"}[j.status] || j.status;
+    q(".tnText").textContent = `MST ${j.mst || ""} · ${stt} · ${j.done}/${j.total} hóa đơn · XML ${j.xml_ok} · PDF gốc ${j.pdf_ok} · PDF bản in ${j.pdf_hddt}` +
+      (j.errors.length ? ` · ${j.errors.length} lỗi` : "") + (j.months.length ? ` · kỳ ${j.months[0]}${j.months.length > 1 ? " – " + j.months[j.months.length - 1] : ""}` : "");
+    const f = q(".tnFolder"); f.style.display = j.out_dir ? "" : "none"; f.dataset.path = j.summary_file || j.out_dir || "";
+    const lg = q(".tnLog"), atEnd = lg.scrollTop + lg.clientHeight >= lg.scrollHeight - 20, txt = j.log.join("\n");
+    if (lg.textContent !== txt) { lg.textContent = txt; if (atEnd) lg.scrollTop = lg.scrollHeight; }
+    const cap = q(".tnCap");
+    if (j.captcha) { if (cap.style.display === "none") { cap.style.display = ""; q(".tnCapVal").value = ""; }
+      cap.dataset.job = j.id; q(".tnCapImg").src = j.captcha.image; q(".tnCapWhy").textContent = j.captcha.reason || ""; }
+    else cap.style.display = "none";
+  }
+}
+async function tnPoll() {
+  if (!document.getElementById("page-tainhieu").classList.contains("active") && tnTimer) { clearInterval(tnTimer); tnTimer = null; return; }
+  try { tnRender((await api("/api/slots?ns=" + tnSlots.join(","))).items); } catch (e) {}
+}
+async function tnEnter() {
+  if (!$("tnFrom").value) { $("tnFrom").value = $("aFrom").value; $("tnTo").value = $("aTo").value; }
+  const r = await api("/api/gdt-accounts").catch(() => ({items: []}));
+  tnAccs = (r.items || []);
+  tnSlots.forEach(n => tnFillUsers(tnCard(n)));
+  tnPoll();
+  if (!tnTimer) tnTimer = setInterval(tnPoll, 2000);
+}
+const tnBody = slots => JSON.stringify({slots, date_from: $("tnFrom").value, date_to: $("tnTo").value,
+  kinds: [...document.querySelectorAll(".tnKind:checked")].map(c => c.value),
+  excel: $("tnExcel").checked, xml: $("tnXml").checked, pdf: $("tnPdf").checked, easy_captcha: $("tnEasy").checked});
+async function tnStart(slots) {
+  unlockAlerts();
+  try {
+    const r = await api("/api/slots/start", {method: "POST", headers: {"Content-Type": "application/json"}, body: tnBody(slots)});
+    const ok = r.items.filter(x => x.ok), bad = r.items.filter(x => !x.ok);
+    $("tnMsg").textContent = (ok.length ? `Đã bắt đầu tải ${ok.length} trang (${ok.map(x => "trang " + x.n + ": " + x.mst).join(", ")}). ` : "") +
+      (bad.length ? "Chưa tải: " + bad.map(x => `trang ${x.n} – ${x.msg}`).join("; ") : "");
+    tnPoll();
+  } catch (e) { alert(e.message); }
+}
+$("tnAdd").onclick = () => { const n = Math.max(0, ...tnSlots) + 1; tnSlots.push(n); tnSave(); tnFillUsers(tnCard(n)); tnPoll(); };
+$("tnAll").onclick = () => tnStart(tnSlots);
+$("tnStopAll").onclick = () => confirm("Dừng tải tất cả các trang?") && api("/api/slots/stop", {method: "POST"}).then(tnPoll);
+$("tnGrid").addEventListener("click", async ev => {
+  const card = ev.target.closest(".tnSlot"); if (!card) return;
+  const n = +card.dataset.n, q = c => card.querySelector(c), t = ev.target;
+  if (t.classList.contains("tnOpen")) {
+    t.disabled = true; q(".tnInfo").textContent = "Đang mở cửa sổ Chrome…";
+    try { const r = await api(`/api/slots/${n}/open`, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({user: q(".tnUser").value})});
+      q(".tnInfo").textContent = r.msg || (r.logged_in ? "" : "Đăng nhập công ty trên cửa sổ Chrome vừa mở"); }
+    catch (e) { q(".tnInfo").textContent = e.message; }
+    t.disabled = false; tnPoll();
+  }
+  if (t.classList.contains("tnStart")) tnStart([n]);
+  if (t.classList.contains("tnStop")) { const r = (await api("/api/slots?ns=" + n)).items[0]; if (r.job) api(`/api/auto/${r.job.id}/stop`, {method: "POST"}).then(tnPoll); }
+  if (t.classList.contains("tnFolder")) { ev.preventDefault(); openFile(t.dataset.path); }
+  if (t.classList.contains("tnDel")) { ev.preventDefault();
+    try { await api(`/api/slots/${n}/close`, {method: "POST"}); } catch (e) { return alert(e.message); }
+    tnSlots = tnSlots.filter(x => x !== n); tnSave(); card.remove(); }
+  if (t.classList.contains("tnCapOk") || t.classList.contains("tnCapSkip")) {
+    const cap = q(".tnCap"), v = t.classList.contains("tnCapOk") ? q(".tnCapVal").value : null;
+    await api(`/api/auto/${cap.dataset.job}/captcha`, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({value: v})});
+    cap.style.display = "none"; tnPoll();
+  }
+});
+$("tnGrid").addEventListener("keydown", ev => { if (ev.key === "Enter" && ev.target.classList.contains("tnCapVal")) ev.target.closest(".tnCap").querySelector(".tnCapOk").click(); });
+
 // Kiểm tra đầu vào trước khi xuất HĐ
 async function kxKhoInfo() {
   const r = await api("/api/ti/kiem-xuat/kho?mst=" + encodeURIComponent($("kxMst").value)).catch(() => null);

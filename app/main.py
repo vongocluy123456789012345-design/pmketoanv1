@@ -247,47 +247,110 @@ def auto_stop(job_id: str):
     return {"ok": True}
 
 
-# ---------- tải nhiều công ty cùng lúc ----------
-class MultiIn(AutoIn):
-    users: list[str]
+# ---------- tải nhiều công ty: mỗi "trang HĐĐT" là 1 cửa sổ Chrome riêng, đăng nhập 1 công ty ----------
+SLOT_JOBS: dict[int, str] = {}     # số trang -> lượt tải gần nhất
 
 
-@app.get("/api/multi")
-def multi_status():
-    from . import multi_sync
-    return multi_sync.current()
+def _slot_job(n: int):
+    from .auto_download import JOBS
+    return JOBS.get(SLOT_JOBS.get(n, ""))
 
 
-@app.post("/api/multi/start")
-def multi_start(body: MultiIn):
-    from . import multi_sync
-    from .auto_download import KINDS
+@app.get("/api/slots")
+def slots_status(ns: str = "1,2"):
+    from .gdt.browser import BROWSER
+    nums = sorted({int(x) for x in ns.split(",") if x.strip().isdigit() and 0 < int(x) <= 30}) or [1]
+    st = BROWSER.slots_status(nums)
+    out = []
+    for n in nums:
+        job = _slot_job(n)
+        out.append({"n": n, **st.get(n, {}), "job": job.public() if job else None})
+    return {"items": out}
+
+
+class SlotOpenIn(BaseModel):
+    user: str = ""      # tài khoản đã lưu (tùy chọn) -> điền sẵn tài khoản + mật khẩu
+
+
+@app.post("/api/slots/{n}/open")
+def slot_open(n: int, body: SlotOpenIn):
+    from .gdt import credentials
+    from .gdt.browser import BROWSER, BrowserError
+    try:
+        st = BROWSER.open_slot(n)
+    except BrowserError as e:
+        raise HTTPException(500, str(e))
+    msg = ""
+    if body.user and not st.get("logged_in"):
+        creds = credentials.load(body.user)
+        if creds:
+            try:
+                BROWSER.prefill_login(*creds, slot=n)
+                msg = "Đã điền sẵn tài khoản + mật khẩu – nhập captcha rồi bấm Đăng nhập trên cửa sổ Chrome"
+            except Exception as e:  # noqa: BLE001
+                msg = f"Chưa điền sẵn được tài khoản: {e}"
+        else:
+            msg = "Chưa lưu mật khẩu công ty này – tự nhập trên cửa sổ Chrome"
+    return {**st, "msg": msg}
+
+
+@app.post("/api/slots/{n}/close")
+def slot_close(n: int):
+    from .gdt.browser import BROWSER
+    job = _slot_job(n)
+    if job and job.status == "running":
+        raise HTTPException(409, "Trang này đang tải – bấm Dừng trước")
+    BROWSER.close_slot(n)
+    return {"ok": True}
+
+
+def _start_slot(n: int, body: AutoIn, kinds: list[str], taken: set[str]) -> dict:
+    from .auto_download import running_job, start
+    from .gdt.browser import BROWSER
+    job = _slot_job(n)
+    if job and job.status == "running":
+        return {"n": n, "ok": False, "msg": "Đang tải"}
+    if n == 1 and running_job():
+        return {"n": n, "ok": False, "msg": "Trang Tải hóa đơn đang tải bằng cửa sổ này – chờ xong"}
+    st = BROWSER.slots_status([n]).get(n, {})
+    if not st.get("logged_in"):
+        return {"n": n, "ok": False, "msg": "Chưa đăng nhập"}
+    mst = str(st.get("mst") or "")
+    if mst in taken:
+        return {"n": n, "ok": False, "msg": f"MST {mst} đã tải ở trang khác"}
+    token = BROWSER.slot_token(n)
+    if not token:
+        return {"n": n, "ok": False, "msg": "Chưa đăng nhập"}
+    taken.add(mst)
+    job = start(body.date_from, body.date_to, kinds, body.excel, body.xml, body.pdf, body.easy_captcha,
+                token=token, user=mst, slot=n)
+    SLOT_JOBS[n] = job.id
+    return {"n": n, "ok": True, "mst": mst, "job_id": job.id}
+
+
+class SlotsStartIn(AutoIn):
+    slots: list[int]
+
+
+@app.post("/api/slots/start")
+def slots_start(body: SlotsStartIn):
+    from .auto_download import JOBS, KINDS
+    if body.date_from > body.date_to:
+        raise HTTPException(400, "Từ ngày phải trước đến ngày")
     kinds = [k for k in KINDS if k in body.kinds]
     if not kinds:
         raise HTTPException(400, "Chọn ít nhất một loại hóa đơn")
-    try:
-        return multi_sync.start(body.users, body.date_from, body.date_to, kinds, body.excel, body.xml, body.pdf,
-                                body.easy_captcha).public()
-    except ValueError as e:
-        raise HTTPException(409, str(e))
+    taken = {j.mst for j in JOBS.values() if j.status == "running" and j.mst}
+    return {"items": [_start_slot(n, body, kinds, taken) for n in sorted(set(body.slots))]}
 
 
-@app.post("/api/multi/skip")
-def multi_skip():
-    from . import multi_sync
-    return {"ok": multi_sync.skip_login()}
-
-
-@app.post("/api/multi/refill")
-def multi_refill():
-    from . import multi_sync
-    return multi_sync.refill()
-
-
-@app.post("/api/multi/stop")
-def multi_stop():
-    from . import multi_sync
-    multi_sync.stop()
+@app.post("/api/slots/stop")
+def slots_stop():
+    from .auto_download import JOBS
+    for job in JOBS.values():
+        if job.slot and job.status == "running":
+            job.cancel = True
+            job.submit_captcha(None)
     return {"ok": True}
 
 
