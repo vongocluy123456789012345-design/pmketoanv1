@@ -268,7 +268,7 @@ def main() -> None:
         if server.started:
             break
         time.sleep(0.1)
-    url = f"http://127.0.0.1:{port}/"
+    url = f"http://127.0.0.1:{port}/" + ("#vat" if "--nhac-vat" in sys.argv else "")   # từ bảng nhắc: vào Dự báo VAT
     proc = _open_window(url, ROOT)
 
     t0 = time.time()
