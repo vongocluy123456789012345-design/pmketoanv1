@@ -79,13 +79,21 @@ def partner(inv: dict[str, Any]) -> tuple[str, str]:
 
 
 # ------------------------------------------------------------------ thông tin sao kê
-_BANKS = [("techcombank", "Techcombank"), ("ky thuong", "Techcombank"), ("vietcombank", "Vietcombank"),
-          ("ngoai thuong", "Vietcombank"), ("vietinbank", "VietinBank"), ("cong thuong", "VietinBank"),
-          ("bidv", "BIDV"), ("dau tu va phat trien", "BIDV"), ("agribank", "Agribank"),
-          ("mbbank", "MB"), ("quan doi", "MB"), ("acb", "ACB"), ("a chau", "ACB"), ("vpbank", "VPBank"),
-          ("viet nam thinh vuong", "VPBank"), ("sacombank", "Sacombank"), ("sai gon thuong tin", "Sacombank"),
-          ("tpbank", "TPBank"), ("tien phong", "TPBank"), ("hdbank", "HDBank"), ("vib", "VIB"),
-          ("shb", "SHB"), ("ocb", "OCB"), ("msb", "MSB"), ("seabank", "SeABank")]
+_BANKS = [("techcombank", "Techcombank"), ("tcb", "Techcombank"), ("ky thuong", "Techcombank"),
+          ("vietcombank", "Vietcombank"), ("vcb", "Vietcombank"), ("ngoai thuong", "Vietcombank"),
+          ("vietinbank", "VietinBank"), ("cong thuong", "VietinBank"), ("bidv", "BIDV"),
+          ("dau tu va phat trien", "BIDV"), ("agribank", "Agribank"), ("nong nghiep va phat trien nong thon", "Agribank"),
+          ("mbbank", "MB"), ("mb bank", "MB"), ("quan doi", "MB"), ("vpbank", "VPBank"),
+          ("viet nam thinh vuong", "VPBank"), ("sacombank", "Sacombank"), ("sacom", "Sacombank"),
+          ("sai gon thuong tin", "Sacombank"), ("tpbank", "TPBank"), ("tien phong", "TPBank"), ("hdbank", "HDBank"),
+          ("phat trien thanh pho ho chi minh", "HDBank"), ("vib", "VIB"), ("quoc te viet nam", "VIB"),
+          ("shb", "SHB"), ("sai gon ha noi", "SHB"), ("ocb", "OCB"), ("phuong dong", "OCB"), ("msb", "MSB"),
+          ("hang hai", "MSB"), ("seabank", "SeABank"), ("dong nam a", "SeABank"), ("eximbank", "Eximbank"),
+          ("xuat nhap khau viet nam", "Eximbank"), ("lpbank", "LPBank"), ("lienvietpostbank", "LPBank"),
+          ("loc phat", "LPBank"), ("bac a bank", "Bac A Bank"), ("nam a bank", "Nam A Bank"), ("abbank", "ABBANK"),
+          ("an binh", "ABBANK"), ("pvcombank", "PVcomBank"), ("kienlongbank", "KienlongBank"), ("scb", "SCB"),
+          ("vietbank", "Vietbank"), ("baovietbank", "BaoViet Bank"), ("vietabank", "VietABank"), ("ncb", "NCB"),
+          ("cake", "Cake"), ("timo", "Timo"), ("acb", "ACB"), ("a chau", "ACB")]
 
 
 def statement_info(name: str, data: bytes) -> dict[str, str]:
@@ -110,13 +118,25 @@ def statement_info(name: str, data: bytes) -> dict[str, str]:
     m = re.search(r"(?:so tai khoan|account number|account no|so tk)\D{0,25}?(\d[\d ]{3,20}\d)", f)
     if m:
         info["so_tk"] = m.group(1).replace(" ", "")
-    for k, v in _BANKS:
-        if re.search(r"\b" + k + r"\b", f[:600]):
-            info["ngan_hang"] = v
+    # tên ngân hàng: ưu tiên tên file, rồi phần đầu sao kê (trước bảng giao dịch – nội dung giao dịch hay nhắc ngân
+    # hàng khác, vd "MBBP" trong sao kê Sacombank)
+    head = f.split("ngay giao dich")[0][:900]
+    for src in (fold(name), head):
+        hit = next((v for k, v in _BANKS if re.search(r"(?<![a-z])" + k + r"(?![a-z])", src)), "")
+        if hit:
+            info["ngan_hang"] = hit
             break
     m = re.search(r"(?:chu tai khoan|ten tai khoan|account name|ten khach hang|customer name)\s*:?\s*(?:customer name|account name)?\s*([a-z0-9 ]{5,80})", f)
     if m:
-        info["chu_tk"] = m.group(1).split(" so ")[0].strip().upper()
+        info["chu_tk"] = re.split(r"\b(?:so|dia chi|address|ngay thuc hien|tai khoan|account)\b", m.group(1))[0].strip().upper()
+        if re.match(r"(doi ung|correspon)", info["chu_tk"].lower()):
+            info["chu_tk"] = ""        # nhầm cột "Tên tài khoản đối ứng" của bảng giao dịch
+    if not info["chu_tk"]:             # "Account 0319061166 CONG TY TNHH ..." (VPBank...)
+        m = re.search(r"\b((?:cong ty|cty|ho kinh doanh|hkd|dntn|doanh nghiep tu nhan)\b[a-z0-9 ]{3,70})",
+                      f.split("ngay giao dich")[0])
+        if m:
+            info["chu_tk"] = re.split(r"\b(?:customer|dia chi|address|so|ten khach hang|loai)\b", m.group(1))[0].strip().upper()
+    info["chu_tk"] = re.sub(r"\s+", " ", info["chu_tk"].replace("COMPANY NAME", " ").replace("ACCOUNT NAME", " ")).strip()
     return info
 
 
@@ -453,7 +473,8 @@ _RULES_OUT = [  # (từ khóa trong nội dung đã bỏ dấu, khóa tài kho�
     (r"thue tndn|thu nhap doanh nghiep", "thue_tndn", "Nộp thuế TNDN", True),
     (r"thue tncn|thu nhap ca nhan", "thue_tncn", "Nộp thuế TNCN", True),
     (r"\bnsnn\b|ngan sach|nop thue|le phi|mon bai", "thue_khac", "Nộp thuế / lệ phí NSNN", True),
-    (r"\bphi\b.*\b(chuyen|dich vu|sms|quan ly|duy tri|thuong nien)\b|\bfee\b|phi ngan hang", "phi_nh",
+    (r"\bphi\b.*\b(chuyen|dich vu|sms|quan ly|duy tri|thuong nien|qltk|tk)\b|\bfee\b|phi ngan hang|\bqltk\b|"
+     r"\bphi t\d{1,2}\b|thu phi|\bphi\b.*\btai khoan\b", "phi_nh",
      "Phí ngân hàng", False),
     (r"rut tien mat|\brut tien\b|\batm\b", "tien_mat", "Rút tiền gửi về quỹ tiền mặt", False),
     (r"tam ung", "tam_ung", "Chi tạm ứng", True),
@@ -462,12 +483,16 @@ _RULES_OUT = [  # (từ khóa trong nội dung đã bỏ dấu, khóa tài kho�
      "Trả lại tiền chuyển nhầm", True),
 ]
 _RULES_IN = [
-    (r"lai tien gui|tra lai tien gui|\binterest\b|lai nhap goc", "lai", "Lãi tiền gửi ngân hàng", False),
+    (r"lai tien gui|tra lai tien gui|\binterest\b|lai nhap goc|\b(chi|tra|nhan) lai\b.{0,20}\b(tk|tai khoan|tien gui)\b",
+     "lai", "Lãi tiền gửi ngân hàng", False),
     (r"nop tien mat|nop tm\b|\bnop tien\b(?!.*\b(chuyen|ck|mbvcb|ibft)\b)", "tien_mat",
      "Nộp tiền mặt vào tài khoản", True),
     (r"gop von|von gop", "von", "Nhận vốn góp", True),
     (r"hoan tien|tra lai ck nham|chuyen nham|ck nham", "phai_thu_khac", "Nhận lại tiền chuyển nhầm / hoàn tiền", True),
     (r"giai ngan|nhan no vay|khoan vay", "vay", "Nhận tiền vay", True),
+    (r"^(?!.*\b(cty|cong ty|tnhh|co phan|ctcp|dntn|hkd|ho kinh doanh|ngan hang)\b).*"
+     r"(chuyen tien|chuyen khoan|\bck\b|zalo|ibft|\bmbvcb\b)", "phai_thu",
+     "Thu tiền khách lẻ (cá nhân chuyển khoản)", True),
 ]
 
 

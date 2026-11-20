@@ -827,12 +827,12 @@ async def docs_bank(files: list[UploadFile] = File(...), mst: str = Form(""), mo
     payload = await _read_uploads(files)
     txns, errors, info = [], [], {}
     for name, data in payload:
-        tx, err = bank.read_statement(name, data)
+        tx, err = await run_in_threadpool(bank.read_statement, name, data)   # bản scan: OCR
         txns += tx
         if err:
             errors.append(f"{name}: {err}")
         if tx and not info.get("so_tk"):
-            info = bank_post.statement_info(name, data)
+            info = await run_in_threadpool(bank_post.statement_info, name, data)
     if not txns:
         raise HTTPException(400, "Không đọc được giao dịch nào. " + " | ".join(errors))
     info["chu_tk"] = re.split(r"\b(?:DIA CHI|ĐỊA CHỈ)\b", info.get("chu_tk", ""))[0].strip()

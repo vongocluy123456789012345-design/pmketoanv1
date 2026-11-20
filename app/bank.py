@@ -71,19 +71,86 @@ def _parse_date(v: Any) -> date | None:
     return None
 
 
+_GROUP_DATE = re.compile(r"(?:ngay giao dich|txn date|ngay gd|transaction date)\D{0,20}(\d{1,2}[/\-.]\d{1,2}[/\-.]\d{4})")
+
+
+def _headerless(rows: list[list[Any]]) -> tuple[int, dict[str, int]] | None:
+    """Bảng giao dịch KHÔNG có dòng tiêu đề (một số trang internet banking xuất thẳng dữ liệu): nhận cột ngày, nội dung,
+    2 cột số tiền theo dữ liệu; cột tiền ra / vào đoán theo nội dung (dòng "PHÍ" ở cột ra, "LÃI / NỘP TIỀN" ở cột vào)."""
+    from collections import Counter
+    data = [(i, r) for i, r in enumerate(rows) if sum(1 for c in r if c not in (None, "")) >= 3
+            and any(_parse_date(c) for c in r)]
+    if len(data) < 2:
+        return None
+    dc, tc, nc = Counter(), Counter(), Counter()
+    for _i, r in data:
+        for j, c in enumerate(r):
+            if c in (None, ""):
+                continue
+            if _parse_date(c):
+                dc[j] += 1
+            elif vn_num(c) and re.fullmatch(r"[\d.,\s-]+", str(c).strip()):
+                nc[j] += 1
+            elif len(str(c)) >= 8:
+                tc[j] += len(str(c))
+    if not dc or not tc or not nc:
+        return None
+    d_col = max(dc, key=lambda j: (dc[j], -j))
+    t_col = max(tc, key=tc.get)
+    amt = [j for j, n in nc.most_common() if n >= max(1, len(data) // 10) and j not in (d_col, t_col)][:3]
+    amt = sorted(amt)
+    if not amt:
+        return None
+    mp = {"ngay": d_col, "mo_ta": t_col}
+    if len(amt) == 1:
+        mp["so_tien"] = amt[0]
+        return data[0][0] - 1, mp
+    a, b = amt[0], amt[1]
+    score = 0                                         # > 0: cột a là tiền RA, cột b là tiền VÀO
+    for _i, r in data:
+        f = norm(str(r[t_col] or "")) if t_col < len(r) else ""
+        out_kw = bool(re.search(r"phi|fee|thuphi|vat", f))
+        in_kw = bool(re.search(r"lai|interest|noptien|noptm|nhan", f))
+        has_a = bool(a < len(r) and vn_num(r[a]))
+        has_b = bool(b < len(r) and vn_num(r[b]))
+        score += (out_kw and has_a) + (in_kw and has_b) - (out_kw and has_b) - (in_kw and has_a)
+    mp["no"], mp["co"] = (a, b) if score >= 0 else (b, a)
+    if len(amt) >= 3:
+        mp["so_du"] = amt[2]
+    return data[0][0] - 1, mp
+
+
 def _rows_to_txns(rows: list[list[Any]]) -> list[dict[str, Any]]:
-    head_i, mp = None, {}
+    head_i, mp, group = None, {}, False
     for i, r in enumerate(rows[:60]):
         m = _map_header(r)
         if "ngay" in m and ("mo_ta" in m) and (("no" in m and "co" in m) or "so_tien" in m):
             head_i, mp = i, m
             break
     if head_i is None:
-        return []
-    out, last = [], None
+        # VPBank...: bảng không có cột ngày, ngày nằm ở dòng nhóm "Ngày giao dịch/Txn date 04/05/2026"
+        for i, r in enumerate(rows[:60]):
+            m = _map_header(r)
+            if "mo_ta" in m and "no" in m and "co" in m and any(
+                    _GROUP_DATE.search(norm_sp(" ".join(str(c) for c in x if c))) for x in rows[i + 1:i + 6]):
+                head_i, mp, group = i, m, True
+                break
+    if head_i is None:
+        hl = _headerless(rows)
+        if not hl:
+            return []
+        head_i, mp = hl
+    out, last, cur_date = [], None, None
     for r in rows[head_i + 1:]:
         get = lambda f: r[mp[f]] if f in mp and mp[f] < len(r) else None  # noqa: E731
-        d = _parse_date(get("ngay"))
+        if group:
+            gm = _GROUP_DATE.search(norm_sp(" ".join(str(c) for c in r if c)))
+            if gm:
+                cur_date = _parse_date(gm.group(1))
+                continue
+            d = cur_date if any(vn_num(get(f)) for f in ("no", "co")) else None
+        else:
+            d = _parse_date(get("ngay"))
         desc = str(get("mo_ta") or "").strip()
         if not d:  # dòng nối tiếp nội dung của giao dịch trước (PDF hay bị xuống dòng)
             if last is not None and desc and not any(vn_num(get(f)) for f in ("no", "co", "so_tien")):
@@ -106,6 +173,12 @@ def _rows_to_txns(rows: list[list[Any]]) -> list[dict[str, Any]]:
                 "tk_doi_ung": txt("tk_doi_ung").replace(" ", ""), "nh_doi_ung": txt("nh_doi_ung")}
         out.append(last)
     return out
+
+
+def norm_sp(s: str) -> str:
+    """Bỏ dấu, viết thường nhưng GIỮ khoảng trắng / dấu ngày (để tìm "ngay giao dich ... 04/05/2026")."""
+    from .docreader import fold
+    return re.sub(r"\s+", " ", fold(s).lower())
 
 
 def _fix_direction(txns: list[dict[str, Any]]) -> list[dict[str, Any]]:
