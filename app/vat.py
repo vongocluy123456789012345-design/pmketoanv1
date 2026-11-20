@@ -1322,7 +1322,7 @@ def _months_to_download(root: Path, kieu: str, ky: int, nam: int) -> list[tuple[
 def auto_tick(now: datetime | None = None) -> None:
     """Gọi định kỳ (30 giây). Từ 00:00 ngày đầu kỳ sau: tải hóa đơn kỳ vừa hết (nếu Chrome đang đăng nhập đúng MST)
     rồi dự báo và báo lên app. Chưa đăng nhập: dự báo ngay bằng dữ liệu đang có, báo cần đăng nhập để cập nhật."""
-    from .auto_download import JOBS, running_job, start
+    from .auto_download import JOBS, busy, start
     from .gdt.browser import BROWSER
 
     now = now or datetime.now()
@@ -1353,7 +1353,7 @@ def auto_tick(now: datetime | None = None) -> None:
         need = _months_to_download(root, kieu, ky, nam)
         if need and st.get("downloaded") != key:
             bst = BROWSER.status()
-            if bst.get("logged_in") and str(bst.get("mst")) == mst and not running_job():
+            if bst.get("logged_in") and str(bst.get("mst")) == mst and not busy():
                 (y1, m1), (y2, m2) = need[0], need[-1]
                 job = start(date(y1, m1, 1), date(y2, m2, monthrange(y2, m2)[1]), DOWNLOAD_KINDS, True, True, True)
                 st["job"] = job.id

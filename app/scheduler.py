@@ -376,7 +376,7 @@ class Scheduler:
         return bool(self._popup and self._popup.poll() is None)
 
     def _tick(self) -> None:
-        from .auto_download import JOBS, running_job, start
+        from .auto_download import JOBS, busy, start
         from .gdt.browser import BROWSER
 
         now = datetime.now()
@@ -397,7 +397,7 @@ class Scheduler:
             return
         if not self._force:                     # đến lịch khi phần mềm đang mở
             self.trigger(scheduled=True)
-        if running_job():
+        if busy():
             self.next_try = time.time() + 30
             return
         if self._scheduled:

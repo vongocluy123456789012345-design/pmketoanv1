@@ -175,6 +175,37 @@ async ({reqs, timeoutMs}) => {
 """
 
 
+# Bắt đầu các lệnh fetch rồi TRẢ VỀ NGAY (không giữ luồng trình duyệt); kết quả đặt ở window.__awb[id].
+_START_JS = """
+({id, reqs, timeoutMs}) => {
+  const W = window.__awb || (window.__awb = {});
+  W[id] = {done: false};
+  const one = async ({url, headers}) => {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+      const r = await fetch(url, {headers, credentials: 'include', signal: ctrl.signal});
+      const buf = new Uint8Array(await r.arrayBuffer());
+      let s = '';
+      for (let i = 0; i < buf.length; i += 0x8000) s += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000));
+      return {status: r.status, ctype: r.headers.get('content-type') || '', b64: btoa(s)};
+    } catch (e) {
+      return {status: 0, ctype: '', b64: '', error: String(e)};
+    } finally { clearTimeout(timer); }
+  };
+  Promise.all(reqs.map(one)).then(out => { W[id] = {done: true, out}; });
+  return true;
+}
+"""
+_POLL_JS = """(id) => { const W = window.__awb; if (!W || !W[id]) return null;
+  const r = W[id]; if (r.done) delete W[id]; return r; }"""
+
+
+RATE_GAP = 0.12        # khoảng cách tối thiểu giữa 2 lần gọi cổng (mọi công ty cộng lại)
+RATE_GAP_MAX = 2.5
+BUSY_RETRIES = 5       # cổng báo quá tải (429) -> chờ rồi thử lại tối đa 5 lần
+
+
 class BrowserWorker:
     def __init__(self) -> None:
         self._q: queue.Queue = queue.Queue()
@@ -186,6 +217,14 @@ class BrowserWorker:
         self.hidden = False
         self.start_error: BaseException | None = None
         self.last_error = ""
+        self._tl = threading.local()          # token riêng của luồng (tải nhiều công ty cùng lúc)
+        self.login_free = threading.Event()   # xóa khi đang đăng nhập lần lượt nhiều công ty trên tab cổng
+        self.login_free.set()
+        # nhịp gọi cổng dùng chung mọi luồng: cổng giới hạn theo máy (HTTP 429) -> gặp 429 thì tất cả cùng giãn ra
+        self._rate_lock = threading.Lock()
+        self._next_slot = 0.0
+        self._gap = RATE_GAP
+        self._cool_until = 0.0
 
     # ---------- luồng riêng cho Playwright ----------
     def _ensure_thread(self) -> None:
@@ -473,6 +512,88 @@ class BrowserWorker:
             page.goto(PORTAL + "/", wait_until="domcontentloaded", timeout=45000)
         self.call(run, 90)
 
+    # ---------- token theo từng công ty ----------
+    def use_token(self, token: str | None) -> None:
+        """Luồng hiện tại gọi cổng bằng token này (của 1 công ty) thay vì phiên đang đăng nhập trên Chrome.
+        Cổng chỉ xét header Authorization nên nhiều công ty dùng chung 1 tab cổng vẫn đúng dữ liệu từng công ty."""
+        self._tl.token = token or None
+
+    def thread_token(self) -> str | None:
+        return getattr(self._tl, "token", None)
+
+    def current_token(self) -> str | None:
+        """Token của công ty đang đăng nhập trên Chrome."""
+        return self.call(self._jwt, 20)
+
+    @staticmethod
+    def token_info(token: str | None) -> dict[str, Any]:
+        p = _jwt_payload(token or "")
+        return {"mst": str(p.get("sub") or p.get("username") or ""), "exp": p.get("exp") or 0}
+
+    def _run_async(self, reqs: list[dict[str, Any]], timeout: float) -> list[dict[str, Any]]:
+        """Chạy các fetch trong tab cổng mà không chiếm luồng trình duyệt suốt lúc chờ mạng."""
+        rid = uuid.uuid4().hex
+        args = {"id": rid, "reqs": reqs, "timeoutMs": int(timeout * 1000)}
+        lost = [{"status": 0, "ctype": "", "b64": "", "error": "Trang cổng vừa tải lại"}] * len(reqs)
+        try:
+            self.call(lambda: self._logged_page().evaluate(_START_JS, args), 60)
+        except BrowserAuthError:
+            raise
+        except BrowserError as e:
+            if "không phản hồi" in str(e):
+                raise
+            return [{**x, "error": str(e)} for x in lost]
+        except Exception as e:  # noqa: BLE001 - trang đang chuyển trang
+            return [{**x, "error": str(e)} for x in lost]
+        end, delay = time.time() + timeout + 20, 0.04
+        while True:
+            time.sleep(delay)
+            delay = min(0.3, delay * 1.6)
+            try:
+                r = self.call(lambda: self._logged_page().evaluate(_POLL_JS, rid), 60)
+            except BrowserAuthError:
+                raise
+            except Exception as e:  # noqa: BLE001
+                return [{**x, "error": str(e)} for x in lost]
+            if r is None:
+                return lost
+            if r.get("done"):
+                return r["out"]
+            if time.time() > end:
+                return [{**x, "error": "Quá thời gian chờ cổng trả lời"} for x in lost]
+
+    def _throttle(self) -> None:
+        with self._rate_lock:
+            now = time.time()
+            at = max(now, self._next_slot, self._cool_until)
+            self._next_slot = at + self._gap
+        if at > now:
+            time.sleep(at - now)
+
+    def _rate_result(self, statuses: list[int]) -> bool:
+        """Ghi nhận kết quả; trả True nếu cổng báo quá tải."""
+        busy = any(x == 429 for x in statuses)
+        with self._rate_lock:
+            if busy:
+                self._gap = min(RATE_GAP_MAX, self._gap * 2)
+                self._cool_until = max(self._cool_until, time.time() + 2 + self._gap * 2)
+            else:
+                self._gap = max(RATE_GAP, self._gap * 0.9)
+        return busy
+
+    def _headers(self, action: str | None, token: str | None) -> dict[str, str]:
+        h = {"Accept": "application/json, text/plain, */*", "Accept-Language": "vi", "request-id": str(uuid.uuid4()),
+             "Action": encode_action(action), "End-Point": END_POINT}
+        if token:
+            h["Authorization"] = f"Bearer {token}"
+        return h
+
+    def _auth_token(self) -> str:
+        token = self.thread_token() or self.call(self._jwt, 30)
+        if not token:
+            raise BrowserAuthError("Chưa đăng nhập cổng thuế trên trình duyệt (hoặc phiên đã hết hạn).")
+        return token
+
     # ---------- trạng thái đăng nhập ----------
     def _jwt(self) -> str | None:
         for c in self._context().cookies(PORTAL):
@@ -516,43 +637,35 @@ class BrowserWorker:
             query = urlencode(query)
         url = API + path + (("?" + query) if query else "")
 
-        def run() -> FetchResult:
-            page = self._logged_page()
-            headers = {
-                "Accept": "application/json, text/plain, */*",
-                "Accept-Language": "vi",
-                "request-id": str(uuid.uuid4()),
-                "Action": encode_action(action),
-                "End-Point": END_POINT,
-            }
-            if auth:
-                token = self._jwt()
-                if not token:
-                    raise BrowserAuthError("Chưa đăng nhập cổng thuế trên trình duyệt (hoặc phiên đã hết hạn).")
-                headers["Authorization"] = f"Bearer {token}"
-            headers.update(extra_headers or {})
-            args = {"url": url, "headers": headers, "timeoutMs": int(timeout * 1000)}
-            res: dict[str, Any] = {}
-            for attempt in range(retries):
-                try:
-                    res = page.evaluate(_FETCH_JS, args)
-                except Exception as e:  # noqa: BLE001 - trang đang chuyển trang -> chờ rồi thử lại
-                    if attempt == retries - 1:
-                        raise BrowserError(f"Lỗi chạy lệnh trong trang: {e}") from e
-                    res = {"error": str(e)}
-                if not res.get("error"):
-                    break
-                # "Failed to fetch" thoáng qua (trang đang tải / mạng chập chờn / cổng ngắt kết nối) -> chờ rồi thử lại
-                time.sleep(4 * (attempt + 1))
-                try:
-                    page.wait_for_load_state("domcontentloaded", timeout=15000)
-                except Exception:  # noqa: BLE001
-                    page = self._logged_page()
-            if res.get("error"):
-                raise BrowserError(_net_error(res["error"]))
-            return FetchResult(res["status"], res["ctype"], base64.b64decode(res["b64"] or ""))
-
-        r = self.call(run, timeout + 30)
+        headers = self._headers(action, self._auth_token() if auth else None)
+        headers.update(extra_headers or {})
+        res: dict[str, Any] = {}
+        attempt = busy_n = 0
+        while True:
+            self._throttle()
+            res = self._run_async([{"url": url, "headers": headers}], timeout)[0]
+            if not res.get("error") and self._rate_result([res["status"]]) and busy_n < BUSY_RETRIES:
+                busy_n += 1
+                time.sleep(2 * busy_n)
+                headers["request-id"] = str(uuid.uuid4())
+                continue
+            if not res.get("error"):
+                break
+            attempt += 1
+            if attempt >= retries:
+                break
+            # "Failed to fetch" thoáng qua (trang đang tải / mạng chập chờn / cổng ngắt kết nối) -> chờ rồi thử lại
+            time.sleep(4 * attempt)
+            try:
+                self.call(lambda: self._logged_page().wait_for_load_state("domcontentloaded", timeout=15000), 30)
+            except BrowserAuthError:
+                raise
+            except Exception:  # noqa: BLE001
+                pass
+            headers["request-id"] = str(uuid.uuid4())
+        if res.get("error"):
+            raise BrowserError(_net_error(res["error"]))
+        r = FetchResult(res["status"], res["ctype"], base64.b64decode(res["b64"] or ""))
         if r.status == 401 and raise_401:
             raise BrowserAuthError("Phiên đăng nhập cổng thuế đã hết hạn, hãy đăng nhập lại trên trình duyệt.")
         return r
@@ -560,25 +673,25 @@ class BrowserWorker:
     def fetch_many(self, items: list[tuple[str, dict[str, Any] | str | None, str | None]],
                    timeout: float = 120) -> list[FetchResult]:
         """Gọi song song nhiều lệnh GET (path, query, action) trong trang cổng thuế."""
-        def run() -> list[FetchResult]:
-            page = self._logged_page()
-            token = self._jwt()
-            if not token:
-                raise BrowserAuthError("Chưa đăng nhập cổng thuế trên trình duyệt (hoặc phiên đã hết hạn).")
-            reqs = []
-            for path, query, action in items:
-                q = urlencode(query) if isinstance(query, dict) else query
-                reqs.append({"url": API + path + (("?" + q) if q else ""), "headers": {
-                    "Accept": "application/json, text/plain, */*", "Accept-Language": "vi",
-                    "request-id": str(uuid.uuid4()), "Action": encode_action(action),
-                    "End-Point": END_POINT, "Authorization": f"Bearer {token}"}})
-            try:
-                res = page.evaluate(_FETCH_MANY_JS, {"reqs": reqs, "timeoutMs": int(timeout * 1000)})
-            except Exception as e:  # noqa: BLE001 - trang đang tải lại -> trả lỗi để bên gọi thử lại
-                res = [{"status": 0, "ctype": "", "b64": "", "error": str(e)}] * len(reqs)
-            return [FetchResult(x["status"], x["ctype"], base64.b64decode(x["b64"] or "")) for x in res]
-
-        out = self.call(run, timeout + 30)
+        token = self._auth_token()
+        reqs = []
+        for path, query, action in items:
+            q = urlencode(query) if isinstance(query, dict) else query
+            reqs.append({"url": API + path + (("?" + q) if q else ""), "headers": self._headers(action, token)})
+        res: list[dict[str, Any]] = [{}] * len(reqs)
+        todo = list(range(len(reqs)))
+        for busy_n in range(BUSY_RETRIES + 1):
+            self._throttle()
+            got = self._run_async([reqs[i] for i in todo], timeout)
+            for i, x in zip(todo, got):
+                res[i] = x
+            if not self._rate_result([x.get("status", 0) for x in got]) or busy_n == BUSY_RETRIES:
+                break
+            todo = [i for i in todo if res[i].get("status") == 429]   # chỉ gửi lại các lệnh bị báo quá tải
+            for i in todo:
+                reqs[i]["headers"]["request-id"] = str(uuid.uuid4())
+            time.sleep(2 * (busy_n + 1))
+        out = [FetchResult(x["status"], x["ctype"], base64.b64decode(x["b64"] or "")) for x in res]
         if any(r.status == 401 for r in out):
             raise BrowserAuthError("Phiên đăng nhập cổng thuế đã hết hạn, hãy đăng nhập lại trên trình duyệt.")
         return out

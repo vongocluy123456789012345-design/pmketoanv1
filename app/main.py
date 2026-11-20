@@ -197,9 +197,9 @@ class AutoIn(BaseModel):
 
 @app.post("/api/auto/start")
 def auto_start(body: AutoIn):
-    from .auto_download import KINDS, running_job, start
-    if running_job():
-        raise HTTPException(409, "Đang có một lượt tải chạy, hãy chờ xong hoặc bấm Dừng")
+    from .auto_download import KINDS, busy, start
+    if busy():
+        raise HTTPException(409, "Đang có một lượt tải chạy (hoặc đang tải nhiều công ty), hãy chờ xong hoặc bấm Dừng")
     if body.date_from > body.date_to:
         raise HTTPException(400, "Từ ngày phải trước đến ngày")
     kinds = [k for k in KINDS if k in body.kinds]
@@ -247,6 +247,50 @@ def auto_stop(job_id: str):
     return {"ok": True}
 
 
+# ---------- tải nhiều công ty cùng lúc ----------
+class MultiIn(AutoIn):
+    users: list[str]
+
+
+@app.get("/api/multi")
+def multi_status():
+    from . import multi_sync
+    return multi_sync.current()
+
+
+@app.post("/api/multi/start")
+def multi_start(body: MultiIn):
+    from . import multi_sync
+    from .auto_download import KINDS
+    kinds = [k for k in KINDS if k in body.kinds]
+    if not kinds:
+        raise HTTPException(400, "Chọn ít nhất một loại hóa đơn")
+    try:
+        return multi_sync.start(body.users, body.date_from, body.date_to, kinds, body.excel, body.xml, body.pdf,
+                                body.easy_captcha).public()
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+
+
+@app.post("/api/multi/skip")
+def multi_skip():
+    from . import multi_sync
+    return {"ok": multi_sync.skip_login()}
+
+
+@app.post("/api/multi/refill")
+def multi_refill():
+    from . import multi_sync
+    return multi_sync.refill()
+
+
+@app.post("/api/multi/stop")
+def multi_stop():
+    from . import multi_sync
+    multi_sync.stop()
+    return {"ok": True}
+
+
 # ---------- nơi lưu hóa đơn ----------
 @app.get("/api/settings")
 def settings_get():
@@ -262,8 +306,8 @@ class OutDirIn(BaseModel):
 @app.post("/api/settings/output-dir")
 def settings_output_dir(body: OutDirIn):
     from . import config
-    from .auto_download import running_job
-    if running_job():
+    from .auto_download import busy
+    if busy():
         raise HTTPException(409, "Đang có một lượt tải chạy, hãy đợi xong hoặc bấm Dừng rồi mới đổi nơi lưu")
     try:
         config.set_output_dir((body.path or "").strip().strip('"') or None)

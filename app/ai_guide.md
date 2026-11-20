@@ -55,6 +55,15 @@ dự báo thuế GTGT, đối chiếu tờ khai, đọc chứng từ và đối 
   được bỏ qua); PDF chỉ có bản _hddt → trang tra cứu NCC bắt captcha hoặc chưa có mã tra cứu; cổng báo quá tải → chờ vài phút.
 - Không bao giờ hỏi/nhận mật khẩu cổng thuế, không giải captcha thay khách.
 
+## Tải nhiều công ty cùng lúc (trang Tải hóa đơn, khung "Tải nhiều công ty cùng lúc")
+- Chọn các công ty đã lưu tài khoản (mục Lịch tự động) → bấm "Tải các công ty đã chọn". Dùng khoảng ngày / loại HĐ / tùy chọn
+  Excel-XML-PDF ở khung trên. Phần mềm cho đăng nhập LẦN LƯỢT từng công ty trên Chrome (tự điền tài khoản + mật khẩu, khách
+  chỉ nhập captcha rồi bấm Đăng nhập); đăng nhập xong công ty nào là tải ngay, tối đa 4 công ty tải song song, mỗi công ty lưu
+  vào thư mục MST riêng. Có nút "Bỏ qua công ty này", "Dừng tất cả", "Dừng" từng công ty.
+- Cổng thuế giới hạn số lần gọi theo máy: phần mềm tự giãn nhịp khi cổng báo quá tải, nên nhiều công ty nhanh hơn chủ yếu ở
+  khâu lấy PDF gốc và khỏi chờ công ty trước xong mới đăng nhập công ty sau. Phiên đăng nhập giữ trong bộ nhớ, tắt phần mềm
+  là phải đăng nhập lại. Bản in PDF từ trang cổng chờ đăng nhập xong hết mới in.
+
 ## Menu ☰ Tiện ích (góc phải thanh chức năng) – em làm được bằng công cụ, khách xem bằng mo_trang_app
 - Bảng điều khiển (tongquan, công cụ tong_quan_khach_hang): mọi công ty trên máy, đã tải đủ HĐ kỳ vừa xong chưa, VAT phải
   nộp / khấu trừ, hạn gần nhất, sao kê, rủi ro HĐ. Khách hỏi "hôm nay cần làm gì" → gọi công cụ này + han_nop rồi liệt kê việc

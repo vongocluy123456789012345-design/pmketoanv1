@@ -426,7 +426,7 @@ def _run_tool(name: str, a: dict[str, Any]) -> Any:
     if name == "open_portal":
         return BROWSER.open()
     if name == "start_download":
-        if ad.running_job():
+        if ad.busy():
             return {"loi": "Đang có lượt tải chạy – dùng download_progress để xem."}
         st = BROWSER.status()
         if not st.get("logged_in"):

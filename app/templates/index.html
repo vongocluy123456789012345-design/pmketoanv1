@@ -294,6 +294,24 @@
     <div id="aLog" style="background:#0d1117;color:#c9d1d9;font:12px Consolas,monospace;padding:8px;height:180px;overflow:auto;border-radius:6px;white-space:pre-wrap;margin-top:6px"></div>
   </section>
 
+  <section class="card" id="muCard">
+    <h2>Tải nhiều công ty cùng lúc</h2>
+    <p class="muted">Chọn các công ty đã lưu tài khoản (thêm ở mục <a href="#lich" data-page="lich">Lịch tự động</a>). Phần mềm cho đăng nhập
+      <b>lần lượt</b> từng công ty trên Chrome (tự điền tài khoản + mật khẩu, bạn chỉ nhập captcha rồi bấm Đăng nhập).
+      Đăng nhập xong công ty nào là <b>tải ngay</b> công ty đó, các công ty đã đăng nhập <b>tải song song</b> (tối đa 4 công ty một lúc).
+      Dùng khoảng ngày, loại hóa đơn và tùy chọn Excel/XML/PDF ở khung trên. Mỗi công ty lưu vào thư mục MST riêng.</p>
+    <div class="inline">
+      <div style="flex:3" id="muList" class="muted">Đang tải danh sách công ty…</div>
+      <div style="flex:0 0 auto"><label style="display:inline"><input type="checkbox" id="muAll" style="width:auto"> Chọn tất cả</label></div>
+      <div style="flex:0 0 auto"><button id="muRun">Tải các công ty đã chọn</button> <button id="muStop" class="sec" disabled>Dừng tất cả</button></div>
+    </div>
+    <div id="muLogin" style="display:none;margin-top:10px;padding:10px;border:1px solid var(--warn);border-radius:6px;background:#fff8c5">
+      <b id="muLoginText"></b> <div class="muted" id="muLoginMsg"></div>
+      <div style="margin-top:6px"><button class="sec" id="muRefill">Điền lại tài khoản</button> <button class="sec" id="muSkip">Bỏ qua công ty này</button></div>
+    </div>
+    <div id="muOut" style="margin-top:10px"></div>
+  </section>
+
   <section class="card">
     <h2>Lấy PDF gốc từ trang tra cứu – không cần đăng nhập cổng thuế</h2>
     <p class="page-intro">Phần mềm mở Chrome <b>chạy ẩn</b>, vào trang tra cứu của nhà cung cấp hóa đơn (VNPT, Viettel, MISA, BKAV, FPT,
@@ -1138,6 +1156,69 @@ $("btnAuto").onclick = async () => {
   } catch (e) { alert(e.message); }
 };
 $("btnStop").onclick = () => autoJob && api(`/api/auto/${autoJob}/stop`, {method: "POST"});
+// ----- tải nhiều công ty cùng lúc -----
+let muTimer = null;
+async function muAccounts() {
+  const r = await api("/api/gdt-accounts").catch(() => ({items: []}));
+  const items = r.items || [];
+  $("muList").innerHTML = items.length ? items.map(a => `<label style="display:inline-block;margin:0 14px 4px 0">
+      <input type="checkbox" class="muU" value="${esc(a.username)}" style="width:auto"> ${esc(a.ten || a.username)}
+      <span class="muted">${esc(a.ten ? a.username : "")}${a.ok ? "" : " (chưa lưu mật khẩu)"}</span></label>`).join("")
+    : `Chưa lưu tài khoản công ty nào – thêm ở mục <a href="#lich" data-page="lich">Lịch tự động</a> (MST + mật khẩu cổng thuế).`;
+}
+$("muAll").onchange = () => document.querySelectorAll(".muU").forEach(c => c.checked = $("muAll").checked);
+const muIcon = {cho: "⏳", login: "🔑", cho_tai: "🕒", dang_tai: "⬇️", xong: "✅", thieu: "⚠️", loi: "❌", bo_qua: "⏭️", dung: "⏹️"};
+function muRender(r) {
+  if (!r || !r.id) { $("muOut").innerHTML = ""; $("muLogin").style.display = "none"; return; }
+  const live = r.status === "running";
+  $("muRun").disabled = live; $("muStop").disabled = !live;
+  const cur = r.cur != null ? r.items[r.cur] : null;
+  $("muLogin").style.display = live && cur && cur.state === "login" ? "" : "none";
+  if (cur) { $("muLoginText").textContent = `🔑 Đăng nhập ${cur.ten || cur.user} (${cur.user}) trên cửa sổ Chrome cổng thuế`; $("muLoginMsg").textContent = cur.msg || ""; }
+  $("muOut").innerHTML = `<p class="muted">Kỳ ${r.tu} – ${r.den} · đang tải ${r.running}/${r.max} công ty cùng lúc${live ? "" : " · đã kết thúc"}</p>
+    <div style="overflow:auto"><table><tr><th>Công ty</th><th>Trạng thái</th><th style="min-width:170px">Tiến độ</th><th>XML</th><th>PDF gốc</th><th>PDF bản in</th><th>Ghi chú</th><th></th></tr>` +
+    r.items.map(it => { const j = it.job || {};
+      const miss = it.ket_qua && it.ket_qua.missing && it.ket_qua.missing.length ? it.ket_qua.missing.slice(0, 3).join("; ") : "";
+      return `<tr class="${it.state === "loi" ? "lvLOI" : it.state === "thieu" ? "lvCB" : ""}"><td><b>${esc(it.ten || it.user)}</b><br><span class="muted">${esc(it.user)}</span></td>
+      <td>${muIcon[it.state] || ""} ${esc(it.state_text)}</td>
+      <td>${it.job ? `<progress value="${j.done}" max="${j.total || 1}" style="width:110px"></progress> ${j.done}/${j.total}` : ""}</td>
+      <td style="text-align:right">${it.job ? j.xml_ok : ""}</td><td style="text-align:right">${it.job ? j.pdf_ok : ""}</td><td style="text-align:right">${it.job ? j.pdf_hddt : ""}</td>
+      <td class="muted" style="max-width:420px">${esc(it.state === "dang_tai" ? (j.last || "") : (miss || it.msg || ""))}
+        ${j.captcha ? `<div style="margin-top:4px"><img src="${j.captcha.image}" style="height:36px;background:#fff;border:1px solid var(--b);border-radius:4px;vertical-align:middle">
+          <input data-mucap="${j.id}" placeholder="Nhập captcha" style="width:110px;display:inline-block"> <button data-mucapok="${j.id}" style="padding:2px 8px">Gửi</button></div>` : ""}</td>
+      <td>${j.out_dir ? `<a href="#" data-muopen="${esc(j.summary_file || j.out_dir)}">Mở</a>` : ""}
+        ${it.state === "dang_tai" ? ` <a href="#" data-mustop="${j.id}" class="muted">Dừng</a>` : ""}</td></tr>`; }).join("") +
+    `</table></div>`;
+  if (!live && muTimer) { clearInterval(muTimer); muTimer = null; }
+}
+const muPoll = () => api("/api/multi").then(r => { if (!document.activeElement || !document.activeElement.dataset || !document.activeElement.dataset.mucap) muRender(r); }).catch(() => {});
+function muWatch() { if (!muTimer) muTimer = setInterval(muPoll, 2000); muPoll(); }
+$("muRun").onclick = async () => {
+  unlockAlerts();
+  const users = [...document.querySelectorAll(".muU:checked")].map(c => c.value);
+  if (!users.length) return alert("Chọn ít nhất một công ty");
+  const kinds = [...document.querySelectorAll(".aKind:checked")].map(c => c.value);
+  try {
+    muRender(await api("/api/multi/start", {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({users, date_from: $("aFrom").value, date_to: $("aTo").value, kinds,
+        excel: $("aExcel").checked, xml: $("aXml").checked, pdf: $("aPdf").checked, easy_captcha: $("aEasyCap").checked})}));
+    muWatch();
+  } catch (e) { alert(e.message); }
+};
+$("muStop").onclick = () => confirm("Dừng tải tất cả các công ty?") && api("/api/multi/stop", {method: "POST"}).then(muPoll);
+$("muSkip").onclick = () => api("/api/multi/skip", {method: "POST"}).then(muPoll);
+$("muRefill").onclick = async () => { const r = await api("/api/multi/refill", {method: "POST"}).catch(e => ({message: e.message})); if (!r.ok) alert(r.message); };
+$("muOut").addEventListener("click", ev => {
+  const d = ev.target.dataset;
+  if (d.muopen) { ev.preventDefault(); openFile(d.muopen); }
+  if (d.mustop) { ev.preventDefault(); if (confirm("Dừng tải công ty này?")) api(`/api/auto/${d.mustop}/stop`, {method: "POST"}).then(muPoll); }
+  if (d.mucapok) { const inp = document.querySelector(`[data-mucap="${d.mucapok}"]`);
+    api(`/api/auto/${d.mucapok}/captcha`, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({value: inp.value})}).then(() => { inp.blur(); muPoll(); }); }
+});
+$("muOut").addEventListener("keydown", ev => { if (ev.key === "Enter" && ev.target.dataset.mucap) document.querySelector(`[data-mucapok="${ev.target.dataset.mucap}"]`).click(); });
+muAccounts();
+api("/api/multi").then(r => { muRender(r); if (r && r.status === "running") muWatch(); }).catch(() => {});
+
 // Chép ảnh captcha (SVG -> PNG) vào clipboard
 $("capCopy").onclick = async () => {
   try {
@@ -1304,6 +1385,7 @@ function showGa(r) {
     <td><button class="sec" style="padding:2px 8px" data-gadel="${esc(a.username)}">Xóa</button></td></tr>`).join("")
     || `<tr><td colspan="5" class="muted">Chưa có công ty nào</td></tr>`;
   const n = items.filter(a => a.auto && a.ok).length;
+  if (typeof muAccounts === "function") muAccounts();
   $("gaInfo").textContent = n ? `Tới lịch sẽ tải ${n} công ty: ` + items.filter(a => a.auto && a.ok).map(a => a.ten || a.username).join(", ") : "";
 }
 const loadGa = () => api("/api/gdt-accounts").then(showGa).catch(() => {});

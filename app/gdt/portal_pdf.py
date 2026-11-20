@@ -126,6 +126,7 @@ def render(row: dict[str, Any], sco: bool) -> bytes:
     """row: dữ liệu hóa đơn (nên là JSON chi tiết từ /invoices/detail). Trả về PDF."""
     if _state["unavailable"]:
         raise BrowserError(_state["unavailable"])
+    BROWSER.login_free.wait(3600)   # đang đăng nhập lần lượt nhiều công ty trên tab cổng -> chờ xong mới in
 
     def run() -> bytes:
         p = _lookup_page()
@@ -164,6 +165,8 @@ def render(row: dict[str, Any], sco: bool) -> bytes:
 
 def capture(row: dict[str, Any], sco: bool) -> str:
     """Chỉ lấy HTML hóa đơn đã vẽ trên trang cổng (nhanh); việc in ra PDF làm song song ở Chrome chạy ẩn."""
+    BROWSER.login_free.wait(3600)
+
     def run() -> str:
         p = _lookup_page()
         res = p.evaluate(_RENDER_JS, {"row": row, "tab": 2 if sco else 1, "needCss": _state["css"] is None})

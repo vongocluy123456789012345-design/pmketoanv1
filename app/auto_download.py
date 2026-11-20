@@ -142,6 +142,8 @@ class AutoJob:
     manual_captcha: bool = False  # tải theo lịch: captcha hiện bảng cho người dùng tự nhập (không tự đọc)
     mst: str = ""
     out_dir: str = ""
+    token: str = ""      # tải nhiều công ty cùng lúc: token riêng của công ty này ("" = phiên đang đăng nhập)
+    user: str = ""       # tên đăng nhập cổng thuế của công ty (tải nhiều công ty)
     status: str = "running"  # running | done | error | auth_error | cancelled
     total: int = 0
     done: int = 0
@@ -409,9 +411,16 @@ def fetch_pdf(inv: dict[str, Any], parsed: dict[str, Any]) -> tuple[bytes | None
 def run(job: AutoJob) -> None:
     rn = Runner(job)
     try:
-        st = BROWSER.status()
-        if not st.get("logged_in"):
-            raise BrowserAuthError("Chưa đăng nhập cổng thuế trên trình duyệt.")
+        if job.token:
+            BROWSER.use_token(job.token)
+            info = BROWSER.token_info(job.token)
+            if info["exp"] and info["exp"] < time.time():
+                raise BrowserAuthError("Phiên đăng nhập cổng thuế của công ty này đã hết hạn – đăng nhập lại.")
+            st = {"mst": info["mst"]}
+        else:
+            st = BROWSER.status()
+            if not st.get("logged_in"):
+                raise BrowserAuthError("Chưa đăng nhập cổng thuế trên trình duyệt.")
         job.mst = _s(st.get("mst")) or "chua-ro-MST"
         from .gdt import portal_pdf
         portal_pdf.reset()
@@ -473,6 +482,7 @@ def run(job: AutoJob) -> None:
         job.status = "error"
         job.err(f"{e}\n{traceback.format_exc()[-1200:]}")
     finally:
+        BROWSER.use_token(None)
         job.captcha = None
         if job._rows and job.out_dir:
             try:
@@ -1230,13 +1240,27 @@ def _month_sheet(wb, rows: list[dict[str, Any]], bold, fill) -> None:
 
 
 def running_job() -> AutoJob | None:
-    return next((j for j in JOBS.values() if j.status == "running"), None)
+    """Lượt tải 1 công ty đang chạy (không tính các lượt của "tải nhiều công ty cùng lúc")."""
+    return next((j for j in JOBS.values() if j.status == "running" and not j.token), None)
+
+
+MULTI = {"active": False}   # đang chạy "tải nhiều công ty cùng lúc" (app/multi_sync.py)
+
+
+def busy() -> bool:
+    """Có lượt tải nào đang chạy (1 công ty hoặc nhiều công ty) -> không bắt đầu lượt khác dùng phiên Chrome."""
+    return bool(running_job() or MULTI["active"])
+
+
+def running_any() -> list[AutoJob]:
+    return [j for j in JOBS.values() if j.status == "running"]
 
 
 def start(d_from: date, d_to: date, kinds: list[str], get_excel: bool, get_xml: bool,
-          get_pdf: bool, easy_captcha: bool = False, manual_captcha: bool = False) -> AutoJob:
+          get_pdf: bool, easy_captcha: bool = False, manual_captcha: bool = False, token: str = "",
+          user: str = "") -> AutoJob:
     job = AutoJob(uuid.uuid4().hex, date_chunks(d_from, d_to), kinds, get_excel, get_xml, get_pdf, easy_captcha,
-                  manual_captcha=manual_captcha)
+                  manual_captcha=manual_captcha, token=token, user=user)
     JOBS[job.id] = job
     threading.Thread(target=run, args=(job,), daemon=True, name=f"auto-{job.id[:6]}").start()
     return job

@@ -113,7 +113,7 @@ def read_period(mst: str, kieu: str, ky: int, nam: int, details: bool = True,
     if str(st.get("mst")) != mst:
         return {"loi": f"Chrome đang đăng nhập MST {st.get('mst')}, không phải {mst}. Nhờ khách đăng xuất và đăng nhập "
                        f"bằng MST {mst}."}
-    if ad.running_job():
+    if ad.busy():
         return {"loi": "Đang có lượt tải hóa đơn khác chạy – chờ xong rồi đọc nhanh."}
     t0 = time.time()
     kinds = [k for k in (kinds or ALL_KINDS) if k in ad.KINDS]
