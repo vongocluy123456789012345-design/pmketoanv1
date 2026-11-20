@@ -525,8 +525,21 @@
           <div style="flex:0 0 auto"><label><input type="checkbox" id="scOn" style="width:auto"> Bật</label></div>
           <div style="flex:0 0 110px"><label>Ngày trong tháng</label><input type="number" id="scDay" min="1" max="31" value="5"></div>
           <div style="flex:0 0 130px"><label>Giờ : phút</label><input type="time" id="scTime" value="08:00"></div>
-          <div><label>Tải hóa đơn</label><select id="scKy"><option value="truoc">Cả tháng trước</option>
-            <option value="nay">Từ đầu tháng đến hôm đó</option></select></div>
+          <div><label>Tải hóa đơn</label><select id="scKy">
+            <option value="truoc">Cả tháng trước</option>
+            <option value="nay">Từ đầu tháng đến hôm đó</option>
+            <option value="quy_truoc">Cả quý trước</option>
+            <option value="quy_nay">Từ đầu quý đến hôm đó</option>
+            <option value="thang">Chọn tháng…</option>
+            <option value="quy">Chọn quý…</option>
+            <option value="khoang">Từ ngày … đến ngày …</option></select></div>
+        </div>
+        <div class="inline" id="scKyBox" style="margin-top:4px;display:none">
+          <div id="scThangBox"><label>Tháng</label><input type="month" id="scThang"></div>
+          <div id="scQuyBox"><label>Quý</label><select id="scQuy"><option>1</option><option>2</option><option>3</option><option>4</option></select></div>
+          <div id="scNamBox"><label>Năm</label><input type="number" id="scNam" min="2020" max="2100"></div>
+          <div id="scTuBox"><label>Từ ngày</label><input type="date" id="scTu"></div>
+          <div id="scDenBox"><label>Đến ngày</label><input type="date" id="scDen"></div>
         </div>
         <div style="margin-top:6px">
           <label style="display:inline;margin-right:8px"><input type="checkbox" class="scKind" value="mua-vao" checked style="width:auto"> Mua vào có mã</label>
@@ -1092,14 +1105,37 @@ function renderSchedule(s) {
   const p2 = n => String(n).padStart(2, "0");
   $("scOn").checked = s.enabled; $("scDay").value = s.day; $("scTime").value = `${p2(s.hour)}:${p2(s.minute || 0)}`;
   $("scKy").value = s.ky || "truoc";
+  if (s.tu && s.den) {
+    $("scThang").value = s.tu.slice(0, 7); $("scQuy").value = String(Math.floor((+s.tu.slice(5, 7) - 1) / 3) + 1);
+    $("scNam").value = s.tu.slice(0, 4); $("scTu").value = s.tu; $("scDen").value = s.den;
+  }
+  scKyShow();
   document.querySelectorAll(".scKind").forEach(c => c.checked = s.kinds.includes(c.value));
   msg($("scMsg"), (s.message || s.mo_ta) + (s.enabled && s.windows ? ` · ${s.windows}` : "") +
     (s.last_run ? ` · Lần tự động gần nhất: ${s.last_run}` : ""), !s.waiting_login && !(s.result && !s.result.ok));
 }
+function scKyShow() {
+  const k = $("scKy").value, show = (id, on) => $(id).style.display = on ? "" : "none";
+  show("scKyBox", ["thang", "quy", "khoang"].includes(k));
+  show("scThangBox", k === "thang"); show("scQuyBox", k === "quy"); show("scNamBox", k === "quy");
+  show("scTuBox", k === "khoang"); show("scDenBox", k === "khoang");
+  if (!$("scNam").value) $("scNam").value = new Date().getFullYear();
+}
+$("scKy").onchange = scKyShow;
+function scRange() {          // khoảng ngày cố định theo lựa chọn (YYYY-MM-DD)
+  const k = $("scKy").value, p2 = n => String(n).padStart(2, "0"), last = (y, m) => new Date(y, m, 0).getDate();
+  if (k === "thang" && $("scThang").value) { const [y, m] = $("scThang").value.split("-").map(Number);
+    return [`${y}-${p2(m)}-01`, `${y}-${p2(m)}-${last(y, m)}`]; }
+  if (k === "quy") { const q = +$("scQuy").value, y = +$("scNam").value, m1 = q * 3 - 2, m3 = q * 3;
+    return [`${y}-${p2(m1)}-01`, `${y}-${p2(m3)}-${last(y, m3)}`]; }
+  if (k === "khoang") return [$("scTu").value, $("scDen").value];
+  return ["", ""];
+}
 $("btnSc").onclick = async () => {
   const [hh, mm] = ($("scTime").value || "08:00").split(":").map(Number);
+  const [tu, den] = scRange();
   try { renderSchedule(await api("/api/schedule", {method: "POST", headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({enabled: $("scOn").checked, day: +$("scDay").value, hour: hh, minute: mm, ky: $("scKy").value,
+    body: JSON.stringify({enabled: $("scOn").checked, day: +$("scDay").value, hour: hh, minute: mm, ky: $("scKy").value, tu, den,
       kinds: [...document.querySelectorAll(".scKind:checked")].map(c => c.value)})})); } catch (e) { msg($("scMsg"), e.message); }
 };
 $("btnScNow").onclick = async () => { unlockAlerts(); try { renderSchedule(await api("/api/schedule/run-now", {method: "POST"})); } catch (e) { msg($("scMsg"), e.message); } };
@@ -1132,7 +1168,7 @@ $("gaRows").addEventListener("change", async ev => {
   if (u) showGa(await api(`/api/gdt-accounts/${encodeURIComponent(u)}/auto`, {method: "POST",
     headers: {"Content-Type": "application/json"}, body: JSON.stringify({auto: ev.target.checked})}));
 });
-setInterval(() => api("/api/schedule").then(s => { if (document.activeElement.closest && !document.activeElement.closest("#scOn,#scDay,#scTime,#scKy,.scKind")) renderSchedule(s); }).catch(() => {}), 10000);
+setInterval(() => api("/api/schedule").then(s => { if (document.activeElement.closest && !document.activeElement.closest("#scOn,#scDay,#scTime,#scKy,#scKyBox,.scKind")) renderSchedule(s); }).catch(() => {}), 10000);
 
 // ----- số tiền: gõ 1234567 -> hiện 1.234.567 -----
 const parseVn = s => Number(String(s || "").replace(/[^\d-]/g, "")) || 0;

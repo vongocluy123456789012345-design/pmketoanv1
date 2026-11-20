@@ -58,11 +58,42 @@ def prev_month(today: date) -> tuple[date, date]:
     return last.replace(day=1), date(last.year, last.month, monthrange(last.year, last.month)[1])
 
 
-def period_for(today: date, ky: str) -> tuple[date, date]:
-    """ky = "truoc": cả tháng trước; "nay": từ đầu tháng này đến hôm nay."""
+KY_CHOICES = ("truoc", "nay", "quy_truoc", "quy_nay", "thang", "quy", "khoang")
+
+
+def _quarter(d: date) -> tuple[date, date]:
+    q0 = (d.month - 1) // 3 * 3 + 1
+    end_m = q0 + 2
+    return date(d.year, q0, 1), date(d.year, end_m, monthrange(d.year, end_m)[1])
+
+
+def period_for(today: date, ky: str, tu: str = "", den: str = "") -> tuple[date, date]:
+    """Khoảng ngày cần tải:
+    truoc: cả tháng trước · nay: đầu tháng -> hôm đó · quy_truoc: cả quý trước · quy_nay: đầu quý -> hôm đó ·
+    thang / quy / khoang: khoảng cố định tu -> den đã chọn (không quá hôm nay)."""
     if ky == "nay" and today.day > 1:
         return today.replace(day=1), today
+    if ky == "quy_nay":
+        q1, _ = _quarter(today)
+        return (q1, today) if today > q1 else _quarter(q1 - timedelta(days=1))
+    if ky == "quy_truoc":
+        return _quarter(_quarter(today)[0] - timedelta(days=1))
+    if ky in ("thang", "quy", "khoang") and tu and den:
+        d1, d2 = date.fromisoformat(tu), date.fromisoformat(den)
+        return d1, min(d2, today) if d1 <= today else d2
     return prev_month(today)
+
+
+def describe_ky(ky: str, tu: str = "", den: str = "") -> str:
+    if ky in ("thang", "quy", "khoang") and tu and den:
+        d1, d2 = date.fromisoformat(tu), date.fromisoformat(den)
+        if ky == "thang":
+            return f"tháng {d1:%m/%Y}"
+        if ky == "quy":
+            return f"quý {(d1.month - 1) // 3 + 1}/{d1.year}"
+        return f"từ {d1:%d/%m/%Y} đến {d2:%d/%m/%Y}"
+    return {"nay": "từ đầu tháng đến hôm đó", "quy_truoc": "cả quý trước", "quy_nay": "từ đầu quý đến hôm đó"}.get(
+        ky, "cả tháng trước")
 
 
 def judge(job: Any) -> dict[str, Any]:
@@ -135,6 +166,8 @@ class Scheduler:
         self.hour = 8
         self.minute = 0
         self.ky = "truoc"
+        self.tu = ""              # khoảng cố định (ky = thang / quy / khoang)
+        self.den = ""
         self.kinds = ["mua-vao", "mua-vao-khong-ma", "ban-ra"]
         self.last_run = ""        # ngày của lượt theo lịch đã chạy gần nhất (YYYY-MM-DD)
         self.pending_since = ""   # đang chờ đăng nhập từ lúc nào
@@ -162,7 +195,7 @@ class Scheduler:
     def _load(self) -> None:
         try:
             s = json.loads(STATE.read_text(encoding="utf-8"))
-            for k in ("enabled", "day", "hour", "minute", "ky", "kinds", "last_run", "windows"):
+            for k in ("enabled", "day", "hour", "minute", "ky", "tu", "den", "kinds", "last_run", "windows"):
                 if k in s:
                     setattr(self, k, s[k])
         except (FileNotFoundError, ValueError):
@@ -171,19 +204,20 @@ class Scheduler:
     def _save(self) -> None:
         STATE.parent.mkdir(parents=True, exist_ok=True)
         STATE.write_text(json.dumps({"enabled": self.enabled, "day": self.day, "hour": self.hour,
-                                     "minute": self.minute, "ky": self.ky, "kinds": self.kinds,
+                                     "minute": self.minute, "ky": self.ky, "tu": self.tu, "den": self.den,
+                                     "kinds": self.kinds,
                                      "last_run": self.last_run, "windows": self.windows}, ensure_ascii=False),
                          encoding="utf-8")
 
     def describe(self) -> str:
         if not self.enabled:
             return "Đang tắt tải tự động"
-        what = "từ đầu tháng đến hôm đó" if self.ky == "nay" else "của tháng trước"
+        what = describe_ky(self.ky, self.tu, self.den)
         return f"Ngày {self.day} hằng tháng lúc {self.hour:02d}:{self.minute:02d} tự tải hóa đơn {what}"
 
     def status(self) -> dict[str, Any]:
         from .auto_download import JOBS
-        d1, d2 = period_for(date.today(), self.ky)
+        d1, d2 = period_for(date.today(), self.ky, self.tu, self.den)
         job = JOBS.get(self.job_id) if self.job_id else None
         jp = None
         if job:
@@ -192,6 +226,7 @@ class Scheduler:
                   "pdf_ok": job.pdf_ok, "pdf_hddt": job.pdf_hddt, "captcha": job.captcha, "mst": job.mst,
                   "months": [f"{a:%m/%Y}" for a, _ in job.months], "last": last[9:] if last else ""}
         return {"enabled": self.enabled, "day": self.day, "hour": self.hour, "minute": self.minute, "ky": self.ky,
+                "tu": self.tu, "den": self.den,
                 "kinds": self.kinds, "last_run": self.last_run, "message": self.message, "job_id": self.job_id,
                 "waiting_login": bool(self.pending_since), "next_period": f"{d1:%d/%m/%Y} – {d2:%d/%m/%Y}",
                 "mo_ta": self.describe(), "windows": self.windows, "phase": self.phase, "job": jp,
@@ -199,10 +234,12 @@ class Scheduler:
                 "cur_ten": self._ten(self.cur), "queue": list(self.queue), "results": self.results,
                 "login_cap": ({k: self.login_cap[k] for k in ("image", "user", "error")} if self.login_cap else None)}
 
-    def configure(self, enabled: bool, day: int, hour: int, kinds: list[str], minute: int = 0, ky: str = "truoc") -> None:
+    def configure(self, enabled: bool, day: int, hour: int, kinds: list[str], minute: int = 0, ky: str = "truoc",
+                  tu: str = "", den: str = "") -> None:
         from . import vat_lich
         self.enabled, self.day, self.hour, self.minute, self.kinds = enabled, day, hour, minute, kinds
-        self.ky = ky if ky in ("truoc", "nay") else "truoc"
+        self.ky = ky if ky in KY_CHOICES else "truoc"
+        self.tu, self.den = (tu, den) if self.ky in ("thang", "quy", "khoang") else ("", "")
         self.windows = vat_lich.register_task(
             {"bat": enabled, "ngay": [day], "gio": f"{hour:02d}:{minute:02d}"}, TASK_NAME, "--tai-tu-dong",
             "AWBook: tự tải hóa đơn điện tử theo lịch",
@@ -411,7 +448,7 @@ class Scheduler:
             self.message = f"Chờ đăng nhập {who} trên cửa sổ Chrome – đăng nhập xong phần mềm tự tải"
             self.next_try = time.time() + LOGIN_POLL
             return
-        d1, d2 = period_for(now.date(), self.ky)
+        d1, d2 = period_for(now.date(), self.ky, self.tu, self.den)
         job = start(d1, d2, self.kinds or ["mua-vao", "ban-ra"], True, True, True, manual_captcha=self._scheduled)
         self.job_id, self.pending_since, self._force, self.phase = job.id, "", False, "running"
         log(f"bắt đầu tải {d1:%d/%m/%Y}–{d2:%d/%m/%Y} MST {st.get('mst')}")

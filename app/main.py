@@ -876,7 +876,9 @@ class ScheduleIn(BaseModel):
     day: int = 5
     hour: int = 8
     minute: int = 0
-    ky: Literal["truoc", "nay"] = "truoc"
+    ky: Literal["truoc", "nay", "quy_truoc", "quy_nay", "thang", "quy", "khoang"] = "truoc"
+    tu: str = ""      # YYYY-MM-DD (ky = thang / quy / khoang)
+    den: str = ""
     kinds: list[str] = ["mua-vao", "mua-vao-khong-ma", "ban-ra"]
 
 
@@ -887,7 +889,15 @@ def schedule_set(body: ScheduleIn):
         raise HTTPException(400, "Ngày chạy 1–31, giờ 0–23, phút 0–59")
     if not body.kinds:
         raise HTTPException(400, "Chọn ít nhất một loại hóa đơn")
-    SCHEDULER.configure(body.enabled, body.day, body.hour, body.kinds, body.minute, body.ky)
+    if body.ky in ("thang", "quy", "khoang"):
+        from datetime import date as _d
+        try:
+            d1, d2 = _d.fromisoformat(body.tu), _d.fromisoformat(body.den)
+        except ValueError:
+            raise HTTPException(400, "Chọn tháng / quý / khoảng ngày cần tải") from None
+        if d1 > d2:
+            raise HTTPException(400, "Từ ngày phải trước đến ngày")
+    SCHEDULER.configure(body.enabled, body.day, body.hour, body.kinds, body.minute, body.ky, body.tu, body.den)
     return SCHEDULER.status()
 
 

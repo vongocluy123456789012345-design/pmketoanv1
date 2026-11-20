@@ -64,3 +64,17 @@ def test_schedule_due_and_period():
                   "10/2026 Mua vào – CQT nhận không mã K26TTU-2: không tải được XML (cổng trả lỗi 500 – Không tồn tại hồ sơ gốc của hóa đơn.)"]
     r = sc.judge(job)
     assert r["ok"] and r["notes"] and not r["missing"]           # cổng không có XML gốc: lưu ý, không phải thiếu
+
+
+def test_schedule_period_choices():
+    from datetime import date
+
+    from app import scheduler as sc
+    t = date(2026, 11, 20)
+    assert sc.period_for(t, "quy_truoc") == (date(2026, 7, 1), date(2026, 9, 30))
+    assert sc.period_for(t, "quy_nay") == (date(2026, 10, 1), date(2026, 11, 20))
+    assert sc.period_for(t, "quy", "2026-07-01", "2026-09-30") == (date(2026, 7, 1), date(2026, 9, 30))
+    assert sc.period_for(t, "thang", "2026-02-01", "2026-02-28") == (date(2026, 2, 1), date(2026, 2, 28))
+    assert sc.period_for(t, "khoang", "2026-11-05", "2026-12-31") == (date(2026, 11, 5), date(2026, 11, 20))
+    assert sc.describe_ky("quy", "2026-07-01", "2026-09-30") == "quý 3/2026"
+    assert sc.describe_ky("khoang", "2026-01-05", "2026-02-10") == "từ 05/01/2026 đến 10/02/2026"
