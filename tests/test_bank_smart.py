@@ -87,3 +87,34 @@ def test_identify_and_pipeline(tmp_path):
     st = bs.write_result(tmp_path / "kq.xlsx", vouchers, {"so_tk": "1"}, [], ["test"])
     assert st["chua_ro"] >= 1 and (tmp_path / "kq.xlsx").exists()   # "tiền hàng đợt 3" không rõ của ai
     assert bs.status_of(t6, by[id(t6)]).startswith("CHƯA RÕ")
+
+
+def test_ledger_book_booked_learn_export():
+    led = _xlsx([["CHI TIẾT CÔNG NỢ PHẢI TRẢ NHÀ CUNG CẤP"], ["Từ ngày 01/01/2026"], [],
+                 ["Ngày hạch toán", "Ngày chứng từ", "Số chứng từ", "Diễn giải", "Phát sinh", None, "Số dư"],
+                 [None, None, None, None, "Số đã trả", "Số phải trả", "Số trả trước", "Số còn phải trả"],
+                 ["Tên nhà cung cấp: TIKTOK PTE. LTD."],
+                 [date(2026, 6, 1), date(2026, 6, 1), "MDV1", "Mua dịch vụ quảng cáo", 0, 33000000, 0, 33000000],
+                 [date(2026, 6, 2), date(2026, 6, 2), "PCB2600", "Thanh toán Mua dịch vụ quảng cáo", 33000000, 0, 0, 0],
+                 [None, None, None, "Cộng phát sinh trong kỳ", 33000000, 33000000, 0, 0]])
+    lg = bs.read_ledger("ncc.xlsx", led, "NCC")
+    assert lg and lg["partners"][0]["ten"] == "TIKTOK PTE. LTD." and len(lg["entries"]) == 2
+    assert lg["entries"][1]["da"] == 33000000 and lg["entries"][0]["phat_sinh"] == 33000000
+    chi = _xlsx([["CHI TIỀN GỬI"], [], ["STT", "Ngày hạch toán", "Số chứng từ", "Diễn giải", "Số tiền", "Đối tượng",
+                                         "Lý do chi", "Loại chứng từ"],
+                 [1, date(2026, 6, 10), "PCB2601", "Lương T5 Phúc", 9000000, "", "Chi khác", "Ủy nhiệm chi"],
+                 [2, date(2026, 6, 11), "PCB2602", "Lương T5 Tuyền", 8000000, "", "Chi khác", "Ủy nhiệm chi"]])
+    bb = bs.read_bank_book("Chi_tien_gui.xlsx", chi)
+    assert bb["huong"] == "chi" and [e["so_ct"] for e in bb["entries"]] == ["PCB2601", "PCB2602"]
+    mk = lambda d, mo, no: {"ngay": d, "mo_ta": mo, "doi_ung": "", "tham_chieu": "", "tk_doi_ung": "", "co": 0.0, "no": no}  # noqa: E731
+    t1 = mk(date(2026, 6, 2), "4229XX6023 HO KINH DOANH GENME", 33000000)
+    t2 = mk(date(2026, 6, 10), "LUONG T5 PHUC-100626", 9000000)
+    t3 = mk(date(2026, 6, 11), "LUONG T5 TUYEN-110626", 8000000)
+    t4 = mk(date(2026, 7, 10), "LUONG T6 HOANG-100726", 7692308)          # tháng mới, tên người khác
+    txns = [t1, t2, t3, t4]
+    assert bs.mark_booked(txns, bb["entries"], lg["entries"]) == 3
+    assert t1["booked"]["so_ct"] == "PCB2600" and t2["booked"]["so_ct"] == "PCB2601" and not t4.get("booked")
+    assert bs.learn(txns) == 1 and t4["hoc"]["ly_do"] == "Chi khác"      # học theo từ khóa "luong"
+    vouchers = bank_post.build_vouchers(txns, "TT133", "HO KINH DOANH GENME")
+    out = bs.prepare_export(vouchers, bb["entries"])
+    assert len(out) == 1 and out[0]["so_ct"] == "PCB2603" and out[0]["_ly_do_misa"] == "Chi khác"

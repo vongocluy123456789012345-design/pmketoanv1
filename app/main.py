@@ -812,10 +812,12 @@ async def docs_bank_book(stmt: list[UploadFile] = File(...), book: list[UploadFi
 async def docs_bank(files: list[UploadFile] = File(...), mst: str = Form(""), months_back: int = Form(12),
                     che_do: str = Form("TT200"), lay_cong: bool = Form(True), so_ct_bat_dau: int = Form(1),
                     phai_thu: list[UploadFile] | None = File(None), phai_tra: list[UploadFile] | None = File(None),
-                    so_ban: list[UploadFile] | None = File(None), dung_ai: bool = Form(True)):
-    """Đọc sao kê, dò từng giao dịch: với hóa đơn HĐĐT (5 loại, tháng sao kê lùi về các tháng trước), danh mục công nợ
-    phải thu / phải trả (mã đối tượng), sổ chi tiết bán hàng; AI đoán các dòng còn chưa rõ. Hạch toán Nợ/Có, xuất
-    file nhập khẩu MISA / EasyBooks có mã đối tượng và file kết quả ghép thu chi."""
+                    so_ban: list[UploadFile] | None = File(None), so_mua: list[UploadFile] | None = File(None),
+                    so_thu_chi: list[UploadFile] | None = File(None), mau_thu: UploadFile | None = File(None),
+                    mau_chi: UploadFile | None = File(None), dung_ai: bool = Form(True)):
+    """Đọc sao kê, dò từng giao dịch với: hóa đơn HĐĐT (5 loại, lùi các tháng trước), chi tiết công nợ phải thu / phải
+    trả (đối tượng + khoản đã thu / đã trả), sổ chi tiết bán hàng / mua hàng, sổ thu / chi tiền gửi đã nhập (bỏ dòng đã
+    hạch toán + học cách kế toán đã ghi); AI cho dòng còn chưa rõ. Xuất đúng file mẫu nhập khẩu Phiếu thu / chi tiền gửi."""
     from datetime import datetime, timedelta
 
     from starlette.concurrency import run_in_threadpool
@@ -833,6 +835,7 @@ async def docs_bank(files: list[UploadFile] = File(...), mst: str = Form(""), mo
             info = bank_post.statement_info(name, data)
     if not txns:
         raise HTTPException(400, "Không đọc được giao dịch nào. " + " | ".join(errors))
+    info["chu_tk"] = re.split(r"\b(?:DIA CHI|ĐỊA CHỈ)\b", info.get("chu_tk", ""))[0].strip()
     txns.sort(key=lambda t: t["ngay"])
     d1, d2 = txns[0]["ngay"], txns[-1]["ngay"]
     months_back = max(0, min(int(months_back or 0), 36))
@@ -850,12 +853,13 @@ async def docs_bank(files: list[UploadFile] = File(...), mst: str = Form(""), mo
     invoices = bank_post.merge_invoices(local, portal)
     by_kind: dict[str, int] = {}
     for i in invoices:
-        by_kind[i.get("loai") or i.get("huong") or "?"] = by_kind.get(i.get("loai") or i.get("huong") or "?", 0) + 1
-    sources.append(f"Hóa đơn HĐĐT {start:%m/%Y} – {d2:%m/%Y}: {len(invoices)} HĐ (" +
-                   ", ".join(f"{k}: {v}" for k, v in sorted(by_kind.items())) + ")")
-    months = bank_post._months(start, d2)
+        k = i.get("loai") or i.get("huong") or "?"
+        by_kind[k] = by_kind.get(k, 0) + 1
+    sources.append(f"Hóa đơn HĐĐT {start:%m/%Y} – {d2:%m/%Y}: {len(invoices)} HĐ" +
+                   (" (" + ", ".join(f"{k}: {v}" for k, v in sorted(by_kind.items())) + ")" if by_kind else ""))
     try:
-        miss = [x for x in quick_read.coverage(root, months, invoices) if " CHƯA đọc:" in x or "THIẾU" in x]
+        miss = [x for x in quick_read.coverage(root, bank_post._months(start, d2), invoices)
+                if " CHƯA đọc:" in x or "THIẾU" in x]
         lab = sorted({re.search(r"Tháng (\d{2}/\d{4})", x).group(1) for x in miss if re.search(r"Tháng \d{2}/\d{4}", x)},
                      key=lambda m: m[3:] + m[:2])
         if lab:
@@ -864,24 +868,57 @@ async def docs_bank(files: list[UploadFile] = File(...), mst: str = Form(""), mo
     except Exception:  # noqa: BLE001
         pass
 
-    # 2) danh mục công nợ phải thu / phải trả -> danh bạ đối tượng (mã, tên, MST, số TK)
-    partners = []
+    # 2) công nợ phải thu / phải trả: danh bạ đối tượng + khoản đã thu / đã trả (chi tiết công nợ MISA)
+    partners, ledger = [], []
     for loai, ups in (("KH", phai_thu), ("NCC", phai_tra)):
+        lab = "Phải thu (khách hàng)" if loai == "KH" else "Phải trả (nhà cung cấp)"
         for name, data in await _read_uploads(ups or []):
             try:
-                ps = bank_smart.read_partners(name, data, loai)
-                partners += ps
-                sources.append(f"{'Phải thu (khách hàng)' if loai == 'KH' else 'Phải trả (nhà cung cấp)'} – {name}: {len(ps)} đối tượng")
+                led = bank_smart.read_ledger(name, data, loai)
+                if led:
+                    partners += led["partners"]
+                    ledger += led["entries"]
+                    sources.append(f"{lab} – {name}: {len(led['partners'])} đối tượng, {len(led['entries'])} dòng chứng từ")
+                else:
+                    ps = bank_smart.read_partners(name, data, loai)
+                    partners += ps
+                    sources.append(f"{lab} – {name}: {len(ps)} đối tượng")
             except Exception as e:  # noqa: BLE001
                 errors.append(f"{name}: {e}")
     dirx = bank_smart.Directory(partners) if partners else None
-    if dirx:
-        for t in txns:
-            t["dt"] = dirx.identify(t)
 
-    # 3) ghép hóa đơn, rồi sổ chi tiết bán hàng cho tiền thu chưa ghép
+    # 3) sổ thu / chi tiền gửi đã nhập: bỏ dòng đã hạch toán, học đối tượng / lý do / diễn giải kế toán đã dùng
+    book = []
+    for name, data in await _read_uploads(so_thu_chi or []):
+        try:
+            bb = bank_smart.read_bank_book(name, data)
+            if bb:
+                book += bb["entries"]
+                sources.append(f"Sổ {'thu' if bb['huong'] == 'thu' else 'chi'} tiền gửi đã nhập – {name}: {len(bb['entries'])} chứng từ")
+            else:
+                errors.append(f"{name}: không nhận ra sổ thu / chi tiền gửi (cần cột Số chứng từ, Số tiền)")
+        except Exception as e:  # noqa: BLE001
+            errors.append(f"{name}: {e}")
+    n_booked = bank_smart.mark_booked(txns, book, ledger) if (book or ledger) else 0
+    if n_booked:
+        sources.append(f"{n_booked} giao dịch đã có chứng từ trên sổ – không xuất lại vào file nhập")
+    n_hoc = bank_smart.learn(txns) if n_booked else 0
+    if n_hoc:
+        sources.append(f"Gợi ý theo lịch sử hạch toán cho {n_hoc} giao dịch chưa hạch toán")
+    if dirx:
+        own = info.get("chu_tk", "")
+        for t in txns:
+            t["dt"] = dirx.identify(t, own)
+            hoc = t.get("hoc")
+            if not t["dt"] and hoc and hoc["doi_tuong"]:
+                p = dirx.by_partner("", hoc["doi_tuong"])
+                t["dt"] = {"ma": (p or {}).get("ma", ""), "ten": hoc["doi_tuong"], "mst": (p or {}).get("mst", ""),
+                           "loai": (p or {}).get("loai", "KH" if t.get("co") else "NCC"), "why": "theo lịch sử hạch toán",
+                           "diem": 80, "nghi_ngo": []}
+
+    # 4) ghép hóa đơn, sổ bán hàng (khoản thu), chứng từ mua hàng / công nợ phải trả (khoản chi)
     bank_post.allocate(invoices, txns)
-    sales = []
+    sales, purchases = [], []
     for name, data in await _read_uploads(so_ban or []):
         try:
             vs = bank_smart.read_sales(name, data)
@@ -889,9 +926,18 @@ async def docs_bank(files: list[UploadFile] = File(...), mst: str = Form(""), mo
             sources.append(f"Sổ chi tiết bán hàng – {name}: {len(vs)} chứng từ")
         except Exception as e:  # noqa: BLE001
             errors.append(f"{name}: {e}")
+    for name, data in await _read_uploads(so_mua or []):
+        try:
+            ps = bank_smart.read_purchases(name, data)
+            purchases += ps
+            sources.append(f"Sổ chi tiết mua hàng – {name}: {len(ps)} chứng từ")
+        except Exception as e:  # noqa: BLE001
+            errors.append(f"{name}: {e}")
     if sales:
-        n = bank_smart.apply_sales(txns, sales, dirx)
-        sources.append(f"Ghép thêm {n} khoản thu theo sổ chi tiết bán hàng")
+        sources.append(f"Ghép thêm {bank_smart.apply_sales(txns, sales, dirx)} khoản thu theo sổ chi tiết bán hàng")
+    docs = bank_smart.payable_docs(ledger, purchases)
+    if docs:
+        sources.append(f"Ghép thêm {bank_smart.apply_payables(txns, docs, dirx)} khoản chi theo chứng từ mua hàng / công nợ phải trả")
     for t in txns:                      # đối tượng lấy theo hóa đơn đã ghép (nếu chưa nhận diện được)
         if not t.get("dt") and t.get("alloc"):
             inv = t["alloc"][0]["inv"]
@@ -901,18 +947,20 @@ async def docs_bank(files: list[UploadFile] = File(...), mst: str = Form(""), mo
                        "loai": "NCC" if inv.get("huong") == "purchase" else "KH", "why": "theo hóa đơn đã ghép",
                        "diem": 80, "nghi_ngo": []}
 
-    # 4) định khoản lượt 1 (nhận ra phí NH, lương, thuế...), AI cho dòng còn chưa rõ, định khoản lại
+    # 5) định khoản lượt 1 (phí NH, lương, thuế...), AI cho dòng còn chưa rõ, định khoản lại
     start_no = max(1, int(so_ct_bat_dau or 1))
     bank_post.build_vouchers(txns, che_do, info.get("chu_tk", ""), start_no)
     if dung_ai:
         try:
-            n_ai = await run_in_threadpool(bank_smart.ai_classify, txns, dirx, lambda m: errors.append(m))
+            todo = [t for t in txns if not t.get("booked") and not t.get("hoc")]
+            n_ai = await run_in_threadpool(bank_smart.ai_classify, todo, dirx, lambda m: errors.append(m))
             if n_ai:
                 sources.append(f"AI gợi ý cho {n_ai} giao dịch chưa rõ (đều đánh dấu cần kiểm tra)")
         except Exception as e:  # noqa: BLE001
             errors.append(f"AI phân loại lỗi: {e}")
     vouchers = bank_post.build_vouchers(txns, che_do, info.get("chu_tk", ""), start_no)
     bank_smart.fill_codes(vouchers, dirx)
+    to_import = bank_smart.prepare_export(vouchers, book)
 
     tag = f"{d1:%Y%m%d}_{d2:%Y%m%d}_{datetime.now():%H%M%S}"
     out_dir = root / "DocChungTu"
@@ -922,17 +970,33 @@ async def docs_bank(files: list[UploadFile] = File(...), mst: str = Form(""), mo
     dest = bank_post.write_report(out_dir / f"DoiChieu_SaoKe_{tag}.xlsx", txns, invoices, vouchers, info, errors, note)
     ket_qua = out_dir / f"KetQua_GhepThuChi_{tag}.xlsx"
     stat = bank_smart.write_result(ket_qua, vouchers, info, notes, sources)
-    misa = bank_post.export_misa(tpl_dir, out_dir, tag, vouchers, info, codes)
-    easy = bank_post.export_easybooks(tpl_dir, out_dir, tag, vouchers, info, codes)
+    addr = {p["ma"]: p.get("dia_chi", "") for p in partners if p.get("ma")}
+    misa = []
+    for up, loai, label in ((mau_thu, "thu", "PhieuThuTienGui"), (mau_chi, "chi", "PhieuChiTienGui")):
+        vs = [v for v in to_import if v["loai"] == loai]
+        if up is None or not vs:
+            continue
+        try:
+            data, ext = await run_in_threadpool(bank_smart.fill_misa_template, await up.read(), up.filename or "", vs,
+                                                info, addr)
+            f = out_dir / f"{label}_{tag}{ext}"
+            f.write_bytes(data)
+            misa.append(f)
+        except Exception as e:  # noqa: BLE001
+            errors.append(f"Điền mẫu {up.filename}: {e}")
+    if not misa:
+        misa = bank_post.export_misa(tpl_dir, out_dir, tag, to_import, info, codes)
+    easy = bank_post.export_easybooks(tpl_dir, out_dir, tag, to_import, info, codes)
     matched = sum(1 for t in txns if t.get("alloc"))
     return {"file": str(dest), "ket_qua": str(ket_qua), "from": d1.isoformat(), "to": d2.isoformat(), "txns": len(txns),
             "invoices": len(invoices), "matched": matched, "unmatched": len(txns) - matched,
             "unpaid": sum(1 for i in invoices if i["_con_lai"] > 1 and str(i.get("ngay_lap"))[:10] >= d1.isoformat()),
-            "kiem_tra": sum(1 for v in vouchers if v.get("kiem_tra")),
+            "kiem_tra": sum(1 for v in vouchers if v.get("kiem_tra") and not v["tx"].get("booked")),
             "tien_vao": sum(t["co"] for t in txns), "tien_ra": sum(t["no"] for t in txns), "errors": errors,
             "note": note, "misa": [str(p) for p in misa], "easybooks": [str(p) for p in easy],
             "tai_khoan": info, "mau_nhap_khau": str(tpl_dir), "stat": stat, "sources": sources, "notes": notes,
-            "doi_tuong": len(partners), "co_doi_tuong": sum(1 for t in txns if t.get("dt"))}
+            "doi_tuong": len(partners), "co_doi_tuong": sum(1 for t in txns if t.get("dt")),
+            "da_co": n_booked, "can_nhap": len(to_import)}
 
 
 # ---------- chạy tự động theo lịch ----------

@@ -222,8 +222,10 @@ class Directory:
         self.common = {w for w, n in df.items() if n > lim} | _WEAK
         for p in partners:
             p["_core"] = core_name(p["ten"])
+            main = re.split(r"\b(?:chi nhanh|cn)\b", p["_core"])[0].strip() or p["_core"]
+            p["_main2"] = " ".join(main.split()[:2]) if len(main.split()) >= 2 else ""
             # phần tên PHÂN BIỆT (bỏ chữ loại hình / chữ chung), giữ thứ tự: "Cty TNHH Kỹ Thuật HDT" -> "hdt"
-            p["_key"] = " ".join(w for w in p["_core"].split() if w not in self.common)
+            p["_key"] = " ".join(w for w in main.split() if w not in self.common)
             if p["mst"]:
                 self.by_mst.setdefault(p["mst"], p)
                 self.by_mst.setdefault(p["mst"][:10], p)
@@ -294,6 +296,10 @@ class Directory:
             elif " " in p["_key"] and f" {p['_key']} " in padded:
                 # tên riêng >= 2 chữ nằm LIỀN NHAU trong nội dung ("tt cty Tuan Duc mua hang" -> "tuan duc")
                 found.append((80, p, f"tên riêng \"{p['_key']}\" trong nội dung"))
+            elif p["_main2"] and len(p["_main2"]) >= 6 and re.search(r"(?:^| )" + re.escape(p["_main2"]) + r"(?: |$)", text) \
+                    and text.find(p["_main2"]) <= 3:
+                # nội dung bắt đầu bằng tên chính của đối tượng ("HOA SEN-040726..." -> Hoa Sen Home)
+                found.append((76, p, f"nội dung bắt đầu bằng \"{p['_main2']}\""))
             elif p["_key"] and " " not in p["_key"] and len(p["_key"]) >= 3 and not _syllable(p["_key"]) and re.search(
                     r"(?:^| )(?:cty|cong ty|ct|dntn|hkd|cua hang|ch|tiem|shop) " + re.escape(p["_key"]) + r"(?: |$)", text):
                 # tên riêng 1 chữ chỉ tính khi đứng ngay sau "cty / công ty / DNTN / HKD / cửa hàng" ("tt cty HDT")
@@ -441,11 +447,15 @@ def fill_codes(vouchers: list[dict[str, Any]], dirx: Directory | None) -> None:
 
 
 def status_of(t: dict[str, Any], v: dict[str, Any]) -> str:
+    if t.get("booked"):
+        return "Đã có chứng từ trên sổ"
+    if t.get("hoc") and t["hoc"]["share"] >= 0.8 and t["hoc"]["n"] >= 2:
+        return "Chắc chắn"
     if t.get("alloc") and not v.get("kiem_tra"):
         return "Chắc chắn"
     if t.get("_rule") and not v.get("kiem_tra"):
         return "Chắc chắn"
-    if t.get("alloc") or (t.get("dt") and not t["dt"].get("ai")) or t.get("_rule") or t.get("doi_ung"):
+    if t.get("alloc") or (t.get("dt") and not t["dt"].get("ai")) or t.get("_rule") or t.get("doi_ung") or t.get("hoc"):
         return "Cần kiểm tra"
     return "CHƯA RÕ thu / chi cho ai"
 
@@ -456,14 +466,16 @@ def write_result(dest: Path, vouchers: list[dict[str, Any]], info: dict[str, str
     from openpyxl import Workbook
     from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
     from openpyxl.utils import get_column_letter
-    fills = {"Chắc chắn": "E2EFDA", "Cần kiểm tra": "FFF2CC", "CHƯA RÕ thu / chi cho ai": "F8CBAD"}
+    fills = {"Chắc chắn": "E2EFDA", "Cần kiểm tra": "FFF2CC", "CHƯA RÕ thu / chi cho ai": "F8CBAD",
+             "Đã có chứng từ trên sổ": "EDEDED"}
     thin = Side(style="thin", color="BFBFBF")
     box = Border(left=thin, right=thin, top=thin, bottom=thin)
     heads = [("STT", 5), ("Ngày", 11), ("Thu / Chi", 8), ("Số tiền", 15), ("Nội dung trên sao kê", 50),
              ("Tên / TK đối ứng (sao kê)", 28), ("Mã đối tượng", 16), ("Tên đối tượng", 36), ("KH / NCC", 7),
              ("Căn cứ nhận diện đối tượng", 30), ("Thu / chi cho việc gì", 46), ("Hóa đơn / chứng từ ghép", 46),
-             ("TK Nợ", 7), ("TK Có", 7), ("Số chứng từ", 12), ("Kết quả", 22), ("Cần kiểm tra", 36)]
-    rows, stat = [], {"Chắc chắn": 0, "Cần kiểm tra": 0, "CHƯA RÕ thu / chi cho ai": 0}
+             ("TK Nợ", 7), ("TK Có", 7), ("Số chứng từ", 12), ("Kết quả", 22), ("Cần kiểm tra", 36),
+             ("Gợi ý từ lịch sử (đã hạch toán trước đây)", 50)]
+    rows, stat = [], {"Chắc chắn": 0, "Cần kiểm tra": 0, "CHƯA RÕ thu / chi cho ai": 0, "Đã có chứng từ trên sổ": 0}
     for v in vouchers:
         t = v["tx"]
         dt = t.get("dt") or {}
@@ -476,15 +488,23 @@ def write_result(dest: Path, vouchers: list[dict[str, Any]], info: dict[str, str
         why = dt.get("why", "") or ("chưa có trong danh mục – theo tên trên sao kê" if t.get("doi_ung") else "")
         if dt.get("nghi_ngo"):
             why += " (cũng giống: " + ", ".join(dt["nghi_ngo"]) + ")"
-        purpose = v.get("ly_do") or ""
+        purpose = v.get("_dien_giai") or v.get("ly_do") or ""
+        if v.get("_ly_do_misa"):
+            purpose = f"{v['_ly_do_misa']}: {purpose}"
+        b, hoc = t.get("booked"), t.get("hoc")
+        if b:
+            purpose = f"{b['ly_do'] + ': ' if b['ly_do'] else ''}{b['dien_giai']}"
+            dt = {"ten": b["doi_tuong"], "why": f"đã hạch toán {b['so_ct']} ({b['nguon']})", "loai": dt.get("loai", "")}
+        hoc_txt = (f"{hoc['doi_tuong']} | {hoc['ly_do']} | {hoc['dien_giai'][:60]} – {hoc['how']}, {hoc['n']} lần "
+                   f"({int(hoc['share'] * 100)}%)") if hoc else ""
         if t.get("_ai"):
             purpose = f"[AI gợi ý – {t['_ai']['tin_cay']}] {t['_ai']['muc_dich']}"
         ln = v["lines"][0]
         rows.append(([len(rows) + 1, t["ngay"], "Thu" if t.get("co") else "Chi", t.get("co") or t.get("no"),
                       t.get("mo_ta", ""), " ".join(x for x in (t.get("doi_ung"), t.get("tk_doi_ung")) if x),
-                      v.get("ma") or ln.get("ma") or "", v.get("ten") or dt.get("ten", ""),
-                      dt.get("loai", ""), why, purpose, docs, ln["no"], ln["co"], v.get("so_ct", ""), st,
-                      v.get("kiem_tra", "")], fills[st]))
+                      v.get("ma") or ln.get("ma") or "", (b or {}).get("doi_tuong") or v.get("_dt_out") or v.get("ten") or dt.get("ten", ""),
+                      dt.get("loai", ""), dt.get("why", why) if b else why, purpose, docs, ln["no"], ln["co"],
+                      b["so_ct"] if b else v.get("so_ct", ""), st, "" if b else v.get("kiem_tra", ""), hoc_txt], fills[st]))
     wb = Workbook()
     ws = wb.active
     ws.title = "Tong hop"
@@ -493,7 +513,9 @@ def write_result(dest: Path, vouchers: list[dict[str, Any]], info: dict[str, str
     lines = [f"Tài khoản: {info.get('so_tk', '')} {info.get('ngan_hang', '')} – {info.get('chu_tk', '')}",
              f"Tổng giao dịch: {len(vouchers)}",
              f"• Chắc chắn: {stat['Chắc chắn']}", f"• Cần kiểm tra: {stat['Cần kiểm tra']}",
-             f"• CHƯA RÕ thu / chi cho ai: {stat['CHƯA RÕ thu / chi cho ai']}", "", "Nguồn dữ liệu đã dò:"] + \
+             f"• CHƯA RÕ thu / chi cho ai: {stat['CHƯA RÕ thu / chi cho ai']}",
+             f"• Đã có chứng từ trên sổ (không xuất lại vào file nhập): {stat['Đã có chứng từ trên sổ']}",
+             "", "Nguồn dữ liệu đã dò:"] + \
         [f"• {s}" for s in sources] + ([""] + ["Lưu ý:"] + [f"• {n}" for n in notes] if notes else [])
     for i, s in enumerate(lines, 3):
         ws.cell(i, 1, s)
@@ -525,4 +547,433 @@ def write_result(dest: Path, vouchers: list[dict[str, Any]], info: dict[str, str
     sheet("Can kiem tra", [x for x in rows if x[1] == fills["Cần kiểm tra"]])
     dest.parent.mkdir(parents=True, exist_ok=True)
     wb.save(dest)
-    return {"chac": stat["Chắc chắn"], "kiem_tra": stat["Cần kiểm tra"], "chua_ro": stat["CHƯA RÕ thu / chi cho ai"]}
+    return {"chac": stat["Chắc chắn"], "kiem_tra": stat["Cần kiểm tra"], "chua_ro": stat["CHƯA RÕ thu / chi cho ai"],
+            "da_co": stat["Đã có chứng từ trên sổ"]}
+
+
+# ================================================================== sổ chi tiết công nợ (MISA, nhóm theo đối tượng)
+_GROUP = re.compile(r"^\s*ten (khach hang|nha cung cap|doi tuong)\s*:?\s*(.+)$")
+
+
+def read_ledger(name: str, data: bytes, loai: str) -> dict[str, Any] | None:
+    """Chi tiết công nợ phải thu / phải trả kiểu MISA: dòng "Tên khách hàng: X" rồi các dòng chứng từ
+    (Ngày, Số CT, Diễn giải, Phát sinh [phải thu | đã thu] / [đã trả | phải trả], Số dư).
+    Trả {"partners": [...], "entries": [{ngay, so_ct, dien_giai, ten, phat_sinh, da, loai}]} hoặc None nếu không phải
+    dạng này."""
+    rows = _rows(name, data)
+    hr = next((i for i, r in enumerate(rows[:30]) if any(_k(c).startswith("so chung tu") for c in r)), None)
+    if hr is None or not any(_GROUP.match(_k(r[0] if r else "")) for r in rows[hr:hr + 40]):
+        return None
+    heads = [_k(c) for c in rows[hr]]
+    sub = [_k(c) for c in rows[hr + 1]] if hr + 1 < len(rows) else []
+
+    def col(*ns):
+        return next((j for j, h in enumerate(heads) if any(h.startswith(n) for n in ns)), None)
+
+    def sc(*ns):
+        return next((j for j, h in enumerate(sub) if any(n in h for n in ns)), None)
+
+    c_ngay, c_ct, c_dg = col("ngay chung tu", "ngay hach toan"), col("so chung tu"), col("dien giai")
+    c_ps = sc("so phai thu", "so phai tra")
+    c_da = sc("so da thu", "so da tra")
+    c_con = sc("so con phai thu", "so con phai tra")
+    partners: dict[str, dict[str, Any]] = {}
+    entries: list[dict[str, Any]] = []
+    cur = None
+    for r in rows[hr + 1:]:
+        def g(c):
+            return r[c] if c is not None and c < len(r) else None
+        if _GROUP.match(_k(r[0] if r else "")):
+            ten = re.split(r":", str(r[0]), maxsplit=1)[-1].strip()
+            cur = partners.setdefault(_k(ten), {"ma": "", "ten": ten, "mst": norm_mst(ten), "tk": [], "du": 0.0,
+                                                "dia_chi": "", "loai": loai})
+            continue
+        if cur is None or not g(c_ct):
+            continue
+        if c_con is not None and g(c_con) not in (None, ""):
+            cur["du"] = _num(g(c_con))
+        entries.append({"ngay": _date(g(c_ngay)), "so_ct": str(g(c_ct)).strip(), "dien_giai": str(g(c_dg) or "")[:200],
+                        "ten": cur["ten"], "phat_sinh": _num(g(c_ps)), "da": _num(g(c_da)), "loai": loai})
+    return {"partners": list(partners.values()), "entries": entries}
+
+
+# ================================================================== sổ thu / chi tiền gửi đã nhập (lịch sử)
+def read_bank_book(name: str, data: bytes) -> dict[str, Any] | None:
+    """Danh sách Thu tiền gửi / Chi tiền gửi xuất từ MISA (STT, Ngày hạch toán, Số chứng từ, Diễn giải, Số tiền,
+    Đối tượng, Lý do thu/chi, Loại chứng từ) -> {"huong": "thu"|"chi", "entries": [...], "header", "hr"}."""
+    rows = _rows(name, data)
+    h = _header(rows, ("so chung tu", "so tien"))
+    if not h:
+        return None
+    hr, heads = h
+    title = _k(rows[0][0] if rows and rows[0] else "")
+    if any(x.startswith("ly do chi") for x in heads):
+        huong = "chi"
+    elif any(x.startswith("ly do thu") for x in heads):
+        huong = "thu"
+    else:
+        huong = "chi" if "chi" in title else "thu"
+    names = {"ngay": ("ngay hach toan", "ngay chung tu", "ngay"), "so_ct": ("so chung tu",), "dg": ("dien giai",),
+             "tien": ("so tien",), "dt": ("doi tuong", "ten doi tuong"), "ma": ("ma doi tuong",),
+             "ly_do": ("ly do",), "loai_ct": ("loai chung tu",)}
+    c = {k: _col(heads, *v) for k, v in names.items()}
+    out = []
+    for r in rows[hr + 1:]:
+        def g(k):
+            return r[c[k]] if c[k] is not None and c[k] < len(r) else None
+        if not g("so_ct") or _num(g("tien")) <= 0:
+            continue
+        out.append({"ngay": _date(g("ngay")), "so_ct": str(g("so_ct")).strip(), "dien_giai": str(g("dg") or ""),
+                    "so_tien": _num(g("tien")), "doi_tuong": str(g("dt") or "").strip(), "ma": str(g("ma") or "").strip(),
+                    "ly_do": str(g("ly_do") or "").strip(), "loai_ct": str(g("loai_ct") or "").strip(), "huong": huong})
+    return {"huong": huong, "entries": out, "header": [str(x) if x is not None else "" for x in rows[hr]], "hr": hr + 1}
+
+
+# ================================================================== dòng sao kê ĐÃ hạch toán + học theo lịch sử
+def mark_booked(txns: list[dict[str, Any]], book: list[dict[str, Any]], ledger: list[dict[str, Any]]) -> int:
+    """Dòng sao kê đã có chứng từ thu / chi (sổ thu chi tiền gửi đã nhập, hoặc khoản đã thu / đã trả trên chi tiết công
+    nợ): cùng chiều, đúng số tiền, lệch ngày <= 5. Ghi t["booked"] để không xuất trùng vào file nhập."""
+    cands = [{"ngay": e["ngay"], "so_ct": e["so_ct"], "tien": e["so_tien"], "thu": e["huong"] == "thu",
+              "doi_tuong": e["doi_tuong"], "ly_do": e["ly_do"], "dien_giai": e["dien_giai"], "nguon": "sổ thu chi tiền gửi"}
+             for e in book]
+    cands += [{"ngay": e["ngay"], "so_ct": e["so_ct"], "tien": e["da"], "thu": e["loai"] == "KH", "doi_tuong": e["ten"],
+               "ly_do": "", "dien_giai": e["dien_giai"], "nguon": "chi tiết công nợ"} for e in ledger if e["da"] > 0]
+    pairs = []
+    for t in txns:
+        amt, thu = t.get("co") or t.get("no"), bool(t.get("co"))
+        for e in cands:
+            if e["thu"] == thu and abs(e["tien"] - amt) <= 1 and e["ngay"] and abs((e["ngay"] - t["ngay"]).days) <= 5:
+                pairs.append((abs((e["ngay"] - t["ngay"]).days), e["nguon"] != "sổ thu chi tiền gửi", id(t), t, e))
+    pairs.sort(key=lambda x: (x[0], x[1]))
+    used: set[tuple[str, float]] = set()
+    n = 0
+    for _g, _s, _i, t, e in pairs:
+        key = (e["so_ct"], e["tien"])
+        if t.get("booked") or key in used:
+            continue
+        used.add(key)
+        t["booked"] = e
+        n += 1
+    return n
+
+
+def _sig(text: str) -> str:
+    """Dấu hiệu nội dung ngân hàng: bỏ số, mã, ngày giờ -> "tiktok shop", "ho kinh doanh genme dieu khac voc dang ck"."""
+    ws = []
+    for w in _k(text).split():
+        if re.fullmatch(r"\d+x+\d+", w):
+            ws.append("the")                  # số thẻ che (4229XX6023): giao dịch thẻ
+        elif re.fullmatch(r"[a-z]{2,5}\d{5,}", w):
+            ws.append(re.match(r"[a-z]+", w).group(0) + "#")   # mã đơn có tiền tố chữ (DHN13082694026 -> dhn#)
+        elif not any(ch.isdigit() for ch in w) and len(w) > 1:
+            ws.append(w)
+    return " ".join(ws[:8])
+
+
+_FIRST_WEAK = {"thanh", "toan", "ho", "kinh", "doanh", "chuyen", "tien", "tt", "ck", "cong", "ty", "cty", "nhan", "gui",
+               "the", "ib", "ibft", "mbvcb", "vietcombank", "ft", "dh"}
+
+
+def learn(txns: list[dict[str, Any]]) -> int:
+    """Học từ các dòng đã hạch toán (t["booked"]): cùng dấu hiệu nội dung ngân hàng + cùng chiều -> đối tượng, lý do,
+    diễn giải kế toán đã dùng. Gán t["hoc"] cho dòng chưa hạch toán. Trả số dòng gợi ý được."""
+    from collections import Counter, defaultdict
+    memo: dict[tuple[bool, str], Counter] = defaultdict(Counter)
+    first: dict[tuple[bool, str], Counter] = defaultdict(Counter)
+    money: dict[tuple[bool, int], Counter] = defaultdict(Counter)
+    for t in txns:
+        b = t.get("booked")
+        if not b:
+            continue
+        thu, sg = bool(t.get("co")), _sig(t.get("mo_ta", ""))
+        if sg:
+            memo[(thu, sg)][(b["doi_tuong"], b["ly_do"], b["dien_giai"])] += 1
+            w = next((x for x in sg.split() if x not in _FIRST_WEAK and len(x) >= 3), "")
+            if w:
+                first[(thu, w)][(b["doi_tuong"], b["ly_do"])] += 1
+        amt = round(t.get("co") or t.get("no"))
+        if amt >= 1_000_000:
+            money[(thu, amt)][(b["doi_tuong"], b["ly_do"], b["dien_giai"])] += 1
+    keys = list(memo)
+    n = 0
+    for t in txns:
+        if t.get("booked"):
+            continue
+        s, thu = _sig(t.get("mo_ta", "")), bool(t.get("co"))
+        if not s:
+            continue
+        cnt = memo.get((thu, s))
+        how = "cùng nội dung ngân hàng"
+        if not cnt:
+            ws = set(s.split())
+            best = (0.0, None)
+            for k in keys:
+                if k[0] != thu:
+                    continue
+                kw = set(k[1].split())
+                sim = len(ws & kw) / len(ws | kw)
+                if sim > best[0]:
+                    best = (sim, k)
+            if best[1] is not None and best[0] >= 0.6:
+                cnt, how = memo[best[1]], f"nội dung gần giống \"{best[1][1][:40]}\""
+        if not cnt:
+            w = next((x for x in s.split() if x not in _FIRST_WEAK and len(x) >= 3), "")
+            c1 = first.get((thu, w))
+            if c1 and sum(c1.values()) >= 2 and c1.most_common(1)[0][1] / sum(c1.values()) >= 0.7:
+                (dt, ly), k = c1.most_common(1)[0]
+                cnt, how = Counter({(dt, ly, ""): k, ("", "", "~"): sum(c1.values()) - k}), f"cùng từ khóa \"{w}\""
+        if not cnt:
+            c2 = money.get((thu, round(t.get("co") or t.get("no"))))
+            if c2 and sum(c2.values()) >= 2:
+                cnt, how = c2, "cùng số tiền định kỳ"
+        if not cnt:
+            continue
+        total = sum(cnt.values())
+        (dt, ly, dg), k = cnt.most_common(1)[0]
+        share = k / total
+        if share < 0.5 or (how == "cùng số tiền định kỳ" and share < 0.7):
+            continue
+        t["hoc"] = {"doi_tuong": dt, "ly_do": ly, "dien_giai": dg or "", "n": total, "share": round(share, 2), "how": how}
+        n += 1
+    return n
+
+
+# ================================================================== xuất theo mẫu sổ thu / chi tiền gửi của khách
+_LYDO = {"thu": {"phai_thu": "Thu tiền khách hàng (không theo hóa đơn)", "lai": "Thu lãi đầu tư tài chính",
+                 "vay": "Vay nợ"},
+         "chi": {"phai_tra": "Trả tiền nhà cung cấp (không theo hóa đơn)", "tam_ung": "Tạm ứng cho nhân viên",
+                 "luong": "Trả lương nhân viên", "thue_gtgt": "Nộp thuế", "thue_tndn": "Nộp thuế",
+                 "thue_tncn": "Nộp thuế", "thue_khac": "Nộp thuế", "bhxh": "Nộp bảo hiểm", "vay": "Trả nợ vay"}}
+
+
+def next_numbers(book: list[dict[str, Any]], huong: str, default: str) -> list[Any]:
+    """Tiếp số chứng từ theo sổ đã nhập: PTB2736 -> PTB2737 ([prefix, số tiếp theo, độ dài số])."""
+    best = None
+    for e in book:
+        if e["huong"] != huong:
+            continue
+        m = re.fullmatch(r"([A-Za-z]+)(\d+)", e["so_ct"])
+        if m and (best is None or int(m.group(2)) > best[1]) and m.group(1) in (default, "PTB", "PCB", "NTTK", "UNC"):
+            best = (m.group(1), int(m.group(2)), len(m.group(2)))
+    return [best[0], best[1] + 1, best[2]] if best else [default, 1, 5]
+
+
+def prepare_export(vouchers: list[dict[str, Any]], book: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Chứng từ CHƯA hạch toán: số chứng từ tiếp theo sổ, lý do thu / chi theo danh mục MISA, đối tượng (tên), diễn
+    giải theo cách kế toán đã ghi (học từ lịch sử). Trả danh sách chứng từ cần nhập (bỏ dòng đã có trên sổ)."""
+    from .bank_post import accounts
+    acc_key: dict[str, str] = {}
+    for k, v in accounts("TT200").items():
+        acc_key.setdefault(v, k)
+    for k, v in accounts("TT133").items():
+        acc_key.setdefault(v, k)
+    nums = {"thu": next_numbers(book, "thu", "PTB"), "chi": next_numbers(book, "chi", "PCB")}
+    seen = {h: sorted({e["ly_do"] for e in book if e["huong"] == h and e["ly_do"]}) for h in ("thu", "chi")}
+    out = []
+    for v in sorted(vouchers, key=lambda v: v["ngay"]):
+        t = v["tx"]
+        if t.get("booked"):
+            continue
+        h = v["loai"]
+        pre, no, width = nums[h]
+        v["so_ct"] = f"{pre}{no:0{width}d}"
+        nums[h][1] += 1
+        ln = v["lines"][0]
+        other = ln["co"] if h == "thu" else ln["no"]
+        ly = _LYDO[h].get(acc_key.get(other, ""), "Thu khác" if h == "thu" else "Chi khác")
+        hoc = t.get("hoc")
+        weak_hoc = hoc and not hoc["how"].startswith("cùng nội dung")
+        if hoc and hoc["ly_do"] and not (weak_hoc and t.get("_rule") == "Tạm ứng cho nhân viên"):
+            ly = hoc["ly_do"]
+        elif seen[h] and ly not in seen[h] and acc_key.get(other, "") in ("luong", "bhxh", "thue_gtgt", "thue_tndn",
+                                                                          "thue_tncn", "thue_khac"):
+            other_ly = "Thu khác" if h == "thu" else "Chi khác"       # công ty chưa từng dùng lý do này -> Chi khác
+            ly = other_ly if other_ly in seen[h] else ly
+        v["_ly_do_misa"] = ly
+        if hoc and hoc["share"] >= 0.7:
+            v["_dt_out"] = hoc["doi_tuong"]       # kế toán đã ghi thế nào thì theo vậy (kể cả để trống đối tượng)
+        else:
+            v["_dt_out"] = (hoc or {}).get("doi_tuong") or (t.get("dt") or {}).get("ten") or v.get("ten") or ""
+        v["_dien_giai"] = (hoc or {}).get("dien_giai") or v.get("ly_do") or ln["dien_giai"]
+        v["_loai_ct"] = "Thu tiền gửi" if h == "thu" else "Ủy nhiệm chi"
+        out.append(v)
+    for h in ("thu", "chi"):
+        for i, v in enumerate([x for x in out if x["loai"] == h], 1):
+            v["_stt"] = i
+    return out
+
+
+# ================================================================== sổ chi tiết mua hàng + ghép khoản chi
+def read_purchases(name: str, data: bytes) -> list[dict[str, Any]]:
+    """Sổ chi tiết mua hàng (MISA) -> chứng từ mua gộp theo Số chứng từ: [{so_ct, so_hd, ngay, ten, mst, tong}].
+    Sổ không có cột nhà cung cấp thì để trống (nối qua chi tiết công nợ phải trả theo số chứng từ)."""
+    rows = _rows(name, data)
+    h = _header(rows, ("so chung tu",))
+    if not h:
+        raise ValueError(f"{name}: không thấy tiêu đề sổ chi tiết mua hàng (cần cột Số chứng từ)")
+    hr, heads = h
+    names = {"ngay": ("ngay chung tu", "ngay hach toan", "ngay"), "so_ct": ("so chung tu",), "so_hd": ("so hoa don",),
+             "ten": ("ten nha cung cap", "nha cung cap", "ten doi tuong"), "mst": ("ma so thue",),
+             "tong": ("tong thanh toan", "tong tien thanh toan"), "gt": ("gia tri mua", "thanh tien"),
+             "ck": ("chiet khau",), "tra": ("gia tri tra lai",), "giam": ("gia tri giam gia",), "thue": ("thue gtgt", "tien thue")}
+    c = {k: _col(heads, *v, avoid=("theo dong",)) for k, v in names.items()}
+    docs: dict[str, dict[str, Any]] = {}
+    for r in rows[hr + 1:]:
+        def g(k):
+            return r[c[k]] if c[k] is not None and c[k] < len(r) else None
+        so_ct = str(g("so_ct") or "").strip()
+        if not so_ct or _SUMMARY.match(_k(r[0] if r else "")):
+            continue
+        amt = _num(g("tong")) if c["tong"] is not None else (
+            _num(g("gt")) - _num(g("ck")) - _num(g("tra")) - _num(g("giam")) + _num(g("thue")))
+        d = docs.setdefault(so_ct, {"so_ct": so_ct, "so_hd": str(g("so_hd") or "").strip(), "ngay": _date(g("ngay")),
+                                    "ten": str(g("ten") or "").strip(), "mst": norm_mst(g("mst")), "tong": 0.0})
+        d["tong"] += amt
+    return [d for d in docs.values() if d["tong"] > 1]
+
+
+def payable_docs(ledger: list[dict[str, Any]], purchases: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Chứng từ phải trả: gộp phát sinh phải trả trên chi tiết công nợ theo số chứng từ (có tên NCC) + chứng từ trên sổ
+    mua hàng (lấy tên NCC theo số chứng từ trên công nợ nếu sổ mua hàng không có)."""
+    by: dict[str, dict[str, Any]] = {}
+    for e in ledger:
+        if e["loai"] == "NCC" and e["phat_sinh"] > 0:
+            d = by.setdefault(e["so_ct"], {"so_ct": e["so_ct"], "so_hd": "", "ngay": e["ngay"], "ten": e["ten"],
+                                           "mst": "", "tong": 0.0})
+            d["tong"] += e["phat_sinh"]
+    for p in purchases:
+        if p["so_ct"] in by:
+            by[p["so_ct"]]["so_hd"] = by[p["so_ct"]]["so_hd"] or p["so_hd"]
+            continue
+        by[p["so_ct"]] = dict(p)
+    return list(by.values())
+
+
+def apply_payables(txns: list[dict[str, Any]], docs: list[dict[str, Any]], dirx: Directory | None) -> int:
+    """Khoản chi chưa ghép hóa đơn / chưa hạch toán: đúng số tiền 1 chứng từ mua hàng (hoặc gộp nhiều chứng từ cùng NCC)
+    trong 120 ngày trước -> nhà cung cấp + chứng từ."""
+    from .bank_post import _subset
+    for d in docs:
+        d["_con_lai"] = d["tong"]
+        d["ngay_lap"] = d["ngay"]
+    n = 0
+    for t in sorted(txns, key=lambda t: t["ngay"]):
+        if not t.get("no") or t.get("alloc") or t.get("booked") or t.get("hoc"):
+            continue
+        amt, day = t["no"], t["ngay"]
+        pool = [d for d in docs if d["_con_lai"] > 1 and (d["ngay"] is None or
+                                                          day - timedelta(days=120) <= d["ngay"] <= day + timedelta(days=3))]
+        dt = t.get("dt")
+        mine = [d for d in pool if dt and d["ten"] and name_sim(d["ten"], dt["ten"]) >= 0.9]
+        pick, how = None, ""
+        exact = sorted([d for d in (mine or pool) if abs(d["_con_lai"] - amt) <= 1],
+                       key=lambda d: abs(((d["ngay"] or day) - day).days))
+        if exact and mine:
+            pick = [exact[0]]
+            how = "Khớp 1 chứng từ mua hàng của đúng NCC"
+        elif exact and len(exact) == 1 and abs(((exact[0]["ngay"] or day) - day).days) <= 10:
+            pick = [exact[0]]
+            how = "Khớp số tiền 1 chứng từ mua hàng gần ngày (kiểm tra NCC)"
+        elif exact and len({_k(d["ten"]) for d in exact if d["ten"]}) == 1 and all(d["ten"] for d in exact)                 and abs(((exact[0]["ngay"] or day) - day).days) <= 15:
+            pick = [exact[0]]                     # nhiều chứng từ cùng số tiền nhưng cùng 1 NCC (vd quảng cáo TikTok)
+            how = f"Khớp số tiền chứng từ mua hàng – {len(exact)} chứng từ cùng NCC"
+        elif len(mine) >= 2:
+            combo = _subset(mine, amt, ref=day)
+            if combo:
+                pick, how = combo, f"Trả gộp {len(combo)} chứng từ mua hàng cùng NCC"
+        if not pick:
+            continue
+        for d in pick:
+            inv = {"huong": "purchase", "nbmst": d["mst"], "nbten": d["ten"], "khhdon": d["so_ct"], "shdon": d["so_hd"],
+                   "ngay_lap": d["ngay"].isoformat() if d["ngay"] else "", "tgtttbso": d["tong"], "_con_lai": 0.0,
+                   "_tt": [t], "_so_mua": d}
+            t.setdefault("alloc", []).append({"inv": inv, "so_tien": d["_con_lai"]})
+            d["_con_lai"] = 0.0
+        t["cach_khop"] = (t.get("cach_khop", "") + "; " + how).strip("; ")
+        if not dt and pick[0]["ten"]:
+            p = dirx.by_partner(pick[0]["mst"], pick[0]["ten"], "NCC") if dirx else None
+            t["dt"] = {"ma": (p or {}).get("ma", ""), "ten": (p or {}).get("ten") or pick[0]["ten"], "mst": pick[0]["mst"],
+                       "loai": "NCC", "why": "theo chứng từ mua hàng / công nợ phải trả", "diem": 75, "nghi_ngo": []}
+        n += 1
+    return n
+
+
+# ================================================================== điền đúng file mẫu nhập khẩu Phiếu thu / chi tiền gửi
+def _tpl_value(head: str, v: dict[str, Any], ln: dict[str, Any], info: dict[str, str], addr: str) -> Any:
+    h = _k(head).replace("(*)", "").strip()
+    t, thu = v["tx"], v["loai"] == "thu"
+    code = ln.get("ma") or (t.get("dt") or {}).get("ma") or ""
+    dg = v.get("_dien_giai") or v.get("ly_do") or ln["dien_giai"]
+    rules = [
+        (("ngay hach toan", "ngay chung tu"), v["ngay"]),
+        (("so chung tu",), v["so_ct"]),
+        (("ma doi tuong hach toan",), code),
+        (("ma doi tuong",), code),
+        (("ten doi tuong",), v.get("_dt_out") or v.get("ten") or ""),
+        (("dia chi",), addr),
+        (("nop vao tk", "so tai khoan chi"), info.get("so_tk") or None),
+        (("mo tai ngan hang", "ten ngan hang chi"), info.get("ngan_hang") or None),
+        (("so tai khoan nhan",), t.get("tk_doi_ung") or None),
+        (("ten ngan hang nhan",), t.get("nh_doi_ung") or None),
+        (("ly do thu", "ly do chi"), v.get("_ly_do_misa")),
+        (("dien giai ly do thu", "noi dung thanh toan"), dg),
+        (("dien giai hach toan", "dien giai"), ln.get("_dg_line") or dg),
+        (("so tien",), ln["so_tien"]),
+    ]
+    for keys, val in rules:
+        if any(h.startswith(k) for k in keys):
+            if h.startswith("ly do") and not thu and h.startswith("ly do thu"):
+                return None
+            return val
+    return None
+
+
+def fill_misa_template(tpl: bytes, tpl_name: str, vouchers: list[dict[str, Any]], info: dict[str, str],
+                       addr_of: dict[str, str] | None = None) -> tuple[bytes, str]:
+    """Điền chứng từ vào ĐÚNG file mẫu nhập khẩu MISA (Phiếu thu / Phiếu chi tiền gửi) – giữ nguyên định dạng mẫu, xóa
+    dòng ví dụ; Lý do thu / chi chọn theo danh sách chọn của mẫu. Trả (dữ liệu file, đuôi file)."""
+    from . import fill_template as ft
+    from . import misa_import as mi
+    kind, ext = ft.kind_of(tpl), ft.out_ext(tpl, tpl_name)
+    use_excel = kind in ("xls", "ods", "html", "xml2003") and ft.excel_available()
+    probe = ft.probe_with_excel(tpl, ext) if use_excel else tpl
+    wb, ws, hr, _cols, _unk = mi.read_template(probe)
+    heads = {c: str(ws.cell(hr, c).value or "") for c in range(1, ws.max_column + 1) if ws.cell(hr, c).value}
+    lists = {}
+    try:
+        lists = mi.template_lists(ws, hr, {c: f"c{c}" for c in heads})
+    except Exception:  # noqa: BLE001
+        pass
+    text_cols = {c for c, h in heads.items() if any(_k(h).startswith(x) for x in
+                                                   ("so chung tu", "ma doi tuong", "nop vao tk", "so tai khoan"))}
+    keys = {c: (f"so_chung_tu_{c}" if c in text_cols else f"c{c}") for c in heads}
+    ft.TEXT_KEYS.update(k for c, k in keys.items() if c in text_cols)
+    rows = []
+    for v in vouchers:
+        for ln in v["lines"]:
+            addr = (addr_of or {}).get(ln.get("ma") or "", "")
+            row = {}
+            for c, h in heads.items():
+                val = _tpl_value(h, v, ln, info, addr)
+                if val is not None and c in lists and isinstance(val, str):
+                    val = mi._fit_option(val, lists[c])
+                row[keys[c]] = val
+            rows.append(row)
+    sheet_index = wb.worksheets.index(ws) + 1
+    if kind == "ooxml":
+        return ft.fill_ooxml(tpl, ws.title, hr, keys, rows), ext
+    if use_excel:
+        return ft.fill_with_excel(tpl, ext, sheet_index, hr, keys, rows), ext
+    import io
+    from openpyxl import load_workbook
+    wb2 = load_workbook(io.BytesIO(probe))
+    ws2 = wb2.worksheets[sheet_index - 1]
+    if ws2.max_row > hr:
+        ws2.delete_rows(hr + 1, ws2.max_row - hr)
+    for i, row in enumerate(rows, hr + 1):
+        for c, k in keys.items():
+            if row.get(k) is not None:
+                ws2.cell(i, c, row[k])
+    out = io.BytesIO()
+    wb2.save(out)
+    return out.getvalue(), ".xlsx"

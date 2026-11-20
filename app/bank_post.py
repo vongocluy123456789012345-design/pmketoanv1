@@ -107,14 +107,14 @@ def statement_info(name: str, data: bytes) -> dict[str, str]:
         pass
     f = fold(text)
     info = {"so_tk": "", "ngan_hang": "", "chu_tk": ""}
-    m = re.search(r"(?:so tai khoan|account number|account no|so tk)\D{0,25}?(\d[\d ]{5,20}\d)", f)
+    m = re.search(r"(?:so tai khoan|account number|account no|so tk)\D{0,25}?(\d[\d ]{3,20}\d)", f)
     if m:
         info["so_tk"] = m.group(1).replace(" ", "")
     for k, v in _BANKS:
         if re.search(r"\b" + k + r"\b", f[:600]):
             info["ngan_hang"] = v
             break
-    m = re.search(r"(?:ten tai khoan|account name|ten khach hang|customer name)\s*(?:customer name|account name)?\s*([a-z0-9 ]{5,80})", f)
+    m = re.search(r"(?:chu tai khoan|ten tai khoan|account name|ten khach hang|customer name)\s*:?\s*(?:customer name|account name)?\s*([a-z0-9 ]{5,80})", f)
     if m:
         info["chu_tk"] = m.group(1).split(" so ")[0].strip().upper()
     return info
@@ -446,6 +446,7 @@ def accounts(che_do: str) -> dict[str, str]:
 
 
 _RULES_OUT = [  # (từ khóa trong nội dung đã bỏ dấu, khóa tài khoản, diễn giải, cần kiểm tra?)
+    (r"\bung (luong|tien)\b|\bung\b.{0,25}\bluong\b|tam ung", "tam_ung", "Tạm ứng cho nhân viên", True),
     (r"\bluong\b|\bsalary\b|thuong tet", "luong", "Trả lương nhân viên", False),
     (r"\bbhxh\b|bao hiem xa hoi|\bbhyt\b|bao hiem y te", "bhxh", "Nộp bảo hiểm", False),
     (r"thue gtgt|thue gia tri gia tang|\bvat\b", "thue_gtgt", "Nộp thuế GTGT", True),

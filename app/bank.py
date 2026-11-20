@@ -22,10 +22,10 @@ COLS: list[tuple[str, tuple[str, ...]]] = [
     ("no", ("ghino", "sotienghino", "phatsinhno", "sotienrut", "tienra", "debit", "withdrawal", "chi", "rut")),
     ("co", ("ghico", "sotienghico", "phatsinhco", "sotiengui", "tienvao", "credit", "deposit", "thu", "gui")),
     ("so_du", ("sodu", "balance")),
-    ("mo_ta", ("noidung", "diengiai", "mota", "chitietgiaodich", "chitiet", "description", "transactiondetail",
+    ("mo_ta", ("noidunggiaodichngan", "noidunggiaodich", "noidung", "diengiai", "mota", "chitietgiaodich", "chitiet", "description", "transactiondetail",
                "details", "remark", "narrative")),
     ("tham_chieu", ("sothamchieu", "magiaodich", "sogiaodich", "sochungtu", "sobuttoan", "reference", "refno",
-                    "transactionno", "seqno", "sott")),
+                    "transactionno", "seqno", "sogd", "sott")),
     ("so_tien", ("sotien", "amount")),  # 1 cột số tiền có dấu +/- (một số ngân hàng)
     ("loai", ("loaigiaodich", "nohayco", "drcr", "type")),
     ("doi_ung", ("tentaikhoandoiung", "tendoiung", "tennguoichuyen", "tennguoinhan", "beneficiary",
@@ -42,6 +42,9 @@ def _map_header(cells: list[Any]) -> dict[str, int]:
         for k in keys:  # ưu tiên khóa cụ thể đứng trước
             for i, h in enumerate(names):
                 # khóa ngắn (thu, chi, rut, gui...) phải khớp nguyên tên cột, tránh nhận nhầm "Thứ tự"
+                # cột ghi chú / hạch toán của KẾ TOÁN (vd "Nội dung bên kế toán") không phải dữ liệu ngân hàng
+                if "ketoan" in h or "hachtoan" in h and field != "ngay":
+                    continue
                 if h and i not in m.values() and (h == k or (len(k) > 3 and k in h)):
                     m[field] = i
                     break

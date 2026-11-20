@@ -479,8 +479,21 @@
       <div class="inline" style="margin-top:6px">
         <div><label>Công nợ PHẢI THU (khách hàng)</label><input type="file" id="bkThu" multiple accept=".xlsx,.xls,.csv"></div>
         <div><label>Công nợ PHẢI TRẢ (nhà cung cấp)</label><input type="file" id="bkTra" multiple accept=".xlsx,.xls,.csv"></div>
-        <div><label>Sổ chi tiết bán hàng</label><input type="file" id="bkSoBan" multiple accept=".xlsx,.xls,.csv"></div>
       </div>
+      <div class="inline" style="margin-top:6px">
+        <div><label>Sổ chi tiết bán hàng</label><input type="file" id="bkSoBan" multiple accept=".xlsx,.xls,.csv"></div>
+        <div><label>Sổ chi tiết mua hàng</label><input type="file" id="bkSoMua" multiple accept=".xlsx,.xls,.csv"></div>
+      </div>
+      <div class="inline" style="margin-top:6px">
+        <div><label>Sổ Thu tiền gửi / Chi tiền gửi ĐÃ NHẬP (các tháng trước)</label>
+          <input type="file" id="bkSoTC" multiple accept=".xlsx,.xls,.csv">
+          <span class="muted">Bỏ qua dòng sao kê đã có chứng từ (không nhập trùng), học đối tượng / lý do / diễn giải kế toán đã dùng, đánh số chứng từ tiếp theo.</span></div>
+      </div>
+      <div class="inline" style="margin-top:6px">
+        <div><label>File MẪU nhập khẩu Phiếu THU tiền gửi (MISA)</label><input type="file" id="bkMauThu" accept=".xlsx,.xls"></div>
+        <div><label>File MẪU nhập khẩu Phiếu CHI tiền gửi (MISA)</label><input type="file" id="bkMauChi" accept=".xlsx,.xls"></div>
+      </div>
+      <div class="muted">Có file mẫu: phần mềm điền thẳng vào đúng file mẫu (giữ nguyên định dạng, Lý do thu / chi theo danh sách chọn của mẫu).</div>
       <label style="margin-top:4px;display:block"><input type="checkbox" id="bkAi" checked style="width:auto"> Dùng AI đoán thu / chi của AI cho các dòng còn chưa rõ</label>
     </div>
     <div style="margin-top:10px"><button id="btnBank">Đối chiếu sao kê</button> <span id="bankMsg" class="msg"></span></div>
@@ -1716,6 +1729,10 @@ $("btnBank").onclick = async () => {
   [...$("bkThu").files].forEach(f => fd.append("phai_thu", f));
   [...$("bkTra").files].forEach(f => fd.append("phai_tra", f));
   [...$("bkSoBan").files].forEach(f => fd.append("so_ban", f));
+  [...$("bkSoMua").files].forEach(f => fd.append("so_mua", f));
+  [...$("bkSoTC").files].forEach(f => fd.append("so_thu_chi", f));
+  if ($("bkMauThu").files[0]) fd.append("mau_thu", $("bkMauThu").files[0]);
+  if ($("bkMauChi").files[0]) fd.append("mau_chi", $("bkMauChi").files[0]);
   fd.append("dung_ai", $("bkAi").checked ? "true" : "false");
   $("btnBank").disabled = true;
   msg($("bankMsg"), $("bkPortal").checked ? "Đang đọc sao kê, lấy hóa đơn các tháng trước trên cổng HĐĐT và đối chiếu..." : "Đang đọc và đối chiếu...", true);
@@ -1726,7 +1743,7 @@ $("btnBank").onclick = async () => {
     msg($("bankMsg"), `Sao kê ${tk.so_tk ? "TK " + tk.so_tk + " " + (tk.ngan_hang || "") + " – " : ""}${r.from} → ${r.to}: ${r.txns} giao dịch`, true);
     const links = [["bankKq", "★ Kết quả ghép thu chi (từng dòng: thu/chi của ai, cho việc gì, mã đối tượng, chưa rõ)", r.ket_qua],
                    ["bankOpen", "File đối chiếu (theo giao dịch / theo hóa đơn / hạch toán)", r.file]]
-      .concat(r.misa.map((p, i) => ["bankMisa" + i, "MISA – " + p.split(/[\\/]/).pop(), p]))
+      .concat(r.misa.map((p, i) => ["bankMisa" + i, "File nhập MISA – " + p.split(/[\\/]/).pop(), p]))
       .concat(r.easybooks.map((p, i) => ["bankEasy" + i, "EasyBooks – " + p.split(/[\\/]/).pop(), p]));
     $("bankResult").innerHTML = `<table>
       <tr><td>Tiền vào (ghi có)</td><td class="r"><b>${money(r.tien_vao)}</b></td><td>Tiền ra (ghi nợ)</td><td class="r"><b>${money(r.tien_ra)}</b></td></tr>
@@ -1736,7 +1753,9 @@ $("btnBank").onclick = async () => {
       <tr><td colspan="3">Chứng từ cần kiểm tra lại (tô vàng trong file)</td><td class="r">${r.kiem_tra}</td></tr>
       ${r.stat ? `<tr><td><span class="badge original">Chắc chắn</span></td><td class="r">${r.stat.chac}</td>
         <td><span class="badge rendered">Cần kiểm tra</span></td><td class="r">${r.stat.kiem_tra}</td></tr>
-        <tr><td colspan="3"><span class="badge failed">CHƯA RÕ thu / chi cho ai</span></td><td class="r">${r.stat.chua_ro}</td></tr>` : ""}
+        <tr><td><span class="badge failed">CHƯA RÕ thu / chi cho ai</span></td><td class="r">${r.stat.chua_ro}</td>
+        <td>Đã có chứng từ trên sổ (không nhập lại)</td><td class="r">${r.stat.da_co || 0}</td></tr>
+        <tr><td colspan="3"><b>Chứng từ cần nhập vào phần mềm</b></td><td class="r"><b>${r.can_nhap ?? ""}</b></td></tr>` : ""}
       ${r.doi_tuong ? `<tr><td colspan="3">Giao dịch nhận ra đối tượng (trong ${r.doi_tuong} đối tượng công nợ)</td><td class="r">${r.co_doi_tuong}</td></tr>` : ""}
       </table>` +
       ((r.sources || []).length ? `<div class="muted">Đã dò: ${r.sources.map(esc).join(" · ")}</div>` : "") +
