@@ -711,6 +711,223 @@ def misa_template(direction: Literal["purchase", "sold"]):
                     headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
+# ---------- ☰ Tiện ích: bảng điều khiển, hạn nộp, rủi ro HĐ, lãi lỗ, biên bản công nợ, định khoản, XML tờ khai ----------
+def _d(s: str, default: date) -> date:
+    try:
+        return date.fromisoformat(str(s)[:10])
+    except ValueError:
+        return default
+
+
+def _ti_range(tu: str, den: str) -> tuple[date, date]:
+    t = date.today()
+    d1 = _d(tu, date(t.year, t.month, 1))
+    return d1, max(d1, _d(den, t))
+
+
+def _xlsx(data: bytes, name: str):
+    from fastapi.responses import Response
+    return Response(data, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
+@app.get("/api/ti/dashboard")
+def ti_dashboard():
+    from . import tienich
+    return {"rows": tienich.dashboard()}
+
+
+@app.get("/api/ti/han-nop")
+def ti_han_nop(mst: str = "", ahead: int = 60):
+    from . import tienich
+    rows = tienich.deadlines(mst, ahead=ahead) if mst else tienich.all_deadlines(ahead=ahead)
+    return {"rows": rows}
+
+
+class TiMarkIn(BaseModel):
+    mst: str
+    key: str
+    done: bool = True
+
+
+@app.post("/api/ti/han-nop/mark")
+def ti_han_mark(body: TiMarkIn):
+    from . import tienich
+    return tienich.mark_done(body.mst, body.key, body.done)
+
+
+class TiRangeIn(BaseModel):
+    mst: str
+    tu: str = ""
+    den: str = ""
+
+
+@app.post("/api/ti/rui-ro")
+def ti_rui_ro(body: TiRangeIn):
+    from . import tienich
+    return tienich.risk_check(body.mst, *_ti_range(body.tu, body.den))
+
+
+@app.get("/api/ti/rui-ro.xlsx")
+def ti_rui_ro_xlsx(mst: str, tu: str = "", den: str = ""):
+    from . import tienich
+    r = tienich.risk_check(mst, *_ti_range(tu, den))
+    return _xlsx(tienich.risk_excel(r), f"KiemTraRuiRo_{mst}_{r['tu']}_{r['den']}.xlsx")
+
+
+class TiTextIn(BaseModel):
+    text: str = ""
+
+
+@app.get("/api/ti/mst-rui-ro")
+def ti_mst_rui_ro():
+    from . import tienich
+    return {"list": tienich.risky_list()}
+
+
+@app.post("/api/ti/mst-rui-ro")
+def ti_mst_rui_ro_save(body: TiTextIn):
+    from . import tienich
+    return {"list": tienich.set_risky_list(body.text)}
+
+
+class TiProfitIn(BaseModel):
+    mst: str
+    tu: str = ""
+    den: str = ""
+    chi_phi_khac: float = 0
+    luong: float = 0
+    nhom_hkd: str = "phan_phoi"
+    thue_suat: float = 0
+
+
+@app.post("/api/ti/lai-lo")
+def ti_lai_lo(body: TiProfitIn):
+    from . import tienich
+    return tienich.profit(body.mst, *_ti_range(body.tu, body.den), body.chi_phi_khac, body.luong, body.nhom_hkd,
+                          body.thue_suat or None)
+
+
+@app.get("/api/ti/nhom-hkd")
+def ti_nhom_hkd():
+    from . import tienich
+    return {"rows": [{"ma": k, "ten": v[0], "gtgt": v[1], "tncn": v[2]} for k, v in tienich.HKD_RATES.items()]}
+
+
+def _ti_out(mst: str, sub: str) -> Path:
+    p = Path(settings.output_dir) / (mst or "_chung") / sub
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+@app.get("/api/ti/tai")
+def ti_tai(p: str):
+    f = Path(p).resolve()
+    base = Path(settings.output_dir).resolve()
+    if base not in f.parents or not f.is_file():
+        raise HTTPException(404, "Không tìm thấy file")
+    return FileResponse(f, filename=f.name)
+
+
+@app.post("/api/ti/bien-ban")
+async def ti_bien_ban(file: UploadFile = File(...), loai: str = Form("KH"), mst: str = Form(""),
+                      ngay: str = Form(""), chon: str = Form("")):
+    from starlette.concurrency import run_in_threadpool
+
+    from . import bank_smart, tienich
+    data = await file.read()
+    name = file.filename or "congno.xlsx"
+    loai = "NCC" if loai.upper().startswith("N") else "KH"
+    led = await run_in_threadpool(bank_smart.read_ledger, name, data, loai)
+    if not led or not led.get("partners"):
+        ps = await run_in_threadpool(bank_smart.read_partners, name, data, loai)
+        if not ps:
+            raise HTTPException(400, "Không đọc được danh sách công nợ trong file (cần cột Tên đối tượng và Số dư / Còn phải thu, trả)")
+        led = {"partners": ps, "entries": []}
+    own = tienich.company(mst) if mst else {}
+    d = _d(ngay, date.today())
+    pick = [x.strip() for x in chon.split("\n") if x.strip()] or None
+    xb, msgs = await run_in_threadpool(tienich.debt_letters, own, led, loai, d, pick)
+    out = _ti_out(mst, "BienBanDoiChieuCongNo") / f"BBDC_{'PhaiThu' if loai == 'KH' else 'PhaiTra'}_{d:%Y%m%d}.xlsx"
+    out.write_bytes(xb)
+    return {"file": str(out), "so_doi_tuong": len(msgs), "msgs": msgs,
+            "co_chi_tiet": bool(led.get("entries"))}
+
+
+class TiTkIn(BaseModel):
+    mst: str
+    tu: str = ""
+    den: str = ""
+    che_do: str = "TT200"
+    mac_dinh: str = ""
+
+
+@app.post("/api/ti/dinh-khoan")
+def ti_dinh_khoan(body: TiTkIn):
+    from . import tienich
+    return {"rows": tienich.purchase_lines(body.mst, *_ti_range(body.tu, body.den), body.che_do, body.mac_dinh)}
+
+
+class TiLearnIn(BaseModel):
+    pairs: list[list[str]]
+
+
+@app.post("/api/ti/dinh-khoan/hoc")
+def ti_dinh_khoan_hoc(body: TiLearnIn):
+    from . import tienich
+    return {"n": tienich.learn_tk([(p[0], p[1]) for p in body.pairs if len(p) >= 2])}
+
+
+@app.post("/api/ti/dinh-khoan/hoc-file")
+async def ti_dinh_khoan_hoc_file(file: UploadFile = File(...)):
+    from . import tienich
+    try:
+        return {"n": tienich.learn_tk_from_file(file.filename or "", await file.read())}
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+
+
+@app.post("/api/ti/dinh-khoan.xlsx")
+def ti_dinh_khoan_xlsx(body: TiTkIn):
+    import io as _io
+
+    from openpyxl import Workbook
+
+    from . import tienich
+    rows = tienich.purchase_lines(body.mst, *_ti_range(body.tu, body.den), body.che_do, body.mac_dinh)
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["Ngày", "Hóa đơn", "Người bán", "MST", "Tên hàng", "ĐVT", "SL", "Đơn giá", "Thành tiền", "Thuế", "TK Nợ", "Lý do"])
+    for r in rows:
+        ws.append([r["ngay"], r["hd"], r["nguoi_ban"], r["mst_ban"], r["ten"], r["dvt"], r["sl"], r["don_gia"],
+                   r["thanh_tien"], r["thue"], r["tk"], r["ly_do"]])
+    b = _io.BytesIO()
+    wb.save(b)
+    return _xlsx(b.getvalue(), f"DinhKhoan_MuaVao_{body.mst}.xlsx")
+
+
+class TiXmlIn(BaseModel):
+    mst: str
+    key: str
+    nguoi_ky: str = ""
+
+
+@app.post("/api/ti/xml-tk")
+def ti_xml_tk(body: TiXmlIn):
+    from . import tienich
+    try:
+        f, note = tienich.vat_xml(body.mst, body.key, body.nguoi_ky)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    return {"file": str(f), "ghi_chu": note}
+
+
+@app.get("/api/ti/ky-vat")
+def ti_ky_vat(mst: str):
+    from . import vat
+    return {"rows": vat.history(mst)}
+
+
 # ---------- đọc chứng từ: hóa đơn hàng loạt, sao kê ngân hàng ----------
 def _doc_root(mst: str) -> tuple[str, Path]:
     from .gdt.browser import BROWSER
@@ -995,6 +1212,14 @@ async def docs_bank(files: list[UploadFile] = File(...), mst: str = Form(""), mo
         misa = bank_post.export_misa(tpl_dir, out_dir, tag, to_import, info, codes)
     easy = bank_post.export_easybooks(tpl_dir, out_dir, tag, to_import, info, codes)
     matched = sum(1 for t in txns if t.get("alloc"))
+    try:  # tóm tắt cho Bảng điều khiển / Trợ lý AI
+        import json as _json
+        ket_qua.with_suffix(".json").write_text(_json.dumps({
+            "tu": d1.isoformat(), "den": d2.isoformat(), "luc": datetime.now().isoformat(timespec="seconds"),
+            "tai_khoan": info.get("so_tk", ""), "ngan_hang": info.get("ngan_hang", ""), "giao_dich": len(txns),
+            "khop_hoa_don": matched, "stat": stat, "file": str(ket_qua)}, ensure_ascii=False, default=str), encoding="utf-8")
+    except Exception:  # noqa: BLE001
+        pass
     return {"file": str(dest), "ket_qua": str(ket_qua), "from": d1.isoformat(), "to": d2.isoformat(), "txns": len(txns),
             "invoices": len(invoices), "matched": matched, "unmatched": len(txns) - matched,
             "unpaid": sum(1 for i in invoices if i["_con_lai"] > 1 and str(i.get("ngay_lap"))[:10] >= d1.isoformat()),

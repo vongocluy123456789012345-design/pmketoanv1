@@ -663,6 +663,14 @@ def build_rows(inv: dict[str, Any], direction: str, seq: int, acc: dict[str, str
             f = fold(str(ts or "")).upper().replace(" ", "")
             ts_txt = "KCT" if "KCT" in f or "KHONGCHIU" in f else "KKKNT" if "KKKNT" in f or "KHONGKEKHAI" in f else \
                 ("KHAC" if f else None)
+        tk_mua = a.get("tk_kho")
+        if purchase:  # định khoản theo mặt hàng: đã học từ cách kế toán hạch toán -> từ khóa (vận chuyển, điện nước...) -> mặc định
+            try:
+                from .tienich import suggest_tk
+                tk_mua = suggest_tk(it.get("ten") or "", float(it.get("dg") or 0), partner["ten"] or "",
+                                    mac_dinh=a.get("tk_kho") or "1561", tai_san=False)[0]
+            except Exception:  # noqa: BLE001
+                pass
         rows.append({
             "hinh_thuc_mua": hinh_thuc, "pttt": pttt, "nhan_kem_hd": nhan_kem,
             "ly_do_chi": ("Chi tiền " + dien_giai[0].lower() + dien_giai[1:]) if paid and purchase else (dien_giai if paid else None),
@@ -675,8 +683,8 @@ def build_rows(inv: dict[str, Any], direction: str, seq: int, acc: dict[str, str
             "dvt": it.get("dvt"), "so_luong": it.get("sl"), "don_gia": it.get("dg"), "thanh_tien": tt,
             "tien_ck": it.get("ck") or None, "thue_suat": ts_txt,
             "tien_thue": thue, "tong_tt": inv.get("tgtttbso"),
-            "tk_no": a["tk_kho"] if purchase else a["tk_cong_no"], "tk_co": a["tk_cong_no"] if purchase else a["tk_doanh_thu"],
-            "tk_kho": a.get("tk_kho"), "tk_cong_no": a["tk_cong_no"], "tk_doanh_thu": a.get("tk_doanh_thu"),
+            "tk_no": tk_mua if purchase else a["tk_cong_no"], "tk_co": a["tk_cong_no"] if purchase else a["tk_doanh_thu"],
+            "tk_kho": tk_mua if purchase else a.get("tk_kho"), "tk_cong_no": a["tk_cong_no"], "tk_doanh_thu": a.get("tk_doanh_thu"),
             "tk_thue": a["tk_thue"], "loai_tien": "VND", "ty_gia": 1, "hinh_thuc_tt": inv.get("htttoan"),
             "ma_cqt": inv.get("mccqt"), "ma_tra_cuu": mtc, "nhom_hhdv": "1" if purchase else None,
         })

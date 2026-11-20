@@ -44,6 +44,14 @@
   nav a { padding: 11px 16px; text-decoration: none; color: #57606a; border-bottom: 3px solid transparent; font-weight: 500; }
   nav a:hover { color: var(--pri); background: var(--bg); }
   nav a.active { color: var(--pri); border-bottom-color: var(--pri); }
+  .tiMenu { position: relative; margin-left: auto; }
+  .tiMenu > a { display: block; }
+  .tiDrop { display: none; position: absolute; right: 0; top: 100%; background: #fff; border: 1px solid var(--b); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.12); min-width: 330px; flex-direction: column; padding: 4px 0; }
+  .tiMenu:hover .tiDrop, .tiMenu.open .tiDrop { display: flex; }
+  .tiDrop a { border-bottom: 0; padding: 9px 16px; white-space: nowrap; }
+  .tiDrop a.active { background: var(--bg); }
+  .tiMenu.on > a { color: var(--pri); border-bottom-color: var(--pri); }
+  .lvLOI { background: #fde2dd; } .lvCB { background: #fff6d6; } .lvLY { background: #e8f1fb; }
   nav .badge { margin-left: 4px; }
   .page { display: none; gap: 16px; }
   .page.active { display: grid; }
@@ -127,8 +135,90 @@
   <a href="#lich" data-page="lich">Lịch tự động</a>
   <a href="#nhapfile" data-page="nhapfile">Nhập file</a>
   <a href="#dulieu" data-page="dulieu">Kho dữ liệu (Supabase)</a>
+  <div class="tiMenu" id="tiMenu"><a href="#" id="tiBtn">☰ Tiện ích ▾</a>
+    <div class="tiDrop">
+      <a href="#tongquan" data-page="tongquan">📊 Bảng điều khiển tất cả khách hàng</a>
+      <a href="#hannop" data-page="hannop">📅 Lịch hạn nộp thuế &amp; nhắc việc</a>
+      <a href="#ruiro" data-page="ruiro">🛡️ Kiểm tra rủi ro hóa đơn đầu vào</a>
+      <a href="#dinhkhoan" data-page="dinhkhoan">🧾 Định khoản HĐ mua vào theo mặt hàng</a>
+      <a href="#bbcn" data-page="bbcn">🤝 Biên bản đối chiếu công nợ</a>
+      <a href="#laulo" data-page="laulo">📈 Ước tính lãi lỗ &amp; thuế tạm tính</a>
+      <a href="#xmltk" data-page="xmltk">📤 Xuất XML tờ khai 01/GTGT</a>
+      <a href="#" id="tiAi">💬 Hỏi đáp dữ liệu với Trợ lý AI</a>
+    </div></div>
 </nav>
 <main>
+ <div class="page" id="page-tongquan">
+  <section class="card">
+    <h2>Bảng điều khiển tất cả khách hàng</h2>
+    <p class="muted">Mỗi dòng là 1 công ty (MST) có dữ liệu trong máy: tháng đã tải hóa đơn, kết quả dự báo VAT, hạn nộp gần nhất, đối chiếu sao kê, rủi ro hóa đơn đầu vào.</p>
+    <p><button id="tqLoad">Làm mới</button> <span class="muted" id="tqMsg"></span></p>
+    <div style="overflow:auto"><table id="tqTable"></table></div>
+  </section>
+ </div>
+ <div class="page" id="page-hannop">
+  <section class="card">
+    <h2>Lịch hạn nộp thuế &amp; nhắc việc</h2>
+    <p class="muted">Tự tính hạn: tờ khai GTGT / TNCN tháng (ngày 20 tháng sau) hoặc quý (ngày cuối tháng đầu quý sau), tạm nộp TNDN quý (ngày 30 tháng đầu quý sau), BHXH (cuối tháng), lệ phí môn bài (30/01), quyết toán TNDN / TNCN + BCTC (31/03). Hạn rơi vào thứ 7 / chủ nhật được dời sang thứ 2. Phần mềm nhắc khi còn ≤ 3 ngày mà chưa đánh dấu <b>Đã nộp</b>. Ngày lễ chưa tính – kiểm tra thông báo gia hạn của cơ quan thuế.</p>
+    <p>Công ty: <select id="hnMst" class="tiMst" data-all="1"></select> · Xem trước <select id="hnAhead"><option value="30">30 ngày</option><option value="60" selected>60 ngày</option><option value="120">120 ngày</option></select>
+      <label><input type="checkbox" id="hnShowDone"> Hiện cả hạn đã nộp</label> <button id="hnLoad">Xem</button></p>
+    <div style="overflow:auto"><table id="hnTable"></table></div>
+  </section>
+ </div>
+ <div class="page" id="page-ruiro">
+  <section class="card">
+    <h2>Kiểm tra rủi ro hóa đơn đầu vào (trước khi kê khai)</h2>
+    <p class="muted">Dò toàn bộ hóa đơn mua vào đã tải: hóa đơn hủy / bị thay thế / điều chỉnh, trùng lặp, sai MST hoặc tên người mua, MST người bán sai số kiểm tra, tiền thuế không khớp thuế suất, dùng 8% sau thời hạn giảm thuế, người bán nằm trong danh sách rủi ro bạn nhập, hóa đơn từ 5 triệu cần chứng từ thanh toán không dùng tiền mặt.</p>
+    <p>Công ty: <select id="rrMst" class="tiMst"></select> Từ <input type="date" id="rrTu"> đến <input type="date" id="rrDen">
+      <button id="rrRun">Kiểm tra</button> <button id="rrXlsx" class="sec">Tải Excel</button> <span class="muted" id="rrMsg"></span></p>
+    <details><summary>Danh sách MST doanh nghiệp rủi ro / bỏ địa chỉ kinh doanh (tự nhập)</summary>
+      <p class="muted">Dán các MST (mỗi dòng 1 MST hoặc cách nhau dấu phẩy) từ thông báo của cơ quan thuế. Tra tình trạng MST tại <a href="https://tracuunnt.gdt.gov.vn/tcnnt/mstdn.jsp" target="_blank">tracuunnt.gdt.gov.vn</a>.</p>
+      <textarea id="rrList" rows="4" style="width:100%"></textarea><p><button id="rrSave" class="sec">Lưu danh sách</button> <span class="muted" id="rrListMsg"></span></p></details>
+    <div style="overflow:auto"><table id="rrTable"></table></div>
+  </section>
+ </div>
+ <div class="page" id="page-laulo">
+  <section class="card">
+    <h2>Ước tính lãi lỗ &amp; thuế tạm tính</h2>
+    <p class="muted">Tính nhanh từ hóa đơn điện tử đã tải (doanh thu bán ra, mua vào chưa thuế) + lương và chi phí khác bạn nhập. Doanh nghiệp: thuế TNDN tạm tính theo thuế suất 15% / 17% / 20% theo doanh thu năm. Hộ kinh doanh: thuế GTGT + TNCN theo tỷ lệ % doanh thu của nhóm ngành.</p>
+    <p>Công ty: <select id="llMst" class="tiMst"></select> Từ <input type="date" id="llTu"> đến <input type="date" id="llDen"></p>
+    <p>Lương &amp; BHXH: <input id="llLuong" placeholder="0" style="width:140px"> Chi phí khác (thuê nhà, khấu hao…): <input id="llCp" placeholder="0" style="width:140px">
+      Thuế suất TNDN: <select id="llTs"><option value="0">Tự xác định</option><option>15</option><option>17</option><option>20</option></select>
+      Nhóm ngành HKD: <select id="llNhom"></select> <button id="llRun">Tính</button></p>
+    <div id="llOut"></div>
+  </section>
+ </div>
+ <div class="page" id="page-bbcn">
+  <section class="card">
+    <h2>Biên bản đối chiếu công nợ tự động</h2>
+    <p class="muted">Tải lên sổ chi tiết công nợ phải thu (131) hoặc phải trả (331) xuất từ MISA / Excel. Phần mềm lập 1 file Excel, mỗi khách hàng / nhà cung cấp 1 sheet biên bản (số dư đầu kỳ, phát sinh, đã thanh toán, số dư cuối kỳ, chỗ ký 2 bên) và soạn sẵn lời nhắn gửi Zalo / email kèm theo.</p>
+    <p>Công ty của bạn: <select id="bbMst" class="tiMst"></select> Loại: <select id="bbLoai"><option value="KH">Phải thu khách hàng (131)</option><option value="NCC">Phải trả nhà cung cấp (331)</option></select>
+      Ngày đối chiếu: <input type="date" id="bbNgay"></p>
+    <p><input type="file" id="bbFile" accept=".xlsx,.xls,.xlsm,.csv"> <button id="bbRun">Lập biên bản</button> <span class="muted" id="bbMsg"></span></p>
+    <details><summary>Chỉ lập cho một số đối tượng (tùy chọn)</summary><textarea id="bbChon" rows="3" style="width:100%" placeholder="Mỗi dòng 1 tên đúng như trong sổ; để trống = tất cả"></textarea></details>
+    <div id="bbOut"></div>
+  </section>
+ </div>
+ <div class="page" id="page-dinhkhoan">
+  <section class="card">
+    <h2>Định khoản hóa đơn mua vào theo mặt hàng</h2>
+    <p class="muted">Từng dòng hàng của hóa đơn mua vào được gợi ý TK Nợ: theo cách bạn đã hạch toán trước đây (đã học) → theo từ khóa (vận chuyển, điện nước, xăng dầu, quảng cáo, thuê nhà, phần mềm, văn phòng phẩm…) → TK mặc định. Sửa TK rồi bấm <b>Lưu cách hạch toán</b> – lần sau phần mềm tự dùng, kể cả khi <b>Chuyển dữ liệu MISA</b> (cột TK kho / TK chi phí của mẫu mua hàng).</p>
+    <p>Công ty: <select id="dkMst" class="tiMst"></select> Từ <input type="date" id="dkTu"> đến <input type="date" id="dkDen">
+      Chế độ: <select id="dkCd"><option>TT200</option><option>TT133</option></select>
+      TK mặc định: <select id="dkMd"><option value="">1561 – Hàng hóa</option><option>152</option><option>153</option><option>154</option><option>6422</option><option>6427</option><option>632</option></select>
+      <button id="dkRun">Gợi ý</button> <button id="dkSave" class="sec">Lưu cách hạch toán</button> <button id="dkXlsx" class="sec">Tải Excel</button></p>
+    <p class="muted">Học từ file mua hàng đã hạch toán (có cột Tên hàng + TK kho / TK chi phí / TK Nợ): <input type="file" id="dkLearnFile" accept=".xlsx,.xls,.xlsm"> <button id="dkLearn" class="sec">Học từ file</button> <span id="dkMsg"></span></p>
+    <div style="overflow:auto;max-height:65vh"><table id="dkTable"></table></div>
+  </section>
+ </div>
+ <div class="page" id="page-xmltk">
+  <section class="card">
+    <h2>Xuất XML tờ khai 01/GTGT (nộp qua HTKK / thuedientu)</h2>
+    <p class="muted">Lấy số liệu từ kết quả <b>Dự báo VAT</b> đã lập, xuất file XML đúng cấu trúc HTKK kết xuất (mẫu 01/GTGT – TT80). Tên, địa chỉ, cơ quan thuế lấy từ dữ liệu HTKK trên máy (nếu có). Mở bằng HTKK (Nhập tờ khai từ XML) để kiểm tra trước khi ký nộp; nếu có giảm thuế 8% thì lập thêm phụ lục giảm thuế trên HTKK.</p>
+    <p>Công ty: <select id="xmMst" class="tiMst"></select> Kỳ: <select id="xmKy"></select> Người ký: <input id="xmNk" placeholder="Họ tên người ký (tùy chọn)">
+      <button id="xmRun">Xuất XML</button> <span class="muted" id="xmMsg"></span></p>
+  </section>
+ </div>
  <div class="page" id="page-tai">
   <section class="card" style="border-color:var(--pri)">
     <h2>Tự động tải hóa đơn từ cổng thuế (bạn tự đăng nhập trên Chrome)</h2>
@@ -1575,7 +1665,160 @@ $("btnAiKeyDel").onclick = async () => { await api("/api/ai/key", {method: "POST
 aiStatus();
 
 // ----- chuyển trang theo menu (#tai, #vat, #doichieu, #lich, #nhapfile, #dulieu); #ai = mở bóng chat -----
-const PAGES = ["tai", "vat", "misa", "tonkho", "chungtu", "doichieu", "lich", "nhapfile", "dulieu"];
+const PAGES = ["tai", "vat", "misa", "tonkho", "chungtu", "doichieu", "lich", "nhapfile", "dulieu", "tongquan", "hannop", "ruiro", "laulo", "bbcn", "dinhkhoan", "xmltk"];
+// ----- ☰ Tiện ích -----
+const TI_PAGES = ["tongquan", "hannop", "ruiro", "laulo", "bbcn", "dinhkhoan", "xmltk"];
+let tiCos = null;
+$("tiBtn").onclick = e => { e.preventDefault(); $("tiMenu").classList.toggle("open"); };
+document.addEventListener("click", e => { if (!$("tiMenu").contains(e.target)) $("tiMenu").classList.remove("open"); });
+$("tiAi").onclick = e => { e.preventDefault(); $("tiMenu").classList.remove("open"); aiOpen(true); };
+const tiIso = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+const tiOpen = p => api("/api/open-folder?path=" + encodeURIComponent(p), {method: "POST"}).catch(err => alert(err.message));
+const tiPost = (url, body) => api(url, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+const tiNum = id => Number(String($(id).value || "0").replace(/[^\d-]/g, "")) || 0;
+async function tiLoadCos(force) {
+  if (!tiCos || force) tiCos = (await api("/api/ti/dashboard")).rows;
+  document.querySelectorAll("select.tiMst").forEach(sel => {
+    const cur = sel.value || (typeof vatMsts !== "undefined" && $("vMst") ? $("vMst").value : "");
+    sel.innerHTML = (sel.dataset.all ? `<option value="">— Tất cả khách hàng —</option>` : "") +
+      tiCos.map(c => `<option value="${esc(c.mst)}">${esc(c.mst)} – ${esc(c.ten || "(chưa rõ tên)")}</option>`).join("");
+    if (cur && tiCos.some(c => c.mst === cur)) sel.value = cur;
+  });
+  return tiCos;
+}
+(function tiDates() {
+  const n = new Date(), a = new Date(n.getFullYear(), n.getMonth() - 1, 1), b = new Date(n.getFullYear(), n.getMonth(), 0);
+  ["rr", "dk"].forEach(p => { $(p + "Tu").value = tiIso(a); $(p + "Den").value = tiIso(b); });
+  $("llTu").value = `${n.getFullYear()}-01-01`; $("llDen").value = tiIso(b); $("bbNgay").value = tiIso(n);
+})();
+async function tiEnter(p) {
+  try { await tiLoadCos(p === "tongquan"); } catch (e) { return alert(e.message); }
+  if (p === "tongquan") tqRender();
+  if (p === "hannop") hnLoad();
+  if (p === "ruiro" && !$("rrList").dataset.ok) api("/api/ti/mst-rui-ro").then(r => { $("rrList").value = r.list.join("\n"); $("rrList").dataset.ok = 1; });
+  if (p === "laulo" && !$("llNhom").options.length) api("/api/ti/nhom-hkd").then(r => { $("llNhom").innerHTML = r.rows.map(x => `<option value="${x.ma}">${esc(x.ten)} (GTGT ${x.gtgt}% + TNCN ${x.tncn}%)</option>`).join(""); });
+  if (p === "xmltk") xmLoadKy();
+}
+// Bảng điều khiển
+function tqRender() {
+  const rows = tiCos || [];
+  $("tqMsg").textContent = `${rows.length} khách hàng`;
+  const vt = v => !v ? `<span class="muted">chưa dự báo</span>` : v.phai_nop ? `<b style="color:var(--err)">Nộp ${money(v.phai_nop)}</b>` : `<span style="color:var(--ok)">Khấu trừ ${money(v.chuyen_ky_sau)}</span>`;
+  $("tqTable").innerHTML = `<tr><th>MST / Tên</th><th>Tháng HĐ mới nhất</th><th>Kỳ vừa xong</th><th>VAT kỳ vừa xong</th><th>VAT kỳ này (tạm)</th><th>Hạn gần nhất chưa nộp</th><th>Sao kê gần nhất</th><th>Rủi ro HĐ đầu vào</th></tr>` +
+    rows.map(c => { const h = c.han_gan_nhat, s = c.sao_ke, r = c.rui_ro;
+      return `<tr><td><b>${esc(c.mst)}</b><br>${esc(c.ten || "")}${c.hkd ? ' <span class="badge">HKD</span>' : ""}</td>
+        <td>${esc(c.thang_moi_nhat || "—")}</td>
+        <td>${esc(c.ky_vua_xong)}<br>${c.da_tai_ky_vua_xong ? '<span style="color:var(--ok)">Đã tải đủ</span>' : '<a href="#tai" style="color:var(--err)">Chưa tải đủ – tải ngay</a>'}</td>
+        <td>${vt(c.vat_ky_vua_xong)}</td><td>${vt(c.vat_ky_nay)}</td>
+        <td>${h ? `${esc(h.loai)} ${esc(h.ky)}<br><b style="color:${h.con_ngay < 0 ? "var(--err)" : h.con_ngay <= 3 ? "var(--warn)" : "inherit"}">${h.han.split("-").reverse().join("/")} (${h.con_ngay < 0 ? "quá " + (-h.con_ngay) + " ngày" : "còn " + h.con_ngay + " ngày"})</b>${c.so_han_qua_han > 1 ? `<br><span class="muted">${c.so_han_qua_han} hạn quá hạn chưa đánh dấu</span>` : ""}` : "—"}
+          <br><a href="#hannop" data-mst="${esc(c.mst)}" class="tqHan">Xem lịch</a></td>
+        <td>${s ? `${esc(s.tu)} → ${esc(s.den)}<br>${s.giao_dich} GD, ${s.khop_hoa_don} khớp HĐ` : '<a href="#chungtu">Chưa đối chiếu</a>'}</td>
+        <td>${r ? `<span style="color:${r["LỖI"] ? "var(--err)" : "inherit"}">${r["LỖI"]} lỗi · ${r["CẢNH BÁO"]} cảnh báo</span><br><span class="muted">${esc((c.rui_ro_luc || "").slice(0, 10))}</span>` : ""} <a href="#ruiro" data-mst="${esc(c.mst)}" class="tqRr">Kiểm tra</a></td></tr>`; }).join("");
+  document.querySelectorAll(".tqHan").forEach(a => a.onclick = () => setTimeout(() => { $("hnMst").value = a.dataset.mst; hnLoad(); }, 50));
+  document.querySelectorAll(".tqRr").forEach(a => a.onclick = () => setTimeout(() => { $("rrMst").value = a.dataset.mst; }, 50));
+}
+$("tqLoad").onclick = () => tiLoadCos(true).then(tqRender).catch(e => alert(e.message));
+// Hạn nộp
+async function hnLoad() {
+  const r = await api(`/api/ti/han-nop?mst=${encodeURIComponent($("hnMst").value)}&ahead=${$("hnAhead").value}`).catch(e => alert(e.message));
+  if (!r) return;
+  const rows = r.rows.filter(x => $("hnShowDone").checked || !x.da_nop);
+  $("hnTable").innerHTML = `<tr><th>Hạn</th><th>Công ty</th><th>Nghĩa vụ</th><th>Kỳ</th><th>Ghi chú</th><th>Đã nộp</th></tr>` + (rows.map((x, i) =>
+    `<tr style="${x.da_nop ? "opacity:.55" : x.con_ngay < 0 ? "background:#fde2dd" : x.con_ngay <= 3 ? "background:#fff6d6" : ""}"><td><b>${x.han.split("-").reverse().join("/")}</b><br><span class="muted">${x.con_ngay < 0 ? "quá hạn " + (-x.con_ngay) + " ngày" : x.con_ngay === 0 ? "HÔM NAY" : "còn " + x.con_ngay + " ngày"}</span></td>
+     <td>${esc(x.mst)}<br><span class="muted">${esc(x.ten || "")}</span></td><td>${esc(x.loai)}</td><td>${esc(x.ky)}</td><td class="muted">${esc(x.ghi_chu || "")}</td>
+     <td><input type="checkbox" data-i="${i}" ${x.da_nop ? "checked" : ""}></td></tr>`).join("") || `<tr><td colspan="6" class="muted">Không có hạn nào trong khoảng này</td></tr>`);
+  $("hnTable").querySelectorAll("input[type=checkbox]").forEach(cb => cb.onchange = async () => {
+    const x = rows[cb.dataset.i]; await tiPost("/api/ti/han-nop/mark", {mst: x.mst, key: x.key, done: cb.checked}).catch(e => alert(e.message)); hnLoad(); });
+}
+$("hnLoad").onclick = hnLoad; $("hnMst").onchange = hnLoad; $("hnShowDone").onchange = hnLoad; $("hnAhead").onchange = hnLoad;
+// Rủi ro HĐ đầu vào
+$("rrRun").onclick = async () => {
+  $("rrMsg").textContent = "Đang kiểm tra…"; $("rrTable").innerHTML = "";
+  try {
+    const r = await tiPost("/api/ti/rui-ro", {mst: $("rrMst").value, tu: $("rrTu").value, den: $("rrDen").value});
+    $("rrMsg").innerHTML = `${r.so_hd} hóa đơn mua vào · <b style="color:var(--err)">${r.tong["LỖI"]} lỗi</b> · <b style="color:var(--warn)">${r.tong["CẢNH BÁO"]} cảnh báo</b> · ${r.tong["LƯU Ý"]} lưu ý`;
+    const cls = {"LỖI": "lvLOI", "CẢNH BÁO": "lvCB", "LƯU Ý": "lvLY"};
+    $("rrTable").innerHTML = `<tr><th>Mức</th><th>Loại</th><th>Chi tiết</th><th>Ngày</th><th>Ký hiệu - Số</th><th>Người bán</th><th>Tổng TT</th></tr>` +
+      (r.issues.map(x => `<tr class="${cls[x.muc]}"><td><b>${x.muc}</b></td><td>${esc(x.loai)}</td><td>${esc(x.chi_tiet)}</td><td>${esc(x.ngay)}</td><td>${esc(x.hd)}</td><td>${esc(x.mst_ban || "")}<br>${esc(x.ten_ban || "")}</td><td style="text-align:right">${money(x.tong)}</td></tr>`).join("")
+       || `<tr><td colspan="7" style="color:var(--ok)">Không phát hiện rủi ro nào 👍</td></tr>`);
+  } catch (e) { $("rrMsg").textContent = e.message; }
+};
+$("rrXlsx").onclick = () => { location.href = `/api/ti/rui-ro.xlsx?mst=${encodeURIComponent($("rrMst").value)}&tu=${$("rrTu").value}&den=${$("rrDen").value}`; };
+$("rrSave").onclick = () => tiPost("/api/ti/mst-rui-ro", {text: $("rrList").value}).then(r => { $("rrList").value = r.list.join("\n"); $("rrListMsg").textContent = `Đã lưu ${r.list.length} MST`; }).catch(e => alert(e.message));
+// Lãi lỗ
+$("llRun").onclick = async () => {
+  $("llOut").innerHTML = '<p class="muted">Đang tính…</p>';
+  try {
+    const r = await tiPost("/api/ti/lai-lo", {mst: $("llMst").value, tu: $("llTu").value, den: $("llDen").value, luong: tiNum("llLuong"), chi_phi_khac: tiNum("llCp"), nhom_hkd: $("llNhom").value || "phan_phoi", thue_suat: Number($("llTs").value)});
+    const L = (k, v, b) => `<tr><td>${k}</td><td style="text-align:right">${b ? "<b>" : ""}${money(Math.round(v))}${b ? "</b>" : ""}</td></tr>`;
+    $("llOut").innerHTML = `<table style="max-width:640px">${L(`Doanh thu bán ra chưa thuế (${r.so_hd_ban} HĐ)`, r.doanh_thu, 1)}${L(`Mua vào chưa thuế (${r.so_hd_mua} HĐ)`, r.mua_vao)}${L("Lương & BHXH", r.luong)}${L("Chi phí khác", r.chi_phi_khac)}
+      ${L("LỢI NHUẬN TRƯỚC THUẾ (ước tính)", r.loi_nhuan_truoc_thue, 1)}${L("Thuế GTGT bán ra", r.thue_gtgt_ban_ra)}${L("Thuế GTGT mua vào", r.thue_gtgt_mua_vao)}
+      ${r.hkd ? L(`Thuế GTGT hộ kinh doanh`, r.thue_gtgt_hkd) + L("Thuế TNCN hộ kinh doanh", r.thue_tncn_hkd) + L("TỔNG THUẾ HKD", r.tong_thue, 1)
+              : L("Thuế GTGT ước phải nộp", r.thue_gtgt_uoc_phai_nop) + L(`Doanh thu ước cả năm`, r.doanh_thu_uoc_nam) + L(`Thuế TNDN tạm tính (${r.thue_suat_tndn}%)`, r.thue_tndn_tam_tinh, 1)}</table>
+      <ul class="muted">${r.ghi_chu.map(x => `<li>${esc(x)}</li>`).join("")}</ul>`;
+  } catch (e) { $("llOut").innerHTML = `<p style="color:var(--err)">${esc(e.message)}</p>`; }
+};
+// Biên bản đối chiếu công nợ
+$("bbRun").onclick = async () => {
+  const f = $("bbFile").files[0]; if (!f) return alert("Chọn file sổ chi tiết công nợ trước");
+  const fd = new FormData(); fd.append("file", f); fd.append("loai", $("bbLoai").value); fd.append("mst", $("bbMst").value); fd.append("ngay", $("bbNgay").value); fd.append("chon", $("bbChon").value);
+  $("bbMsg").textContent = "Đang lập biên bản…"; $("bbOut").innerHTML = "";
+  try {
+    const r = await api("/api/ti/bien-ban", {method: "POST", body: fd});
+    $("bbMsg").innerHTML = `Đã lập ${r.so_doi_tuong} biên bản${r.co_chi_tiet ? "" : " (file chỉ có số dư – biên bản không có chi tiết phát sinh)"} · <a href="#" id="bbOpen">Mở file Excel</a>`;
+    $("bbOpen").onclick = e => { e.preventDefault(); tiOpen(r.file); };
+    $("bbOut").innerHTML = `<table><tr><th>Đối tượng</th><th>Số dư</th><th>Lời nhắn gửi kèm (Zalo / email)</th><th></th></tr>` + r.msgs.map((m, i) =>
+      `<tr><td>${esc(m.ten)}</td><td style="text-align:right">${money(m.so_du)}</td><td style="max-width:560px">${esc(m.loi_nhan)}</td><td><button class="sec" data-i="${i}">Chép</button></td></tr>`).join("") + "</table>";
+    $("bbOut").querySelectorAll("button").forEach(b => b.onclick = () => { navigator.clipboard.writeText(r.msgs[b.dataset.i].loi_nhan); b.textContent = "Đã chép"; });
+  } catch (e) { $("bbMsg").textContent = e.message; }
+};
+// Định khoản mua vào
+let dkRows = [];
+const dkBody = () => ({mst: $("dkMst").value, tu: $("dkTu").value, den: $("dkDen").value, che_do: $("dkCd").value, mac_dinh: $("dkMd").value});
+$("dkRun").onclick = async () => {
+  $("dkMsg").textContent = "Đang đọc dòng hàng…";
+  try {
+    dkRows = (await tiPost("/api/ti/dinh-khoan", dkBody())).rows;
+    $("dkMsg").textContent = `${dkRows.length} dòng hàng`;
+    $("dkTable").innerHTML = `<tr><th>Ngày</th><th>Hóa đơn</th><th>Người bán</th><th>Tên hàng</th><th>SL</th><th>Thành tiền</th><th>TK Nợ</th><th>Lý do</th></tr>` +
+      dkRows.map((r, i) => `<tr><td>${esc(r.ngay)}</td><td>${esc(r.hd)}</td><td>${esc(r.nguoi_ban || "")}</td><td>${esc(r.ten)}</td><td>${r.sl ?? ""} ${esc(r.dvt)}</td><td style="text-align:right">${money(r.thanh_tien)}</td>
+        <td><input data-i="${i}" value="${esc(r.tk)}" style="width:70px"></td><td class="muted">${esc(r.ly_do)}</td></tr>`).join("");
+    $("dkTable").querySelectorAll("input").forEach(inp => inp.onchange = () => { dkRows[inp.dataset.i].tk = inp.value.trim(); dkRows[inp.dataset.i]._sua = 1; inp.style.background = "#fff6d6"; });
+  } catch (e) { $("dkMsg").textContent = e.message; }
+};
+$("dkSave").onclick = async () => {
+  if (!dkRows.length) return alert("Bấm Gợi ý trước");
+  const pairs = dkRows.filter(r => r._sua || !/mặc định/.test(r.ly_do)).map(r => [r.ten, r.tk]);
+  const r = await tiPost("/api/ti/dinh-khoan/hoc", {pairs}).catch(e => alert(e.message));
+  if (r) $("dkMsg").textContent = `Đã ghi nhớ ${r.n} cách hạch toán – lần sau tự gợi ý & tự điền khi chuyển MISA`;
+};
+$("dkXlsx").onclick = async () => {
+  const r = await fetch("/api/ti/dinh-khoan.xlsx", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(dkBody())});
+  const b = await r.blob(), a = document.createElement("a"); a.href = URL.createObjectURL(b); a.download = `DinhKhoan_MuaVao_${$("dkMst").value}.xlsx`; a.click();
+};
+$("dkLearn").onclick = async () => {
+  const f = $("dkLearnFile").files[0]; if (!f) return alert("Chọn file mua hàng đã hạch toán");
+  const fd = new FormData(); fd.append("file", f);
+  const r = await api("/api/ti/dinh-khoan/hoc-file", {method: "POST", body: fd}).catch(e => alert(e.message));
+  if (r) $("dkMsg").textContent = `Đã học ${r.n} dòng hàng từ file`;
+};
+// XML tờ khai
+async function xmLoadKy() {
+  const r = await api("/api/ti/ky-vat?mst=" + encodeURIComponent($("xmMst").value)).catch(e => alert(e.message));
+  if (!r) return;
+  $("xmKy").innerHTML = r.rows.map(x => `<option value="${esc(x.key)}">${esc(x.label)} – ${x.phai_nop ? "nộp " + money(x.phai_nop) : "khấu trừ " + money(x.chuyen_ky_sau)}</option>`).join("") || `<option value="">(chưa có kết quả Dự báo VAT)</option>`;
+}
+$("xmMst").onchange = xmLoadKy;
+$("xmRun").onclick = async () => {
+  if (!$("xmKy").value) return alert("Công ty này chưa có kết quả Dự báo VAT – vào Dự báo VAT bấm dự báo trước");
+  try {
+    const r = await tiPost("/api/ti/xml-tk", {mst: $("xmMst").value, key: $("xmKy").value, nguoi_ky: $("xmNk").value});
+    $("xmMsg").innerHTML = `Đã xuất: <a href="#" id="xmOpen">${esc(r.file.split(/[\\/]/).pop())}</a> · <a href="#" id="xmDir">Mở thư mục</a><br>${esc(r.ghi_chu)}`;
+    $("xmOpen").onclick = e => { e.preventDefault(); tiOpen(r.file); };
+    $("xmDir").onclick = e => { e.preventDefault(); tiOpen(r.file.replace(/[\\/][^\\/]+$/, "")); };
+  } catch (e) { $("xmMsg").textContent = e.message; }
+};
+
 window.addEventListener("hashchange", () => { if (location.hash === "#ai") { aiOpen(true); history.replaceState(null, "", "#tai"); showPage(); } });
 
 // ----- trang Sao kê & chứng từ -----
@@ -1778,6 +2021,8 @@ function showPage() {
   document.querySelectorAll("nav a").forEach(a => a.classList.toggle("active", a.dataset.page === p));
   if (p === "dulieu" && !window.__dulieuLoaded) { window.__dulieuLoaded = true; loadInvoices(); }
   if (p === "vat") loadVatMsts().then(loadVatInfo);
+  $("tiMenu").classList.toggle("on", TI_PAGES.includes(p)); $("tiMenu").classList.remove("open");
+  if (TI_PAGES.includes(p)) tiEnter(p);
 }
 window.addEventListener("hashchange", showPage);
 showPage();

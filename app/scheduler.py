@@ -361,6 +361,8 @@ class Scheduler:
                     vat.auto_tick()
                     from . import vat_lich      # lịch dự báo / nhắc theo ngày tự chọn trong tháng
                     vat_lich.tick()
+                    from . import tienich      # nhắc hạn nộp thuế / BHXH còn <= 3 ngày
+                    tienich.tick_deadlines()
                     self.vat_error = ""
                 except Exception as e:  # noqa: BLE001
                     self.vat_error = f"Lỗi dự báo VAT tự động: {e}"

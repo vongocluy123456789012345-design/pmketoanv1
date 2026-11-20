@@ -47,7 +47,14 @@ lý AI, không thay thế chuyên viên thuế / luật sư cho quyết định 
 
 4. MÀN HÌNH: mỗi tin nhắn có kèm [Màn hình hiện tại: …] cho biết khách đang ở trang nào và trạng thái app – dùng nó để hiểu \
 câu hỏi ("cái này", "nút này"). Khi khách cần tự thao tác, gọi mo_trang_app để mở đúng trang rồi chỉ từng bước; muốn cho \
-khách xem file kết quả thì gọi mo_file. Hỏi số liệu hóa đơn thì dùng tim_hoa_don, không đoán."""
+khách xem file kết quả thì gọi mo_file. Hỏi số liệu hóa đơn thì dùng tim_hoa_don, không đoán.
+
+5. TOÀN QUYỀN DỮ LIỆU: em đọc được dữ liệu của TẤT CẢ công ty trên máy (tong_quan_khach_hang, thong_tin_cong_ty, han_nop, \
+kết quả sao kê, rủi ro HĐ, lãi lỗ, định khoản…) và được sửa cài đặt / số liệu (cai_dat_vat, nhap_so_lieu_vat, \
+cai_lich_tai_tu_dong, cai_lich_nhac_vat, danh_dau_da_nop, hoc_dinh_khoan, them_mst_rui_ro, xuất XML). Khi khách hỏi chung \
+("hôm nay cần làm gì", "khách nào sắp đến hạn", "công ty X tháng này nộp bao nhiêu") thì tự gọi công cụ lấy số thật rồi \
+trả lời kèm việc nên làm tiếp. Trước khi THAY ĐỔI cài đặt/số liệu mà khách chưa nói rõ giá trị thì hỏi lại một câu; sau khi \
+sửa thì báo đã đổi gì. Không xóa dữ liệu. Hướng dẫn chi tiết từng bước khi khách cần tự làm (mở đúng trang bằng mo_trang_app)."""
 
 try:  # "dạy" AI cách dùng app: hướng dẫn nội bộ đưa vào lời dặn hệ thống
     SYSTEM += "\n\n" + (Path(__file__).resolve().parent / "ai_guide.md").read_text(encoding="utf-8")
@@ -249,11 +256,61 @@ APP_TOOLS = [
           {"mst": S, "thang_tu": {**S, "description": "YYYY-MM"}, "thang_den": {**S, "description": "YYYY-MM"},
            "huong": {"type": "string", "enum": ["purchase", "sold", "all"]}, "tu_khoa": S}),
     _tool("mo_trang_app", "Mở một màn hình của app cho khách xem/thao tác: tai (tải hóa đơn), vat (dự báo VAT), misa (chuyển "
-                          "hóa đơn vào mẫu MISA), tonkho (tổng hợp tồn kho mẫu MISA), chungtu (sao kê & chứng từ), doichieu, lich, nhapfile, dulieu. Với vat có "
+                          "hóa đơn vào mẫu MISA), tonkho (tổng hợp tồn kho mẫu MISA), chungtu (sao kê & chứng từ), doichieu, lich (lịch tự động "
+                          "tải HĐ + nhắc VAT + tài khoản tải tự động), nhapfile, dulieu; menu Tiện ích: tongquan (bảng điều khiển "
+                          "tất cả khách hàng), hannop (lịch hạn nộp), ruiro (rủi ro HĐ đầu vào), dinhkhoan (định khoản mua vào), "
+                          "bbcn (biên bản đối chiếu công nợ), laulo (lãi lỗ & thuế tạm tính), xmltk (xuất XML tờ khai). Với vat có "
                           "thể kèm kỳ (ky_key dạng YYYY-MM hoặc YYYY-Qn, để trống nếu không cần) và mst.",
-          {"trang": {"type": "string", "enum": ["tai", "vat", "misa", "tonkho", "chungtu", "doichieu", "lich", "nhapfile", "dulieu"]},
+          {"trang": {"type": "string", "enum": ["tai", "vat", "misa", "tonkho", "chungtu", "doichieu", "lich", "nhapfile", "dulieu", "tongquan", "hannop", "ruiro", "dinhkhoan", "bbcn", "laulo", "xmltk"]},
            "mst": S, "ky_key": S}),
     _tool("mo_file", "Mở file kết quả (PDF/Excel) hoặc thư mục trong nơi lưu hóa đơn cho khách xem.", {"duong_dan": S}),
+    # ---- đọc toàn bộ dữ liệu các công ty
+    _tool("tong_quan_khach_hang", "Bảng điều khiển TẤT CẢ công ty (MST) trên máy: tên, tháng HĐ mới nhất, đã tải đủ kỳ vừa "
+                                  "xong chưa, VAT kỳ vừa xong / kỳ này, hạn nộp gần nhất chưa nộp, số hạn quá hạn, sao kê "
+                                  "gần nhất, rủi ro HĐ đầu vào. Dùng khi hỏi chung về các khách hàng / việc cần làm.", {}),
+    _tool("thong_tin_cong_ty", "Mọi thông tin của 1 MST: tên, địa chỉ, cơ quan thuế (HTKK), kê khai tháng/quý, các tháng đã tải "
+                               "HĐ, các kỳ đã dự báo VAT, số liệu đã nhập tay cho VAT, kết quả đối chiếu sao kê gần đây.", {"mst": S}),
+    _tool("han_nop", "Lịch hạn nộp (tờ khai GTGT/TNCN, tạm nộp TNDN, BHXH, môn bài, quyết toán) của 1 MST, hoặc mst rỗng = tất "
+                     "cả khách hàng (chỉ hạn chưa nộp). ngay_toi = số ngày xem trước (vd 30).", {"mst": S, "ngay_toi": I}),
+    _tool("danh_dau_da_nop", "Đánh dấu 1 hạn nộp là đã nộp / chưa nộp (key lấy từ han_nop).",
+          {"mst": S, "key": S, "da_nop": {"type": "boolean"}}),
+    _tool("kiem_tra_rui_ro_hd", "Kiểm tra rủi ro HĐ mua vào đã tải trong khoảng ngày (YYYY-MM-DD): hủy/thay thế/điều chỉnh, "
+                                "trùng, sai MST/tên người mua, MST bán sai, thuế lệch thuế suất, 8% hết hạn, MST rủi ro, ≥5tr "
+                                "cần chứng từ không tiền mặt.", {"mst": S, "tu": S, "den": S}),
+    _tool("them_mst_rui_ro", "Thêm các MST doanh nghiệp rủi ro / bỏ địa chỉ kinh doanh vào danh sách kiểm tra (chuỗi chứa MST).",
+          {"danh_sach": S}),
+    _tool("uoc_tinh_lai_lo", "Ước tính lãi lỗ + thuế TNDN tạm tính (doanh nghiệp) hoặc thuế khoán % doanh thu (hộ kinh doanh) từ "
+                             "HĐ đã tải. luong, chi_phi_khac: số tiền (0 nếu không có); thue_suat 0 = tự xác định; nhom_hkd "
+                             "cho hộ kinh doanh.",
+          {"mst": S, "tu": S, "den": S, "luong": {"type": "number"}, "chi_phi_khac": {"type": "number"},
+           "thue_suat": {"type": "number"},
+           "nhom_hkd": {"type": "string", "enum": ["phan_phoi", "dich_vu", "san_xuat", "khac", "cho_thue_ts"]}}),
+    _tool("goi_y_dinh_khoan", "Gợi ý TK Nợ cho từng dòng hàng HĐ mua vào trong khoảng ngày (đã học / từ khóa / mặc định).",
+          {"mst": S, "tu": S, "den": S, "che_do": {"type": "string", "enum": ["TT200", "TT133"]}}),
+    _tool("hoc_dinh_khoan", "Ghi nhớ cách hạch toán: danh sách {ten_hang, tk} – lần sau tự gợi ý và tự điền TK khi chuyển MISA.",
+          {"cap": {"type": "array", "items": {"type": "object", "properties": {"ten_hang": S, "tk": S},
+                                               "required": ["ten_hang", "tk"], "additionalProperties": False}}}),
+    _tool("xuat_xml_to_khai", "Xuất XML tờ khai 01/GTGT (cấu trúc HTKK) từ kết quả dự báo VAT đã lập. ky_key: YYYY-MM hoặc "
+                              "YYYY-Qn.", {"mst": S, "ky_key": S, "nguoi_ky": S}),
+    _tool("ket_qua_sao_ke", "Các lần đối chiếu sao kê ngân hàng gần đây của 1 MST: kỳ, số giao dịch, số khớp hóa đơn, thống kê, "
+                            "đường dẫn file kết quả.", {"mst": S}),
+    # ---- chỉnh sửa / cài đặt (quyền cao)
+    _tool("cai_dat_vat", "Đổi cài đặt kê khai VAT của 1 MST: kieu M (tháng) / Q (quý), auto = tự dự báo đầu kỳ sau.",
+          {"mst": S, "kieu": {"type": "string", "enum": ["M", "Q"]}, "auto": {"type": "boolean"}}),
+    _tool("nhap_so_lieu_vat", "Nhập / sửa số liệu tay cho tờ khai VAT 1 kỳ rồi dự báo lại (vd 22 = thuế còn khấu trừ kỳ trước, "
+                              "23a/24a nhập khẩu, 37/38 điều chỉnh, 40b…). Giữ các số đã nhập khác.",
+          {"mst": S, "kieu": {"type": "string", "enum": ["M", "Q"]}, "ky": I, "nam": I,
+           "chi_tieu": {"type": "array", "items": {"type": "object", "properties": {"ma": S, "so": {"type": "number"}},
+                                                   "required": ["ma", "so"], "additionalProperties": False}}}),
+    _tool("xem_lich_tu_dong", "Xem cài đặt lịch tự động tải HĐ (ngày giờ, kỳ, loại HĐ, công ty đã lưu tài khoản) và lịch nhắc "
+                              "dự báo VAT.", {}),
+    _tool("cai_lich_tai_tu_dong", "Cài lịch tự động tải HĐ: bat, ngay (1-31), gio, phut, ky (truoc = tháng trước, nay, quy_truoc, "
+                                  "quy_nay, thang/quy/khoang dùng tu-den YYYY-MM-DD), loai HĐ. Hỏi lại khách trước khi đổi.",
+          {"bat": {"type": "boolean"}, "ngay": I, "gio": I, "phut": I,
+           "ky": {"type": "string", "enum": ["truoc", "nay", "quy_truoc", "quy_nay", "thang", "quy", "khoang"]},
+           "tu": S, "den": S, "loai": {"type": "array", "items": {"type": "string", "enum": KINDS}}}),
+    _tool("cai_lich_nhac_vat", "Cài lịch nhắc / tự dự báo VAT: bat, ngay = các ngày trong tháng (vd '1,15'), gio 'HH:MM'.",
+          {"bat": {"type": "boolean"}, "ngay": S, "gio": S}),
 ]
 WEB_TOOLS = [
     {"type": "web_search_20260209", "name": "web_search", "max_uses": 6, "allowed_domains": LAW_DOMAINS},
@@ -419,12 +476,114 @@ def _run_tool(name: str, a: dict[str, Any]) -> Any:
         return find_invoices(a["mst"], a["thang_tu"], a["thang_den"], a.get("huong", "all"), a.get("tu_khoa", ""))
     if name == "mo_trang_app":
         return {"ok": True, "ui": {"type": "page", "page": a["trang"], "mst": a.get("mst", ""), "key": a.get("ky_key", "")}}
+    if name in TI_TOOLS:
+        return _run_ti(name, a)
     if name == "mo_file":
         p = Path(a["duong_dan"])
         base = Path(settings.output_dir).resolve()
         if not p.resolve().is_relative_to(base) or not p.exists():
             return {"loi": "Chỉ mở được file/thư mục có thật trong nơi lưu hóa đơn."}
         return {"ok": True, "ui": {"type": "file", "path": str(p)}}
+    return {"loi": f"Không có công cụ {name}"}
+
+
+TI_TOOLS = {"tong_quan_khach_hang", "thong_tin_cong_ty", "han_nop", "danh_dau_da_nop", "kiem_tra_rui_ro_hd",
+            "them_mst_rui_ro", "uoc_tinh_lai_lo", "goi_y_dinh_khoan", "hoc_dinh_khoan", "xuat_xml_to_khai", "ket_qua_sao_ke",
+            "cai_dat_vat", "nhap_so_lieu_vat", "xem_lich_tu_dong", "cai_lich_tai_tu_dong", "cai_lich_nhac_vat"}
+
+
+def _range(a: dict[str, Any]) -> tuple[Any, Any]:
+    from datetime import date
+    t = date.today()
+    try:
+        d1 = date.fromisoformat(str(a.get("tu") or "")[:10])
+    except ValueError:
+        d1 = date(t.year, t.month, 1)
+    try:
+        d2 = date.fromisoformat(str(a.get("den") or "")[:10])
+    except ValueError:
+        d2 = t
+    return d1, max(d1, d2)
+
+
+def _run_ti(name: str, a: dict[str, Any]) -> Any:
+    import re
+    import json as _json
+
+    from . import tienich, vat
+    mst = re.sub(r"[^\d-]", "", str(a.get("mst") or ""))
+    if name == "tong_quan_khach_hang":
+        return tienich.dashboard()
+    if name == "thong_tin_cong_ty":
+        cfg = vat.get_cfg(mst)
+        return {**tienich.company(mst), "kieu_ke_khai": cfg["kieu"], "tu_du_bao": cfg["auto"],
+                "so_lieu_nhap_tay": cfg["inputs"], "thang_da_tai": tienich.months_of(mst), "du_bao_vat": vat.history(mst)[:12],
+                "sao_ke": _run_ti("ket_qua_sao_ke", a)}
+    if name == "han_nop":
+        n = int(a.get("ngay_toi") or 45)
+        rows = tienich.deadlines(mst, ahead=n) if mst else tienich.all_deadlines(ahead=n)
+        return rows[:60]
+    if name == "danh_dau_da_nop":
+        return tienich.mark_done(mst, a["key"], bool(a.get("da_nop", True)))
+    if name == "kiem_tra_rui_ro_hd":
+        r = tienich.risk_check(mst, *_range(a))
+        return {**{k: v for k, v in r.items() if k != "issues"}, "issues": r["issues"][:40],
+                "ghi_chu": "Xem đầy đủ / tải Excel ở menu Tiện ích → Kiểm tra rủi ro hóa đơn đầu vào"}
+    if name == "them_mst_rui_ro":
+        return {"danh_sach": tienich.set_risky_list("\n".join(tienich.risky_list()) + "\n" + a.get("danh_sach", ""))}
+    if name == "uoc_tinh_lai_lo":
+        return tienich.profit(mst, *_range(a), float(a.get("chi_phi_khac") or 0), float(a.get("luong") or 0),
+                              a.get("nhom_hkd") or "phan_phoi", float(a.get("thue_suat") or 0) or None)
+    if name == "goi_y_dinh_khoan":
+        rows = tienich.purchase_lines(mst, *_range(a), a.get("che_do") or "TT200")
+        return {"so_dong": len(rows), "dong": rows[:60]}
+    if name == "hoc_dinh_khoan":
+        return {"da_hoc": tienich.learn_tk([(x["ten_hang"], x["tk"]) for x in a.get("cap", [])])}
+    if name == "xuat_xml_to_khai":
+        try:
+            f, note = tienich.vat_xml(mst, a["ky_key"], a.get("nguoi_ky", ""))
+        except ValueError as e:
+            return {"loi": str(e)}
+        return {"file": str(f), "ghi_chu": note}
+    if name == "ket_qua_sao_ke":
+        d = Path(settings.output_dir) / mst / "DocChungTu"
+        out = []
+        for f in sorted(d.glob("KetQua_GhepThuChi_*.json"))[-5:] if d.is_dir() else []:
+            try:
+                out.append(_json.loads(f.read_text(encoding="utf-8")))
+            except ValueError:
+                pass
+        if not out and d.is_dir():
+            out = [{"file": str(f)} for f in sorted(d.glob("KetQua_GhepThuChi_*.xlsx"))[-5:]]
+        return out or {"ghi_chu": "Chưa đối chiếu sao kê cho MST này"}
+    if name == "cai_dat_vat":
+        return vat.set_cfg(mst, kieu=a.get("kieu", "M"), auto=bool(a.get("auto", True)))
+    if name == "nhap_so_lieu_vat":
+        kieu, ky, nam = a.get("kieu", "M"), int(a["ky"]), int(a["nam"])
+        key = vat.period_key(kieu, ky, nam)
+        inputs = dict(vat.get_cfg(mst)["inputs"].get(key, {}))
+        for x in a.get("chi_tieu", []):
+            inputs[str(x["ma"]).strip().lstrip("[").rstrip("]")] = float(x["so"])
+        r = vat.forecast(mst, kieu, ky, nam, inputs, source="manual")
+        return {k: r.get(k) for k in ("label", "phai_nop", "chuyen_ky_sau", "warnings", "files")} | {"so_lieu_nhap": inputs}
+    if name == "xem_lich_tu_dong":
+        from . import vat_lich
+        from .scheduler import SCHEDULER
+        d = vat_lich.get()
+        return {"tai_hoa_don": SCHEDULER.status(), "nhac_vat": {**d, "mo_ta": vat_lich.describe(d)}}
+    if name == "cai_lich_tai_tu_dong":
+        from .scheduler import SCHEDULER
+        SCHEDULER.configure(bool(a.get("bat")), int(a.get("ngay") or 5), int(a.get("gio") or 8),
+                            a.get("loai") or ["mua-vao", "mua-vao-khong-ma", "ban-ra"], int(a.get("phut") or 0),
+                            a.get("ky") or "truoc", a.get("tu", ""), a.get("den", ""))
+        return SCHEDULER.status()
+    if name == "cai_lich_nhac_vat":
+        from . import vat_lich
+        try:
+            d = vat_lich.save(bool(a.get("bat")), a.get("ngay", ""), a.get("gio") or "08:00")
+        except ValueError as e:
+            return {"loi": str(e)}
+        return {**d, "mo_ta": vat_lich.describe(d)}
     return {"loi": f"Không có công cụ {name}"}
 
 
