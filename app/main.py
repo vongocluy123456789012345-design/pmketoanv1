@@ -354,6 +354,35 @@ def slots_stop():
     return {"ok": True}
 
 
+# ---------- dự báo VAT nhiều công ty (dùng chung các trang HĐĐT với Tải nhiều công ty) ----------
+@app.get("/api/vat-multi")
+def vat_multi_status(ns: str = "1,2"):
+    from . import vat_multi
+    from .gdt.browser import BROWSER
+    nums = sorted({int(x) for x in ns.split(",") if x.strip().isdigit() and 0 < int(x) <= 30}) or [1]
+    st = BROWSER.slots_status(nums)
+    return {"items": [{"n": n, **st.get(n, {}), "run": vat_multi.public(n)} for n in nums]}
+
+
+class VatMultiIn(BaseModel):
+    slots: list[int]
+    thang: str                      # YYYY-MM
+    kieu: dict[str, str] = {}       # số trang -> "auto" | "M" | "Q"
+    doc_cong: bool = True           # đọc hóa đơn mới trên cổng trước khi dự báo
+    mtt: bool = True                # đọc cả hóa đơn máy tính tiền (cổng hỏi captcha)
+
+
+@app.post("/api/vat-multi/start")
+def vat_multi_start(body: VatMultiIn):
+    import re as _re
+
+    from . import vat_multi
+    if not _re.fullmatch(r"20\d\d-(0[1-9]|1[0-2])", body.thang or ""):
+        raise HTTPException(400, "Chọn tháng cần dự báo")
+    return {"items": [vat_multi.start(n, body.thang, body.kieu.get(str(n), "auto"), body.doc_cong, body.mtt)
+                      for n in sorted(set(body.slots))]}
+
+
 # ---------- nơi lưu hóa đơn ----------
 @app.get("/api/settings")
 def settings_get():

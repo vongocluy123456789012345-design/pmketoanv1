@@ -100,27 +100,35 @@ def _name(ad, inv: dict[str, Any]) -> str:
 
 
 def read_period(mst: str, kieu: str, ky: int, nam: int, details: bool = True,
-                kinds: list[str] | None = None) -> dict[str, Any]:
+                kinds: list[str] | None = None, inline: bool = False) -> dict[str, Any]:
     """Đọc nhanh hóa đơn cả kỳ trên Chrome đang đăng nhập cổng (đúng MST). Dữ liệu lưu vào .dulieu_YYYY-MM.json để dự báo
     VAT dùng ngay. Loại máy tính tiền có thể hiện ô captcha cho khách nhập (mục Tải hóa đơn, có tiếng báo)."""
     from . import auto_download as ad
     from . import reports, vat
     from .gdt.browser import BROWSER
 
-    st = BROWSER.status()
-    if not st.get("logged_in"):
-        return {"loi": "Chưa đăng nhập cổng thuế – gọi open_portal và nhờ khách tự đăng nhập."}
-    if str(st.get("mst")) != mst:
-        return {"loi": f"Chrome đang đăng nhập MST {st.get('mst')}, không phải {mst}. Nhờ khách đăng xuất và đăng nhập "
-                       f"bằng MST {mst}."}
-    if ad.busy():
-        return {"loi": "Đang có lượt tải hóa đơn khác chạy – chờ xong rồi đọc nhanh."}
+    token = BROWSER.thread_token()      # dự báo VAT nhiều công ty: luồng này dùng phiên của 1 trang HĐĐT
+    if token:
+        if BROWSER.token_info(token)["mst"] != mst:
+            return {"loi": f"Trang HĐĐT đang đăng nhập MST {BROWSER.token_info(token)['mst']}, không phải {mst}."}
+        if any(j.status == "running" and j.mst == mst for j in ad.JOBS.values()):
+            return {"loi": f"MST {mst} đang có lượt tải / đọc khác chạy – chờ xong."}
+    else:
+        st = BROWSER.status()
+        if not st.get("logged_in"):
+            return {"loi": "Chưa đăng nhập cổng thuế – gọi open_portal và nhờ khách tự đăng nhập."}
+        if str(st.get("mst")) != mst:
+            return {"loi": f"Chrome đang đăng nhập MST {st.get('mst')}, không phải {mst}. Nhờ khách đăng xuất và đăng "
+                           f"nhập bằng MST {mst}."}
+        if ad.busy():
+            return {"loi": "Đang có lượt tải hóa đơn khác chạy – chờ xong rồi đọc nhanh."}
     t0 = time.time()
     kinds = [k for k in (kinds or ALL_KINDS) if k in ad.KINDS]
     months = [(y, m) for y, m in vat.period_months(kieu, ky, nam) if date(y, m, 1) <= date.today()]
     job = ad.AutoJob("quick-" + mst, [(date(y, m, 1), date(y, m, monthrange(y, m)[1])) for y, m in months], kinds,
                      False, False, False)
     job.mst = mst
+    job.token, job.slot = token or "", BROWSER.thread_slot() if token else 0
     ad.JOBS[job.id] = job  # để giao diện hiện ô captcha (máy tính tiền) như khi tải thường
     job.say(f"Đọc nhanh hóa đơn {vat.period_label(kieu, ky, nam)} – MST {mst}")
     rn = ad.Runner(job)
@@ -203,6 +211,18 @@ def read_period(mst: str, kieu: str, ky: int, nam: int, details: bool = True,
         job.captcha = None
     stat["giay"] = round(time.time() - t0, 1)
     stat["can_lay_chi_tiet"] = len(pending)
+    if inline:   # bên gọi tự lập dự báo: lấy chi tiết ngay trên luồng này (giữ đúng phiên của trang HĐĐT)
+        STATE[mst] = {"total": len(pending), "done": 0, "status": "running"}
+        job.say(f"Lấy chi tiết từng mặt hàng của {len(pending)} hóa đơn")
+        try:
+            if pending:
+                _fetch_details(pending, lambda n: STATE[mst].__setitem__("done", n))
+                _relink(mst, kieu, ky, nam)
+            STATE[mst]["status"] = "done"
+        except Exception as e:  # noqa: BLE001 - vẫn lập dự báo bằng dữ liệu đã có
+            STATE[mst]["status"] = f"error: {e}"
+            stat["canh_bao"].append(f"Chưa lấy đủ chi tiết mặt hàng: {str(e)[:150]}")
+        return stat
     if details and pending:
         STATE[mst] = {"total": len(pending), "done": 0, "status": "running"}
         threading.Thread(target=_details, args=(mst, kieu, ky, nam, pending), daemon=True, name="quick-detail").start()

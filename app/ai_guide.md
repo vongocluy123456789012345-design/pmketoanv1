@@ -61,7 +61,12 @@ dự báo thuế GTGT, đối chiếu tờ khai, đọc chứng từ và đối 
   nhập captcha); cần thêm công ty bấm "+ Thêm trang HĐĐT"; xong bấm "Bắt đầu tải tất cả" – các trang tải song song, mỗi trang
   có ô nhật ký đen riêng, lưu vào thư mục MST từng công ty. Trang 1 là cửa sổ cổng thuế chính. Mỗi lượt giữ phiên của công ty
   lúc bấm tải nên đổi tài khoản trên cửa sổ giữa chừng không làm lẫn dữ liệu. Cổng giới hạn số lần gọi theo máy: phần mềm tự
-  giãn nhịp khi cổng báo quá tải. Tắt phần mềm thì các cửa sổ trang 2, 3... phải đăng nhập lại. – em làm được bằng công cụ, khách xem bằng mo_trang_app
+  giãn nhịp khi cổng báo quá tải. Tắt phần mềm thì các cửa sổ trang 2, 3... phải đăng nhập lại.
+- Dự báo VAT nhiều công ty cùng lúc (vatnhieu): dùng chung các trang HĐĐT (cửa sổ Chrome) với mục tải nhiều công ty. Chọn tháng,
+  bấm "Dự báo tất cả": mỗi trang đọc nhanh hóa đơn kỳ đó trên cổng của công ty đang đăng nhập ở trang (kỳ tháng/quý theo cài
+  đặt từng công ty, đổi được ở từng trang), lấy chi tiết mặt hàng rồi lập tờ khai 01/GTGT dự kiến; hiện Phải nộp [40], Chuyển kỳ
+  sau [43], bảng tổng hợp các công ty, link Excel/PDF và tin nhắn gửi khách. [22] và số nhập tay lấy theo mục Dự báo VAT của
+  từng công ty (sửa ở đó). Bỏ chọn "Đọc cả hóa đơn máy tính tiền" nếu công ty không có loại này để khỏi chờ captcha. – em làm được bằng công cụ, khách xem bằng mo_trang_app
 - Bảng điều khiển (tongquan, công cụ tong_quan_khach_hang): mọi công ty trên máy, đã tải đủ HĐ kỳ vừa xong chưa, VAT phải
   nộp / khấu trừ, hạn gần nhất, sao kê, rủi ro HĐ. Khách hỏi "hôm nay cần làm gì" → gọi công cụ này + han_nop rồi liệt kê việc
   theo thứ tự hạn (quá hạn trước), mỗi việc kèm bước làm.

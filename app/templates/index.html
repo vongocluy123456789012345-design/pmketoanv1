@@ -138,6 +138,7 @@
   <div class="tiMenu" id="tiMenu"><a href="#" id="tiBtn">☰ Tiện ích ▾</a>
     <div class="tiDrop">
       <a href="#tainhieu" data-page="tainhieu">⬇️ Tải hóa đơn nhiều công ty cùng lúc</a>
+      <a href="#vatnhieu" data-page="vatnhieu">🧮 Dự báo VAT nhiều công ty cùng lúc</a>
       <a href="#tongquan" data-page="tongquan">📊 Bảng điều khiển tất cả khách hàng</a>
       <a href="#hannop" data-page="hannop">📅 Lịch hạn nộp thuế &amp; nhắc việc</a>
       <a href="#kiemxuat" data-page="kiemxuat">🔎 Kiểm tra đầu vào trước khi xuất HĐ</a>
@@ -182,6 +183,28 @@
     <div id="tnMsg" class="muted" style="margin-top:6px"></div>
   </section>
   <div id="tnGrid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(480px,1fr));gap:14px"></div>
+ </div>
+ <div class="page" id="page-vatnhieu">
+  <section class="card" style="border-color:var(--pri)">
+    <h2>Dự báo VAT nhiều công ty cùng lúc</h2>
+    <p class="muted">Dùng chung các <b>trang HĐĐT</b> với mục Tải hóa đơn nhiều công ty: mỗi trang là 1 cửa sổ Chrome đăng nhập 1 công ty
+      (đã đăng nhập ở đó thì khỏi đăng nhập lại). Bấm <b>Dự báo tất cả</b>: mỗi trang tự đọc nhanh hóa đơn mua vào – bán ra của kỳ trên cổng
+      (cả máy tính tiền, có tự giải captcha), lấy chi tiết mặt hàng rồi lập tờ khai 01/GTGT dự kiến – <b>các trang chạy song song</b>,
+      mỗi trang có ô nhật ký riêng. Kỳ kê khai lấy theo cài đặt từng công ty (tháng / quý chứa tháng đã chọn), đổi được ở từng trang.
+      Số dư khấu trừ kỳ trước [22] và các số nhập tay lấy theo mục <a href="#vat" data-page="vat">Dự báo VAT</a> của từng công ty.</p>
+    <div class="inline" style="align-items:flex-end">
+      <div><label>Tháng cần dự báo</label><input id="vnThang" type="month"></div>
+      <div style="flex:2"><label style="display:inline"><input type="checkbox" id="vnDoc" checked style="width:auto"> Đọc hóa đơn mới nhất trên cổng trước khi dự báo</label>
+        <div class="muted">Bỏ chọn = chỉ dùng hóa đơn đã tải / đã đọc trước đó (nhanh, vẫn cần trang đã đăng nhập để biết MST).</div>
+        <label style="display:inline"><input type="checkbox" id="vnMtt" checked style="width:auto"> Đọc cả hóa đơn máy tính tiền</label>
+        <span class="muted">(cổng hỏi captcha – phần mềm thử tự đọc, không được thì hiện ô nhập ở từng trang; công ty không có HĐ máy tính tiền thì bỏ chọn cho nhanh)</span></div>
+      <div style="flex:0 0 auto"><button id="vnAdd" class="sec">+ Thêm trang HĐĐT</button></div>
+      <div style="flex:0 0 auto"><button id="vnAll">Dự báo tất cả</button></div>
+    </div>
+    <div id="vnMsg" class="muted" style="margin-top:6px"></div>
+    <div id="vnSum" style="margin-top:8px"></div>
+  </section>
+  <div id="vnGrid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(480px,1fr));gap:14px"></div>
  </div>
  <div class="page" id="page-tongquan">
   <section class="card">
@@ -1739,9 +1762,9 @@ $("btnAiKeyDel").onclick = async () => { await api("/api/ai/key", {method: "POST
 aiStatus();
 
 // ----- chuyển trang theo menu (#tai, #vat, #doichieu, #lich, #nhapfile, #dulieu); #ai = mở bóng chat -----
-const PAGES = ["tai", "vat", "misa", "tonkho", "chungtu", "doichieu", "lich", "nhapfile", "dulieu", "tongquan", "hannop", "ruiro", "laulo", "bbcn", "dinhkhoan", "xmltk", "kiemxuat", "tainhieu"];
+const PAGES = ["tai", "vat", "misa", "tonkho", "chungtu", "doichieu", "lich", "nhapfile", "dulieu", "tongquan", "hannop", "ruiro", "laulo", "bbcn", "dinhkhoan", "xmltk", "kiemxuat", "tainhieu", "vatnhieu"];
 // ----- ☰ Tiện ích -----
-const TI_PAGES = ["tongquan", "hannop", "ruiro", "laulo", "bbcn", "dinhkhoan", "xmltk", "kiemxuat", "tainhieu"];
+const TI_PAGES = ["tongquan", "hannop", "ruiro", "laulo", "bbcn", "dinhkhoan", "xmltk", "kiemxuat", "tainhieu", "vatnhieu"];
 let tiCos = null;
 $("tiBtn").onclick = e => { e.preventDefault(); $("tiMenu").classList.toggle("open"); };
 document.addEventListener("click", e => { if (!$("tiMenu").contains(e.target)) $("tiMenu").classList.remove("open"); });
@@ -1775,7 +1798,139 @@ async function tiEnter(p) {
   if (p === "xmltk") xmLoadKy();
   if (p === "kiemxuat") kxKhoInfo();
   if (p === "tainhieu") tnEnter();
+  if (p === "vatnhieu") vnEnter();
 }
+// ----- dự báo VAT nhiều công ty (dùng chung trang HĐĐT với tải nhiều công ty) -----
+let vnTimer = null, vnLast = {};
+function vnCard(n) {
+  let el = document.querySelector(`.vnSlot[data-n="${n}"]`);
+  if (el) return el;
+  el = document.createElement("section");
+  el.className = "card vnSlot"; el.dataset.n = n; el.style.margin = "0";
+  el.innerHTML = `<div class="inline" style="align-items:center">
+      <div style="flex:0 0 auto"><b style="font-size:15px">Trang HĐĐT ${n}</b></div>
+      <div style="flex:1;min-width:150px"><select class="tnUser"><option value="">– Tài khoản đã lưu (tùy chọn) –</option></select></div>
+      <div style="flex:0 0 auto"><button class="vnOpen">Mở trang HĐĐT ${n}</button></div>
+    </div>
+    <div style="margin-top:6px"><span class="badge pending vnState">Chưa mở</span> <span class="muted vnInfo"></span></div>
+    <div class="inline" style="margin-top:6px;align-items:center">
+      <div style="flex:0 0 auto"><select class="vnKieu" title="Kỳ kê khai"><option value="auto">Kỳ theo cài đặt công ty</option><option value="M">Theo tháng</option><option value="Q">Theo quý</option></select></div>
+      <div style="flex:1" class="muted vnStep"></div>
+      <div style="flex:0 0 auto"><button class="sec vnStart" style="padding:3px 10px">Dự báo trang này</button>
+        ${n > 1 ? `<a href="#" class="vnDel muted" title="Đóng cửa sổ và bỏ trang này">✕</a>` : ""}</div>
+    </div>
+    <div class="vnRes" style="display:none;margin-top:8px;padding:10px;border-radius:8px;background:var(--bg)"></div>
+    <div class="vnCap" style="display:none;margin-top:6px;padding:8px;border:1px solid var(--warn);border-radius:6px;background:#fff8c5">
+      <b>Nhập captcha</b> <span class="muted vnCapWhy"></span><br>
+      <img class="vnCapImg" style="height:40px;background:#fff;border:1px solid var(--b);border-radius:6px;vertical-align:middle">
+      <input class="vnCapVal" autocomplete="off" placeholder="Mã trong ảnh" style="width:130px;display:inline-block">
+      <button class="vnCapOk" style="padding:3px 10px">Gửi</button> <button class="sec vnCapSkip" style="padding:3px 10px">Bỏ qua</button></div>
+    <div class="vnLog" style="background:#0d1117;color:#c9d1d9;font:12px Consolas,monospace;padding:8px;height:170px;overflow:auto;border-radius:6px;white-space:pre-wrap;margin-top:6px"></div>`;
+  $("vnGrid").appendChild(el);
+  tnFillUsers(el);
+  return el;
+}
+const vnMoney = v => Math.round(Number(v) || 0).toLocaleString("vi-VN");
+function vnResHtml(r, run) {
+  const nop = r.phai_nop > 0;
+  return `<div style="display:flex;gap:18px;flex-wrap:wrap;align-items:baseline">
+      <div><div class="muted">${esc(r.company || run.mst)} – ${esc(r.label || run.label)}</div>
+        <div style="font-size:20px;font-weight:700;color:${nop ? "var(--err)" : "var(--ok)"}">${nop ? "Phải nộp " + vnMoney(r.phai_nop) + " đ" : "Không phải nộp"}</div>
+        ${r.chuyen_ky_sau > 0 ? `<div><b>Còn khấu trừ chuyển kỳ sau [43]: ${vnMoney(r.chuyen_ky_sau)} đ</b></div>` : ""}</div>
+      <div class="muted" style="line-height:1.6">Doanh thu [34]: ${vnMoney(r.doanh_thu)} · Thuế bán ra [35]: ${vnMoney(r.thue_ra)}<br>
+        Thuế mua vào được khấu trừ [25]: ${vnMoney(r.thue_vao)} · Kỳ trước chuyển sang [22]: ${vnMoney(r.ct22)}<br>
+        HĐ bán ra ${r.n_items ? r.n_items.sold : 0} dòng · mua vào ${r.n_items ? r.n_items.purchase : 0} dòng${r.chua_het_ky ? " · <b>kỳ chưa kết thúc – số tạm tính</b>" : ""}</div></div>
+    ${[...(r.missing || []), ...(r.warnings || [])].length ? `<div style="color:var(--warn);margin-top:6px">⚠️ ${[...(r.missing || []), ...(r.warnings || [])].slice(0, 4).map(esc).join("<br>⚠️ ")}</div>` : ""}
+    <div style="margin-top:6px">${r.files.xlsx ? `<a href="#" data-vnopen="${esc(r.files.xlsx)}">Mở Excel tờ khai</a> · ` : ""}${r.files.pdf ? `<a href="#" data-vnopen="${esc(r.files.pdf)}">PDF</a> · ` : ""}
+      <a href="#" data-vndet="${esc(JSON.stringify({mst: run.mst, kieu: r.kieu, ky: r.ky, nam: r.nam}))}">Xem chi tiết / nhập số liệu ở mục Dự báo VAT</a>
+      ${r.tom_tat ? ` · <a href="#" data-vncopy="${run.n}">Chép tin nhắn gửi khách</a>` : ""}</div>`;
+}
+function vnRender(items) {
+  const rows = [];
+  for (const it of items) {
+    const el = vnCard(it.n), q = c => el.querySelector(c), run = it.run;
+    const st = q(".vnState");
+    if (!it.open) { st.textContent = "Chưa mở"; st.className = "badge pending vnState"; }
+    else if (!it.logged_in) { st.textContent = it.expired ? "Phiên hết hạn – đăng nhập lại" : "Chờ đăng nhập trên cửa sổ Chrome…"; st.className = "badge rendered vnState"; }
+    else { st.textContent = "Đã đăng nhập MST " + (it.mst || ""); st.className = "badge original vnState"; }
+    const busy = run && run.status === "running";
+    q(".vnStart").disabled = busy || !it.logged_in;
+    vnLast[it.n] = run;
+    if (!run) { q(".vnStep").textContent = ""; q(".vnRes").style.display = "none"; continue; }
+    q(".vnStep").textContent = `MST ${run.mst} · ${run.label} · ${run.buoc}` + (run.chi_tiet ? ` ${run.chi_tiet.done}/${run.chi_tiet.total} HĐ` : "") +
+      (run.doc ? ` · đọc ${run.doc.mua_vao} HĐ mua vào, ${run.doc.ban_ra} HĐ bán ra` : "") + (run.xong_luc ? ` · lúc ${run.xong_luc}` : "");
+    const box = q(".vnRes");
+    if (run.status === "error") { box.style.display = ""; box.innerHTML = `<b style="color:var(--err)">Lỗi:</b> ${esc(run.error)}`; }
+    else if (run.result) { box.style.display = ""; const h = vnResHtml(run.result, run); if (box.dataset.h !== h) { box.innerHTML = h; box.dataset.h = h; } }
+    else box.style.display = "none";
+    const lg = q(".vnLog"), atEnd = lg.scrollTop + lg.clientHeight >= lg.scrollHeight - 20, txt = (run.log || []).join("\n");
+    if (lg.textContent !== txt) { lg.textContent = txt; if (atEnd) lg.scrollTop = lg.scrollHeight; }
+    const cap = q(".vnCap");
+    if (busy && run.captcha) { if (cap.style.display === "none") { cap.style.display = ""; q(".vnCapVal").value = ""; }
+      cap.dataset.job = run.job_id; q(".vnCapImg").src = run.captcha.image; q(".vnCapWhy").textContent = run.captcha.reason || ""; }
+    else cap.style.display = "none";
+    if (run.result) rows.push([run, run.result]);
+  }
+  $("vnSum").innerHTML = rows.length ? `<table><tr><th>Trang</th><th>MST</th><th>Công ty</th><th>Kỳ</th><th style="text-align:right">Doanh thu [34]</th><th style="text-align:right">Thuế ra [35]</th><th style="text-align:right">Thuế vào [25]</th><th style="text-align:right">Phải nộp [40]</th><th style="text-align:right">Chuyển kỳ sau [43]</th></tr>` +
+    rows.map(([run, r]) => `<tr><td>${run.n}</td><td>${esc(run.mst)}</td><td>${esc(r.company || "")}</td><td>${esc(r.label || run.label)}</td><td style="text-align:right">${vnMoney(r.doanh_thu)}</td><td style="text-align:right">${vnMoney(r.thue_ra)}</td><td style="text-align:right">${vnMoney(r.thue_vao)}</td>
+      <td style="text-align:right;font-weight:700;color:${r.phai_nop > 0 ? "var(--err)" : "inherit"}">${vnMoney(r.phai_nop)}</td><td style="text-align:right">${vnMoney(r.chuyen_ky_sau)}</td></tr>`).join("") + `</table>` : "";
+}
+async function vnPoll() {
+  if (!document.getElementById("page-vatnhieu").classList.contains("active") && vnTimer) { clearInterval(vnTimer); vnTimer = null; return; }
+  try { vnRender((await api("/api/vat-multi?ns=" + tnSlots.join(","))).items); } catch (e) {}
+}
+async function vnEnter() {
+  if (!$("vnThang").value) { const d = new Date(); d.setMonth(d.getMonth() - 1); $("vnThang").value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; }
+  const r = await api("/api/gdt-accounts").catch(() => ({items: []}));
+  tnAccs = (r.items || []);
+  document.querySelectorAll(".vnSlot").forEach(el => { if (!tnSlots.includes(+el.dataset.n)) el.remove(); });
+  tnSlots.forEach(n => tnFillUsers(vnCard(n)));
+  vnPoll();
+  if (!vnTimer) vnTimer = setInterval(vnPoll, 2000);
+}
+async function vnStart(slots) {
+  unlockAlerts();
+  const kieu = {}; slots.forEach(n => { kieu[n] = vnCard(n).querySelector(".vnKieu").value; });
+  try {
+    const r = await api("/api/vat-multi/start", {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({slots, thang: $("vnThang").value, kieu, doc_cong: $("vnDoc").checked, mtt: $("vnMtt").checked})});
+    const ok = r.items.filter(x => x.ok), bad = r.items.filter(x => !x.ok);
+    $("vnMsg").textContent = (ok.length ? `Đang dự báo ${ok.length} công ty: ${ok.map(x => `trang ${x.n} – ${x.mst} (${x.label})`).join(", ")}. ` : "") +
+      (bad.length ? "Chưa dự báo: " + bad.map(x => `trang ${x.n} – ${x.msg}`).join("; ") : "");
+    vnPoll();
+  } catch (e) { alert(e.message); }
+}
+$("vnAdd").onclick = () => { const n = Math.max(0, ...tnSlots) + 1; tnSlots.push(n); tnSave(); vnCard(n); vnPoll(); };
+$("vnAll").onclick = () => vnStart(tnSlots);
+$("vnGrid").addEventListener("click", async ev => {
+  const card = ev.target.closest(".vnSlot"); if (!card) return;
+  const n = +card.dataset.n, q = c => card.querySelector(c), t = ev.target, d = t.dataset;
+  if (t.classList.contains("vnOpen")) {
+    t.disabled = true; q(".vnInfo").textContent = "Đang mở cửa sổ Chrome…";
+    try { const r = await api(`/api/slots/${n}/open`, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({user: q(".tnUser").value})});
+      q(".vnInfo").textContent = r.msg || (r.logged_in ? "" : "Đăng nhập công ty trên cửa sổ Chrome vừa mở"); }
+    catch (e) { q(".vnInfo").textContent = e.message; }
+    t.disabled = false; vnPoll();
+  }
+  if (t.classList.contains("vnStart")) vnStart([n]);
+  if (d.vnopen) { ev.preventDefault(); openFile(d.vnopen); }
+  if (d.vncopy) { ev.preventDefault(); const r = vnLast[n] && vnLast[n].result; if (r) { navigator.clipboard.writeText(r.tom_tat); t.textContent = "Đã chép"; } }
+  if (d.vndet) { ev.preventDefault(); const x = JSON.parse(d.vndet);
+    location.hash = "#vat";
+    setTimeout(async () => { await loadVatMsts(); $("vMst").value = x.mst; vatSetKieu(x.kieu);
+      if (x.kieu === "M") $("vMonth").value = `${x.nam}-${String(x.ky).padStart(2, "0")}`; else { $("vQ").value = x.ky; $("vY").value = x.nam; }
+      loadVatInfo(); }, 300); }
+  if (t.classList.contains("vnDel")) { ev.preventDefault();
+    try { await api(`/api/slots/${n}/close`, {method: "POST"}); } catch (e) { return alert(e.message); }
+    tnSlots = tnSlots.filter(x => x !== n); tnSave(); card.remove(); const o = document.querySelector(`.tnSlot[data-n="${n}"]`); if (o) o.remove(); }
+  if (t.classList.contains("vnCapOk") || t.classList.contains("vnCapSkip")) {
+    const cap = q(".vnCap"), v = t.classList.contains("vnCapOk") ? q(".vnCapVal").value : null;
+    await api(`/api/auto/${cap.dataset.job}/captcha`, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({value: v})});
+    cap.style.display = "none"; vnPoll();
+  }
+});
+$("vnGrid").addEventListener("keydown", ev => { if (ev.key === "Enter" && ev.target.classList.contains("vnCapVal")) ev.target.closest(".vnCap").querySelector(".vnCapOk").click(); });
+
 // ----- tải nhiều công ty: nhiều trang HĐĐT (mỗi trang 1 cửa sổ Chrome riêng) -----
 let tnSlots = [1, 2], tnTimer = null, tnAccs = [];
 try { const v = JSON.parse(localStorage.getItem("tnSlots") || "null"); if (Array.isArray(v) && v.length) tnSlots = v; } catch (e) {}
@@ -1846,6 +2001,7 @@ async function tnEnter() {
   if (!$("tnFrom").value) { $("tnFrom").value = $("aFrom").value; $("tnTo").value = $("aTo").value; }
   const r = await api("/api/gdt-accounts").catch(() => ({items: []}));
   tnAccs = (r.items || []);
+  document.querySelectorAll(".tnSlot").forEach(el => { if (!tnSlots.includes(+el.dataset.n)) el.remove(); });
   tnSlots.forEach(n => tnFillUsers(tnCard(n)));
   tnPoll();
   if (!tnTimer) tnTimer = setInterval(tnPoll, 2000);
