@@ -1,0 +1,131 @@
+1
+00:00:00,350 --> 00:00:13,139
+Hướng dẫn sử dụng AWBook
+
+2
+00:00:13,939 --> 00:00:28,269
+Mở phần mềm
+
+3
+00:00:29,070 --> 00:00:34,350
+Các chức năng nằm trên thanh menu. Trang đầu tiên là Tải hóa đơn.
+
+4
+00:00:35,299 --> 00:00:44,969
+Bấm “1. Mở trang hóa đơn điện tử” rồi tự đăng nhập cổng thuế trên Chrome như bình thường.
+
+5
+00:00:45,920 --> 00:00:50,530
+Đăng nhập xong, nhãn báo Đã đăng nhập kèm mã số thuế.
+
+6
+00:00:51,480 --> 00:00:58,200
+Chọn Từ ngày – Đến ngày. Chọn nhiều tháng: phần mềm tự chia và lưu mỗi tháng một thư mục.
+
+7
+00:00:59,150 --> 00:01:05,440
+Tích loại hóa đơn: mua vào, bán ra, máy tính tiền…
+
+8
+00:01:06,390 --> 00:01:11,960
+Chọn nội dung: Bảng kê Excel, XML, PDF gốc.
+
+9
+00:01:12,909 --> 00:01:19,369
+Bấm “2. Bắt đầu tải” – phần mềm tự tải từng tháng, từng loại.
+
+10
+00:01:20,319 --> 00:01:27,229
+Theo dõi tiến độ và nhật ký ở đây; bấm Dừng bất cứ lúc nào.
+
+11
+00:01:28,179 --> 00:01:44,399
+Kết quả tải hóa đơn
+
+12
+00:01:45,199 --> 00:01:51,799
+Dự báo VAT: cộng hóa đơn đã tải theo đúng chỉ tiêu tờ khai 01/GTGT.
+
+13
+00:01:52,749 --> 00:01:56,759
+Chọn mã số thuế, kỳ tháng hoặc quý.
+
+14
+00:01:57,709 --> 00:02:02,389
+Nhập chỉ tiêu [22] – thuế còn được khấu trừ kỳ trước chuyển sang.
+
+15
+00:02:03,340 --> 00:02:12,699
+Bấm Dự báo VAT. Chưa tải hóa đơn? Bấm ⚡ Đọc nhanh từ cổng – vài giây là có số.
+
+16
+00:02:13,650 --> 00:02:30,950
+Kết quả dự báo VAT
+
+17
+00:02:31,750 --> 00:02:43,729
+Gửi dự báo cho khách hàng
+
+18
+00:02:44,530 --> 00:02:50,580
+Chuyển dữ liệu MISA: đổ hóa đơn vào file mẫu nhập khẩu của MISA.
+
+19
+00:02:51,530 --> 00:02:58,590
+Chọn file mẫu MISA (mua hàng, bán hàng…) – mẫu được giữ nguyên cột, dòng, định dạng.
+
+20
+00:02:59,539 --> 00:03:07,199
+Kéo thả hóa đơn vào đây: PDF, XML, ZIP, cả ảnh scan.
+
+21
+00:03:08,149 --> 00:03:19,549
+Bấm Chuyển dữ liệu – ngày, hình thức, phương thức thanh toán điền theo đúng danh sách của mẫu.
+
+22
+00:03:20,499 --> 00:03:26,959
+Tổng hợp tồn kho theo mẫu MISA, tính giá bình quân cuối kỳ.
+
+23
+00:03:27,909 --> 00:03:33,979
+Bước 1: chọn file tồn đầu kỳ (có mã hàng chuẩn).
+
+24
+00:03:34,929 --> 00:03:39,059
+Bước 2: thả file / hóa đơn mua vào.
+
+25
+00:03:40,009 --> 00:03:44,929
+Bước 3: thả file / hóa đơn bán ra (và hàng bán trả lại nếu có).
+
+26
+00:03:45,879 --> 00:03:48,179
+Bấm Tổng hợp tồn kho.
+
+27
+00:03:49,129 --> 00:04:12,889
+Phần mềm ghép mã hàng thế nào?
+
+28
+00:04:13,689 --> 00:04:19,019
+Sao kê & chứng từ: thả hóa đơn để đọc hàng loạt…
+
+29
+00:04:19,969 --> 00:04:27,359
+…và thả sao kê ngân hàng để ghép giao dịch với hóa đơn.
+
+30
+00:04:28,309 --> 00:04:36,129
+Đối chiếu tờ khai: chọn tờ khai 01/GTGT, phần mềm báo Khớp / LỆCH từng chỉ tiêu.
+
+31
+00:04:37,079 --> 00:04:43,319
+Lịch tự động: đặt ngày giờ, phần mềm tự tải hóa đơn tháng trước.
+
+32
+00:04:44,269 --> 00:04:48,999
+Cần hỏi gì, bấm Trợ lý AI ở góc phải.
+
+33
+00:04:49,949 --> 00:04:55,639
+Cảm ơn bạn đã dùng AWBook!
