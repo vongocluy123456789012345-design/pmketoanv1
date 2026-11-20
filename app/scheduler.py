@@ -21,10 +21,18 @@ from .config import ROOT, settings
 
 STATE = ROOT / "data" / "schedule.json"
 TASK_NAME = r"AWBook\TaiHoaDonTuDong"
-LOGIN_POLL = 20            # giây – kiểm tra lại đăng nhập khi đang chờ người dùng đăng nhập
+LOGIN_POLL = 3             # giây – kiểm tra lại đăng nhập khi đang chờ người dùng đăng nhập
 GIVE_UP_HOURS = 24
 GIVE_UP_HOURS_BG = 3       # chạy nền (chưa mở phần mềm): chờ đăng nhập tối đa 3 giờ
 POPUP_PROFILE = ROOT / "data" / "popup-profile"
+
+
+def log(msg: str) -> None:
+    """Ghi nhật ký lịch tải tự động (bản exe: data/app.log) để kiểm tra lịch có chạy không."""
+    try:
+        print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] LỊCH TẢI: {msg}", flush=True)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def toast(title: str, body: str) -> None:
@@ -138,7 +146,8 @@ class Scheduler:
         self.background = False   # tiến trình chạy nền do Windows gọi (chưa mở phần mềm)
         self.phase = "idle"       # idle | login | running | done
         self.result: dict[str, Any] | None = None
-        self.login_cap: dict[str, str] | None = None   # captcha đăng nhập đang chờ người dùng nhập (tài khoản đã lưu)
+        self.login_cap: dict[str, str] | None = None   # (không dùng nữa – giữ cho giao diện cũ)
+        self._prefilled = False
         self.login_err = ""
         self.queue: list[str] = []      # các công ty (tên đăng nhập) còn chờ tải trong lượt này
         self.cur = ""                   # công ty đang tải ("" = dùng phiên đang đăng nhập sẵn)
@@ -213,6 +222,8 @@ class Scheduler:
         self.queue = credentials.auto_users() if scheduled else []
         self.cur = self.queue.pop(0) if self.queue else ""
         self.login_cap, self.login_err, self.pending_since = None, "", ""
+        log(f"bắt đầu lượt {'theo lịch' if mark else 'chạy ngay'} – nền={self.background}, công ty: "
+            f"{', '.join([self.cur] + self.queue) or '(phiên đang đăng nhập)'}")
         if scheduled:
             self.phase = "running"
         if scheduled and mark:                      # lượt đúng lịch (không tính khi bấm Chạy ngay để thử)
@@ -231,6 +242,7 @@ class Scheduler:
         """Xong 1 công ty (tải xong / bỏ qua / lỗi đăng nhập): ghi kết quả, chuyển sang công ty kế tiếp."""
         res = {**res, "user": self.cur or res.get("mst", ""), "ten": self._ten(self.cur)}
         self.results.append(res)
+        log(f"xong {res['ten'] or res['user']}: {res['title']} {'; '.join(res.get('missing') or [])}")
         self.login_cap, self.login_err, self.pending_since, self.job_id = None, "", "", None
         if self.queue:
             self.cur = self.queue.pop(0)
@@ -254,32 +266,26 @@ class Scheduler:
         return {"ok": False, "title": title, "detail": "", "notes": [], "missing": [why], "out_dir": "",
                 "summary_file": None, "mst": ""}
 
-    def submit_login(self, cvalue: str | None) -> dict[str, Any]:
-        """Người dùng nhập captcha đăng nhập trên cửa sổ tiến trình -> phần mềm đăng nhập bằng tài khoản đã lưu."""
+    def skip_company(self) -> dict[str, Any]:
+        """Bỏ qua công ty đang chờ đăng nhập -> sang công ty kế tiếp."""
+        if self.phase != "login":
+            return {"ok": False, "message": "Không có công ty nào đang chờ đăng nhập"}
+        self._finish_company(self._fail("Chưa tải: đã bỏ qua đăng nhập",
+                                        "Mở phần mềm, đăng nhập cổng thuế rồi bấm Chạy ngay ở mục Lịch tự động"))
+        return {"ok": True}
+
+    def refill(self) -> dict[str, Any]:
+        """Điền lại tài khoản + mật khẩu vào form đăng nhập trên Chrome (nút trên cửa sổ tiến trình)."""
         from .gdt import credentials
         from .gdt.browser import BROWSER
-        cap = self.login_cap
-        if not cap:
-            return {"ok": False, "message": "Không có yêu cầu đăng nhập nào đang chờ"}
-        if not (cvalue or "").strip():                 # bỏ qua công ty này -> sang công ty kế tiếp
-            self._finish_company(self._fail("Chưa tải: đã bỏ qua đăng nhập",
-                                            "Mở phần mềm, đăng nhập cổng thuế rồi bấm Chạy ngay ở mục Lịch tự động"))
-            return {"ok": False, "message": "Đã bỏ qua"}
-        creds = credentials.load(cap["user"])
+        creds = credentials.load(self.cur) if self.cur else None
         if not creds:
-            return {"ok": False, "message": "Không đọc được mật khẩu đã lưu của công ty này – hãy lưu lại"}
+            return {"ok": False, "message": "Chưa lưu mật khẩu công ty này – hãy tự nhập trên Chrome"}
         try:
-            r = BROWSER.login(creds[0], creds[1], cap["key"], cvalue.strip())
-        except Exception as e:  # noqa: BLE001
-            r = {"ok": False, "message": str(e)}
-        if r.get("ok") and r.get("logged_in"):
-            self.login_cap, self.login_err, self.next_try = None, "", 0
-            self.message = f"Đã đăng nhập {creds[0]} – bắt đầu tải"
+            BROWSER.prefill_login(*creds)
             return {"ok": True}
-        self.login_err = "Đăng nhập chưa được: " + str(r.get("message") or "sai captcha / mật khẩu")[:160]
-        self.login_cap = None                          # lấy captcha mới (captcha chỉ dùng 1 lần)
-        self.next_try = 0
-        return {"ok": False, "message": self.login_err}
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "message": f"Không điền được: {e}"}
 
     def busy(self) -> bool:
         return bool(self._force or self.job_id or self.pending_since)
@@ -360,63 +366,55 @@ class Scheduler:
         st = BROWSER.status()
         if not st.get("open"):
             try:
-                st = BROWSER.open(hidden=self.background)
+                st = BROWSER.open()   # Chrome thật (cổng chặn Chrome chạy ẩn)
             except Exception as e:  # noqa: BLE001
                 self.message = f"Không mở được Chrome: {e}"
         from .gdt import credentials
         other = bool(self.cur) and st.get("logged_in") and credentials.norm_user(st.get("mst")) != self.cur
         if not st.get("logged_in") or other:
-            creds = credentials.load(self.cur) if self.cur else None
-            if self.cur and not creds:
-                self._finish_company(self._fail("Chưa tải: không đọc được mật khẩu đã lưu",
-                                                "Vào mục Lịch tự động lưu lại mật khẩu của công ty này"))
-                return
-            if creds and st.get("open") is not False:
-                # đã lưu tài khoản: phần mềm tự điền tài khoản + mật khẩu, chỉ hiện ô để bạn nhập captcha đăng nhập
-                if not self.pending_since:
-                    self.pending_since = now.isoformat(timespec="minutes")
-                    toast("Đến lịch tải hóa đơn tự động", "Nhập mã captcha để phần mềm đăng nhập cổng thuế giúp bạn.")
-                self.phase = "login"
-                if not self.login_cap:
-                    try:
-                        self.login_cap = {**BROWSER.login_captcha(), "user": creds[0], "error": self.login_err}
-                    except Exception as e:  # noqa: BLE001
-                        self.message = f"Không lấy được captcha đăng nhập: {e}"
-                        self.next_try = time.time() + LOGIN_POLL
-                        return
-                limit = GIVE_UP_HOURS_BG if self.background else GIVE_UP_HOURS
-                if now - datetime.fromisoformat(self.pending_since) > timedelta(hours=limit):
-                    self._finish_company(self._fail("Chưa tải: chờ nhập captcha đăng nhập quá lâu",
-                                                    "Mở phần mềm và bấm Chạy ngay ở mục Lịch tự động"))
-                    return
-                self._scheduled = True
-                self._show_popup()
-                self.message = f"Chờ nhập captcha để tự đăng nhập {self._ten(creds[0])} ({creds[0]})"
-                self.next_try = time.time() + 2
-                return
-            if not self.pending_since:
+            # Đăng nhập trên CỬA SỔ CHROME THẬT của cổng: phần mềm điền sẵn tài khoản + mật khẩu đã lưu,
+            # người dùng tự nhập captcha và tự bấm "Đăng nhập" (cổng chặn đăng nhập tự động).
+            first = not self.pending_since
+            if first:
                 self.pending_since = now.isoformat(timespec="minutes")
+                self._prefilled = False
                 self.phase = "login"
-                if BROWSER.hidden:
+                who = f"{self._ten(self.cur)} ({self.cur})" if self.cur else "công ty cần tải"
+                toast("Đến lịch tải hóa đơn tự động",
+                      f"Đăng nhập {who} trên cửa sổ Chrome cổng thuế: nhập captcha rồi bấm Đăng nhập.")
+                try:
+                    if other:
+                        BROWSER.logout()                  # đang đăng nhập công ty khác -> đăng xuất
+                    if BROWSER.hidden or not st.get("open"):
+                        BROWSER.show_for_login()
+                    else:
+                        BROWSER.open()                    # đưa cửa sổ cổng thuế lên trước
+                except Exception as e:  # noqa: BLE001
+                    self.message = f"Không mở được Chrome: {e}"
+            if self.cur and not self._prefilled:
+                creds = credentials.load(self.cur)
+                if creds:
                     try:
-                        BROWSER.show_for_login()   # hiện cửa sổ Chrome để bạn tự đăng nhập
+                        self._prefilled = BROWSER.prefill_login(*creds)
                     except Exception as e:  # noqa: BLE001
-                        self.message = f"Không mở được Chrome: {e}"
-                toast("Cần đăng nhập cổng thuế",
-                      "Đến lịch tải hóa đơn tự động. Hãy đăng nhập hoadondientu trên cửa sổ Chrome vừa mở – "
-                      "đăng nhập xong phần mềm tự tải tiếp.")
+                        self.message = f"Chưa điền sẵn được tài khoản: {e}"
+                else:
+                    self._prefilled = True                # không đọc được mật khẩu: để người dùng tự nhập
+            if self._scheduled:
+                self._show_popup()
             limit = GIVE_UP_HOURS_BG if self.background else GIVE_UP_HOURS
             if now - datetime.fromisoformat(self.pending_since) > timedelta(hours=limit):
-                self.message = f"Bỏ lượt tự động: chờ đăng nhập quá {limit} giờ"
                 self._finish_company(self._fail("Chưa tải được: chưa đăng nhập cổng thuế",
                                                 "Hãy mở phần mềm, đăng nhập cổng thuế rồi bấm Chạy ngay"))
                 return
-            self.message = f"Đang chờ đăng nhập cổng thuế (từ {self.pending_since[11:]}), đăng nhập xong sẽ tự tải"
+            who = f"{self._ten(self.cur)} ({self.cur})" if self.cur else "cổng thuế"
+            self.message = f"Chờ đăng nhập {who} trên cửa sổ Chrome – đăng nhập xong phần mềm tự tải"
             self.next_try = time.time() + LOGIN_POLL
             return
         d1, d2 = period_for(now.date(), self.ky)
         job = start(d1, d2, self.kinds or ["mua-vao", "ban-ra"], True, True, True, manual_captcha=self._scheduled)
         self.job_id, self.pending_since, self._force, self.phase = job.id, "", False, "running"
+        log(f"bắt đầu tải {d1:%d/%m/%Y}–{d2:%d/%m/%Y} MST {st.get('mst')}")
         self.message = f"Đang tự động tải hóa đơn {d1:%d/%m/%Y} – {d2:%d/%m/%Y}"
         if not self._scheduled:
             toast("Bắt đầu tải hóa đơn tự động", f"{d1:%d/%m/%Y} – {d2:%d/%m/%Y} · MST {st.get('mst')}")

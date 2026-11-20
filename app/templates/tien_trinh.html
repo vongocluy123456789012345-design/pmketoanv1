@@ -55,15 +55,14 @@
     </form>
   </div>
   <div class="cap" id="vLogin" style="display:none">
-    <b>Đăng nhập cổng thuế tự động</b>
-    <div class="muted">Công ty <b id="lgUser"></b> – phần mềm đã điền sẵn tài khoản, mật khẩu. Nhập mã captcha rồi bấm <b>Đăng nhập</b>.</div>
+    <b>Đăng nhập cổng thuế trên cửa sổ Chrome</b>
+    <div style="margin-top:4px">Công ty <b id="lgUser"></b>: phần mềm đã <b>điền sẵn tài khoản + mật khẩu</b> trên trang
+      hoadondientu. Bạn chỉ <b>nhập mã captcha</b> và bấm <b>Đăng nhập</b> ở đó – đăng nhập xong phần mềm tự tải.</div>
+    <div class="row" style="margin-top:8px">
+      <button type="button" id="lgRefill">Điền lại tài khoản</button>
+      <button type="button" class="sec" id="lgSkip">Bỏ qua công ty này</button>
+    </div>
     <div id="lgErr" style="color:#cf222e;font-size:13px;margin-top:4px"></div>
-    <img id="lgImg" alt="captcha đăng nhập">
-    <form id="lgForm" style="display:flex;gap:8px;align-items:center">
-      <input id="lgVal" autocomplete="off" maxlength="10" placeholder="Mã captcha">
-      <button type="submit" id="lgBtn">Đăng nhập</button>
-      <button type="button" class="sec" id="lgSkip">Bỏ qua</button>
-    </form>
   </div>
   <div id="vDone" style="display:none">
     <div class="res" id="res"></div>
@@ -92,21 +91,17 @@ async function poll() {
   const nCty = (s.results || []).length + (s.cur ? 1 : 0) + (s.queue || []).length;
   $("sub").textContent = nCty > 1 ? `Công ty ${(s.results || []).length + 1}/${nCty}` + (s.cur_ten ? ` – ${s.cur_ten}` : "") : "AWBook";
   $("vRun").style.display = ""; $("vDone").style.display = "none";
-  const lc = s.login_cap;
-  if (lc) {
-    $("vLogin").style.display = ""; $("lgUser").textContent = (s.cur_ten ? s.cur_ten + " – " : "") + (lc.user || ""); $("lgErr").textContent = lc.error || "";
-    if (lc.image !== lgShown) { lgShown = lc.image; $("lgImg").src = lc.image; $("lgVal").value = ""; $("lgVal").focus();
-      $("lgBtn").disabled = false; beep(); window.focus(); }
-  } else { $("vLogin").style.display = "none"; lgShown = ""; }
-  if (lc) {
+  const waitLogin = s.phase === "login" || s.waiting_login;
+  $("vLogin").style.display = waitLogin ? "" : "none";
+  if (waitLogin) {
+    $("lgUser").textContent = (s.cur_ten ? s.cur_ten + " – " : "") + (s.cur || "đang đến lượt");
+    if (!lgShown) { lgShown = "1"; beep(); window.focus(); }
     $("title").textContent = "Đến lịch tải hóa đơn tự động";
-    $("info").textContent = "Đăng nhập cổng thuế xong phần mềm tự tải, không cần làm gì thêm.";
+    $("info").textContent = "Chờ bạn đăng nhập trên cửa sổ Chrome cổng thuế…";
     $("bar").className = "bar busy"; $("pct").textContent = ""; $("last").textContent = "";
-  } else if (s.phase === "login" || s.waiting_login) {
-    $("title").textContent = "Cần đăng nhập cổng thuế";
-    $("info").innerHTML = "Phiên đăng nhập đã hết hạn. Hãy <b>tự đăng nhập</b> hoadondientu trên cửa sổ Chrome vừa mở – " +
-      "đăng nhập xong phần mềm tự tải tiếp.";
-    $("bar").className = "bar busy"; $("pct").textContent = ""; $("last").textContent = s.message || "";
+  } else { lgShown = "";
+  }
+  if (waitLogin) {
   } else if (j) {
     $("title").textContent = "Đang tải hóa đơn " + (s.cur_ten || "") + (j.mst ? " – MST " + j.mst : "");
     $("info").textContent = "Kỳ: " + (j.months || []).join(", ") + (s.enabled ? " · " + s.mo_ta : "");
@@ -156,16 +151,9 @@ $("capForm").onsubmit = async ev => {
   await api(`/api/auto/${jobId}/captcha`, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({value: v})});
   $("vCap").style.display = "none"; capShown = "";
 };
-$("lgForm").onsubmit = async ev => {
-  ev.preventDefault(); const v = $("lgVal").value.trim(); if (!v) return;
-  $("lgBtn").disabled = true; $("lgErr").textContent = "Đang đăng nhập…";
-  try { const r = await api("/api/schedule/login", {method: "POST", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({value: v})});
-    $("lgErr").textContent = r.ok ? "" : (r.message || "Đăng nhập chưa được"); } catch (e) { $("lgErr").textContent = e.message; }
-  $("lgBtn").disabled = false;
-};
-$("lgSkip").onclick = () => api("/api/schedule/login", {method: "POST", headers: {"Content-Type": "application/json"},
-  body: JSON.stringify({value: null})});
+$("lgRefill").onclick = async () => { const r = await api("/api/schedule/refill", {method: "POST"});
+  $("lgErr").textContent = r.ok ? "Đã điền lại – nhập captcha trên Chrome" : (r.message || ""); };
+$("lgSkip").onclick = () => api("/api/schedule/skip", {method: "POST"});
 $("capSkip").onclick = async () => {
   if (!jobId) return;
   await api(`/api/auto/${jobId}/captcha`, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({value: null})});

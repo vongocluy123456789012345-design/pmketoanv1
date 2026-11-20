@@ -915,10 +915,16 @@ class SchedLoginIn(BaseModel):
     value: str | None = None     # captcha đăng nhập; trống = bỏ qua
 
 
-@app.post("/api/schedule/login")
-def schedule_login(body: SchedLoginIn):
+@app.post("/api/schedule/skip")
+def schedule_skip():
     from .scheduler import SCHEDULER
-    return SCHEDULER.submit_login(body.value)
+    return SCHEDULER.skip_company()
+
+
+@app.post("/api/schedule/refill")
+def schedule_refill():
+    from .scheduler import SCHEDULER
+    return SCHEDULER.refill()
 
 
 class GdtAccountIn(BaseModel):

@@ -322,49 +322,41 @@ class BrowserWorker:
         except Exception:  # noqa: BLE001
             pass
 
-    # ---------- tự đăng nhập bằng tài khoản đã lưu (captcha do người dùng nhập) ----------
-    def login_captcha(self) -> dict[str, str]:
-        """Captcha của trang đăng nhập cổng: {"key", "image"} (ảnh data-uri để người dùng tự đọc và nhập)."""
-        def run() -> dict[str, str]:
+    # ---------- đăng nhập: người dùng tự gõ captcha và tự bấm "Đăng nhập" trên trang cổng ----------
+    def prefill_login(self, username: str, password: str) -> bool:
+        """Mở form đăng nhập trên trang cổng (cửa sổ Chrome thật), điền sẵn tài khoản + mật khẩu đã lưu và đặt con trỏ
+        vào ô captcha. Người dùng tự nhập captcha và tự bấm Đăng nhập."""
+        def run() -> bool:
             page = self._portal_page()
-            res = page.evaluate(_FETCH_JS, {"url": API + "/captcha", "timeoutMs": 30000,
-                                            "headers": {"Accept": "application/json, text/plain, */*"}})
-            if res.get("error") or res.get("status") != 200:
-                raise BrowserError("Không lấy được captcha đăng nhập: " + (res.get("error") or str(res.get("status"))))
-            d = json.loads(base64.b64decode(res["b64"]).decode("utf-8"))
-            return {"key": d["key"],
-                    "image": "data:image/svg+xml;base64," + base64.b64encode(d["content"].encode()).decode()}
-        return self.call(run, 60)
-
-    def login(self, username: str, password: str, ckey: str, cvalue: str) -> dict[str, Any]:
-        """Đăng nhập cổng NGAY TRONG Chrome của phần mềm (như bấm Đăng nhập trên trang), lưu phiên vào trình duyệt."""
-        def run() -> dict[str, Any]:
-            page = self._portal_page()
-            r = page.evaluate("""async (a) => {
-              try {
-                const r = await fetch(a.url, {method: 'POST', credentials: 'include',
-                  headers: {'Content-Type': 'application/json', 'Accept': 'application/json, text/plain, */*'},
-                  body: JSON.stringify(a.body)});
-                return {status: r.status, text: await r.text()};
-              } catch (e) { return {status: 0, text: String(e)}; }
-            }""", {"url": API + "/security-taxpayer/authenticate",
-                   "body": {"username": username, "password": password, "cvalue": cvalue, "ckey": ckey}})
             try:
-                data = json.loads(r.get("text") or "{}")
-            except ValueError:
-                data = {}
-            token = data.get("token")
-            if r.get("status") != 200 or not token:
-                msg = data.get("message") or (r.get("text") or "")[:200] or f"lỗi {r.get('status')}"
-                return {"ok": False, "message": msg}
-            self._context().add_cookies([{"name": "jwt", "value": token, "domain": "hoadondientu.gdt.gov.vn",
-                                          "path": "/", "secure": True}])
-            try:
-                page.reload(wait_until="domcontentloaded", timeout=45000)
+                page.bring_to_front()
             except Exception:  # noqa: BLE001
                 pass
-            return {"ok": True, **self._status()}
-        return self.call(run, 90)
+            if not page.locator("#username").count():
+                page.evaluate("""() => {
+                  document.querySelectorAll('.ant-modal-close').forEach(b => b.click());
+                  const el = [...document.querySelectorAll('*')].find(e => !e.children.length && (e.innerText || '').trim() === 'Đăng nhập');
+                  if (el) el.click();
+                }""")
+                page.wait_for_selector("#username", timeout=15000)
+            page.fill("#username", username)
+            page.fill("#password", password)
+            page.wait_for_timeout(500)            # form tự đặt con trỏ vào ô đầu -> chuyển sang ô captcha
+            page.click("#cvalue")
+            return True
+        return bool(self.call(run, 60))
+
+    def logout(self) -> None:
+        """Đăng xuất phiên đang dùng (để đăng nhập công ty khác)."""
+        def run() -> None:
+            ctx = self._context()
+            try:
+                ctx.clear_cookies(name="jwt")
+            except TypeError:                      # Playwright cũ: xóa hết cookie của cổng
+                ctx.clear_cookies()
+            page = self._portal_page()
+            page.goto(PORTAL + "/", wait_until="domcontentloaded", timeout=45000)
+        self.call(run, 90)
 
     # ---------- trạng thái đăng nhập ----------
     def _jwt(self) -> str | None:

@@ -290,6 +290,8 @@ def main() -> None:
     if not _port_free(port):
         if _is_our_app(port):
             if bg:   # phần mềm đang mở: chạy lượt theo lịch ngay trong phần mềm đó
+                print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] LỊCH TẢI: Windows gọi lịch, phần mềm đang mở "
+                      "-> giao lượt tải cho phần mềm đang chạy", flush=True)
                 try:
                     urllib.request.urlopen(urllib.request.Request(
                         f"http://127.0.0.1:{port}/api/schedule/run-scheduled", method="POST"), timeout=15)
@@ -326,10 +328,14 @@ def main() -> None:
     # chính: cửa sổ bị che/thu nhỏ sau cửa sổ đăng nhập cổng thuế thì Chrome làm chậm bộ đếm giờ của trang
     # (có thể hàng phút) và phần mềm sẽ tưởng cửa sổ đã đóng, tự tắt giữa chừng.
     # Nhịp tim chỉ là dự phòng khi không tìm thấy tiến trình cửa sổ, và chờ rất lâu (30 phút).
+    from app.scheduler import SCHEDULER
+    pop_key = str(ROOT / "data" / "popup-profile").lower()
     while not server.should_exit:
         time.sleep(3)
         age = time.time() - t0
-        alive = _ui_alive(prof_key)
+        # đã đóng cửa sổ nhưng đang có lượt tải theo lịch (Windows gọi đúng lúc phần mềm đang tắt dở) hoặc cửa sổ
+        # tiến trình còn mở -> ở lại chạy nền cho xong, không bỏ dở lượt tải
+        alive = _ui_alive(prof_key) or SCHEDULER.busy() or _ui_alive(pop_key)
         _brand_windows(_icon_path(), _relaunch_cmd())  # cửa sổ mở thêm / tải lại vẫn giữ logo AWBook
         if alive:
             seen_ui, gone = True, 0
