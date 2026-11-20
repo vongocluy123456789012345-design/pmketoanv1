@@ -118,3 +118,37 @@ def test_ledger_book_booked_learn_export():
     vouchers = bank_post.build_vouchers(txns, "TT133", "HO KINH DOANH GENME")
     out = bs.prepare_export(vouchers, bb["entries"])
     assert len(out) == 1 and out[0]["so_ct"] == "PCB2603" and out[0]["_ly_do_misa"] == "Chi khác"
+
+
+def test_spec_tiers_parser_tax_and_report(tmp_path):
+    """Quy tắc đối soát: số HĐ có ngữ cảnh, gộp nhiều HĐ, cá nhân trả thay, trả trước, thuế theo tiểu mục, cảnh báo."""
+    from openpyxl import load_workbook
+    p = bank_post.parse_desc("MBVCB.14470374911.12345.CTY ABC TT HD 101+102, 104-106 ngay 05/06 Trace 710801")
+    assert p["invoices"] == ["101", "102", "104", "105", "106"]
+    assert bank_post.parse_desc("THANH TOAN DH 161226-050126-16:04:53 238428")["invoices"] == []   # mã GD, ngày giờ: không phải số HĐ
+    inv = lambda so, tien, d, mst="0300000001", ten="Cong ty TNHH Minh Long", h="purchase": {  # noqa: E731
+        "huong": h, "shdon": so, "khhdon": "C26TAA", "ngay_lap": d, "tgtttbso": tien, "nbmst": mst, "nbten": ten,
+        "nmmst": mst, "nmten": ten}
+    invs = [inv("101", 1_100_000, "2026-05-02"), inv("102", 2_200_000, "2026-05-03"), inv("777", 8_800_000, "2026-05-10", h="sold"),
+            inv("900", 12_000_000, "2026-06-20"), inv("555", 6_600_000, "2026-05-15", "0300000002", "Cong ty CP Hoa Phat")]
+    mk = lambda mo, no, d=date(2026, 6, 5), du="": {"ngay": d, "mo_ta": mo, "doi_ung": du, "tham_chieu": "FT123",  # noqa: E731
+                                                     "tk_doi_ung": "", "co": 0.0, "no": no}
+    t1 = mk("Cty ABC TT HD 101+102", 3_300_000)                       # 2A: danh sách HĐ cộng đúng tiền
+    t2 = {"ngay": date(2026, 6, 5), "mo_ta": "NGUYEN VAN A chuyen tien TT HD 777", "doi_ung": "NGUYEN VAN A",
+          "tham_chieu": "", "tk_doi_ung": "", "co": 8_800_000.0, "no": 0.0}         # cá nhân trả thay (tiền THU)
+    t3 = mk("Coc hd 900 Minh Long", 12_000_000)                        # HĐ lập SAU ngày trả 15 ngày (trả trước)
+    t4 = mk("NOP NSNN KBNN TM 4911 tien cham nop", 150_000)            # chậm nộp -> 811 + cảnh báo
+    txns = [t1, t2, t3, t4]
+    bank_post.allocate(invs, txns)
+    assert [a["inv"]["shdon"] for a in t1["alloc"]] == ["101", "102"] and t1["tin_cay"] >= 90
+    assert t2["alloc"][0]["inv"]["shdon"] == "777" and "Cá nhân trả thay" in t2["canh_bao"] and t2["tin_cay"] == 85
+    assert t3["alloc"] and t3["alloc"][0]["inv"]["shdon"] == "900"
+    vouchers = bank_post.build_vouchers(txns, "TT200", "CONG TY ABC")
+    v4 = next(v for v in vouchers if v["tx"] is t4)
+    assert v4["lines"][0]["no"] == "811" and "KHÔNG được trừ" in t4["canh_bao"]
+    st = bs.write_result(tmp_path / "kq.xlsx", vouchers, {"so_tk": "1"}, [], [], invs, (date(2026, 5, 1), date(2026, 6, 30)))
+    wb = load_workbook(tmp_path / "kq.xlsx")
+    assert {"Ghep thu chi", "Chi tiet dong hang", "Canh bao thue"} <= set(wb.sheetnames)
+    head = [c.value for c in wb["Ghep thu chi"][1]]
+    assert "Độ tin cậy (%)" in head and "Lý do khớp (Match Reason)" in head and "Cảnh báo thuế / công nợ" in head
+    assert st["canh_bao_thue"] >= 1                                   # HĐ 555 (6,6 triệu) chưa thanh toán qua NH

@@ -905,6 +905,9 @@ async def docs_bank(files: list[UploadFile] = File(...), mst: str = Form(""), mo
     n_hoc = bank_smart.learn(txns) if n_booked else 0
     if n_hoc:
         sources.append(f"Gợi ý theo lịch sử hạch toán cho {n_hoc} giao dịch chưa hạch toán")
+    n_mem = bank_smart.apply_memory(txns, bank_smart.load_memory(info.get("so_tk") or info.get("chu_tk", "")))
+    if n_mem:
+        sources.append(f"Gợi ý theo bộ nhớ các kỳ trước cho {n_mem} giao dịch")
     if dirx:
         own = info.get("chu_tk", "")
         for t in txns:
@@ -969,7 +972,11 @@ async def docs_bank(files: list[UploadFile] = File(...), mst: str = Form(""), mo
     codes = bank_post.load_codes(tpl_dir)
     dest = bank_post.write_report(out_dir / f"DoiChieu_SaoKe_{tag}.xlsx", txns, invoices, vouchers, info, errors, note)
     ket_qua = out_dir / f"KetQua_GhepThuChi_{tag}.xlsx"
-    stat = bank_smart.write_result(ket_qua, vouchers, info, notes, sources)
+    stat = bank_smart.write_result(ket_qua, vouchers, info, notes, sources, invoices, (d1, d2))
+    acct = info.get("so_tk") or info.get("chu_tk", "")
+    n_mem = bank_smart.save_memory(acct, txns)
+    if n_mem:
+        sources.append(f"Đã ghi nhớ {n_mem} cách hạch toán của tài khoản này cho các kỳ sau")
     addr = {p["ma"]: p.get("dia_chi", "") for p in partners if p.get("ma")}
     misa = []
     for up, loai, label in ((mau_thu, "thu", "PhieuThuTienGui"), (mau_chi, "chi", "PhieuChiTienGui")):

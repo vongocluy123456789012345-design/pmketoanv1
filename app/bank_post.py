@@ -22,7 +22,11 @@ from typing import Any
 
 from .bank import _score, _tokens
 
-TOL = 1000  # sai lệch cho phép khi cộng nhiều hóa đơn (đồng)
+TOL = 5  # sai lệch làm tròn cho phép khi khớp / cộng nhiều hóa đơn (đồng)
+PREPAY_DAYS = 45  # HĐ lập SAU ngày trả tối đa 45 ngày (trả trước / đặt cọc / HĐ xuất chậm)
+LOOKBACK_DAYS = 180  # HĐ lập TRƯỚC ngày trả tối đa 180 ngày
+NON_CASH_LIMIT = 5_000_000  # HĐ mua vào từ 5 triệu phải thanh toán không dùng tiền mặt để được khấu trừ VAT
+#                              (Luật thuế GTGT 48/2024/QH15, hiệu lực 01/07/2025; trước đó 20 triệu)
 
 
 # ------------------------------------------------------------------ tiện ích chữ
@@ -33,7 +37,50 @@ def fold(s: Any) -> str:
 
 
 _LEGAL = (r"\b(cong ty|cty|ct|tnhh|mtv|mot thanh vien|co phan|ctcp|cp|trach nhiem huu han|dntn|doanh nghiep tu nhan|"
-          r"chi nhanh|ho kinh doanh|hkd|tm|dv|tmdv|thuong mai dich vu)\b")
+          r"chi nhanh|cn|ho kinh doanh|hkd|tm|dv|tmdv|sxtm|tmsx|sx|xnk|thuong mai dich vu|thuong mai|dich vu|san xuat|"
+          r"xuat nhap khau)\b")
+
+
+# ------------------------------------------------------------------ bóc tách nội dung sao kê
+# mã kỹ thuật của ngân hàng: bỏ trước khi tìm số hóa đơn / tên đối tác (tránh bắt nhầm mã giao dịch thành số HĐ)
+_BOILER = [r"\bmbvcb\s*\d+\s*\d*", r"\bct tu \d+", r"\btoi \d+", r"\bft\s?\d{5,}\w*", r"\bibft\b", r"\bnapas\s*247\b",
+           r"\bvietqr\b", r"\bqr\b", r"\brem\b", r"\bb o\b", r"\bibo\b", r"\bnd\b", r"\bso gd\s*\d+", r"\btrace\s*\d+",
+           r"\bma giao dich\s*\d+", r"\bmgd\s*\d+", r"\b\d{9,}\b", r"\b\d{6}\s\d{2}\s\d{2}\s\d{2}\b",
+           r"\b\d{1,2}\s\d{1,2}\s\d{2,4}\b", r"\b\d{4}[a-z]{3,}\w*\b"]
+_INV_RE = re.compile(r"(?<![a-z])(?:hd|hdon|h don|hoa don|inv|invoice|hd gtgt)\s*(?:so|no|#|:|\.)?\s*"
+                     r"((?:\d{1,8}(?:\s*(?:\+|va|and|&|,|;|/|-|den|\s)\s*(?=\d))?)+)")
+_REF_RE = re.compile(r"\b(?:hdkt|hop dong|hd kt|po|don hang|dh|bbbg)\s*(?:so)?\s*([a-z0-9]{2,20})")
+
+
+def parse_desc(text: Any) -> dict[str, Any]:
+    """Nội dung sao kê -> {"clean": nội dung đã bỏ mã kỹ thuật NH, "invoices": số HĐ (bỏ số 0 đầu), "refs": số hợp
+    đồng / đơn hàng}. "HD 101+102, 104-106" -> ['101', '102', '104', '105', '106']."""
+    f = fold(text)
+    keep = unicodedata.normalize("NFD", str(text or ""))       # giữ dấu + , - & ; / để tách danh sách / dải số HĐ
+    keep = "".join(c for c in keep if unicodedata.category(c) != "Mn").replace("đ", "d").replace("Đ", "D").lower()
+    keep = re.sub(r"\s+", " ", re.sub(r"[^a-z0-9+,\-&;/ ]", " ", keep)).strip()
+    clean = f
+    for pat in _BOILER:
+        clean = re.sub(pat, " ", clean)
+    clean = re.sub(r"\s+", " ", clean).strip()
+    invs: list[str] = []
+    for m in _INV_RE.finditer(keep):
+        chunk = m.group(1)
+        for a, sep, b in re.findall(r"(\d{1,8})(?:\s*(-|den)\s*(\d{1,8}))?", chunk):
+            if sep and b and 0 < int(b) - int(a) <= 30:        # dải "104-106" -> 104, 105, 106
+                invs += [str(n) for n in range(int(a), int(b) + 1)]
+            else:
+                invs += [x for x in (a, b) if x]
+    invs = list(dict.fromkeys(x.lstrip("0") for x in invs if x.lstrip("0")))
+    refs = [r for r in _REF_RE.findall(f) if any(c.isdigit() for c in r)]
+    return {"clean": clean, "invoices": invs, "refs": refs}
+
+
+def _personal(name: Any) -> bool:
+    """Tên người (không phải tổ chức): không có chữ công ty / TNHH / DNTN / HKD / ngân hàng."""
+    f = fold(name)
+    return bool(f) and not re.search(r"\b(cty|cong ty|tnhh|co phan|ctcp|dntn|hkd|ho kinh doanh|ngan hang|bank|"
+                                     r"chi nhanh|truong|benh vien|uy ban|kho bac)\b", f)
 
 
 def core_name(s: Any) -> str:
@@ -228,6 +275,12 @@ def _desc(t: dict[str, Any]) -> str:
     return " ".join([t.get("mo_ta", ""), t.get("doi_ung", ""), t.get("tham_chieu", "")])
 
 
+def _inv_nums(t: dict[str, Any]) -> list[str]:
+    if "_invs" not in t:
+        t["_invs"] = parse_desc(t.get("mo_ta", ""))["invoices"]
+    return t["_invs"]
+
+
 def _is_partner(inv: dict[str, Any], t: dict[str, Any]) -> bool:
     mst, name = partner(inv)
     dt = t.get("dt")          # đối tượng đã nhận diện từ danh mục công nợ (số TK, MST, mã, tên)
@@ -294,11 +347,13 @@ def allocate(invoices: list[dict[str, Any]], txns: list[dict[str, Any]]) -> None
     for t in txns:
         t["alloc"], t["cach_khop"] = [], ""
 
-    def pool(t):
+    def pool(t, ahead: int = 5):
+        """HĐ còn nợ cùng chiều, lập trong [ngày trả - 180, ngày trả + ahead] (ahead 45: có bằng chứng số HĐ / đối
+        tác -> nhận cả trả trước / đặt cọc, HĐ xuất chậm)."""
         h = "sold" if t["co"] else "purchase"
         dt = t["ngay"]
         return [i for i in invoices if i.get("huong") == h and i["_con_lai"] > 1
-                and (_inv_date(i) is None or _inv_date(i) <= dt + timedelta(days=5))]
+                and (_inv_date(i) is None or dt - timedelta(days=LOOKBACK_DAYS) <= _inv_date(i) <= dt + timedelta(days=ahead))]
 
     def amt(t):
         return t["co"] or t["no"]
@@ -306,7 +361,9 @@ def allocate(invoices: list[dict[str, Any]], txns: list[dict[str, Any]]) -> None
     def left(t):
         return amt(t) - sum(a["so_tien"] for a in t["alloc"])
 
-    def give(t, inv, v, how):
+    def give(t, inv, v, how, conf=None):
+        if conf is not None:
+            t["tin_cay"] = min(t.get("tin_cay", 100), conf) if t.get("alloc") else conf
         v = min(v, inv["_con_lai"])
         if v <= 0:
             return
@@ -328,7 +385,7 @@ def allocate(invoices: list[dict[str, Any]], txns: list[dict[str, Any]]) -> None
     # 1) Đúng số tiền + có bằng chứng (số HĐ / MST / tên đối tác trong nội dung) -> 1 hóa đơn
     cands = []
     for j, t in enumerate(order):
-        for inv in pool(t):
+        for inv in pool(t, PREPAY_DAYS):
             s, why = _score(inv, t)
             if s >= 70 and "đúng số tiền" in why:
                 cands.append((s, -abs(((_inv_date(inv) or t["ngay"]) - t["ngay"]).days), j, id(inv), inv, why))
@@ -337,26 +394,45 @@ def allocate(invoices: list[dict[str, Any]], txns: list[dict[str, Any]]) -> None
         t = order[j]
         if t["alloc"] or inv["_con_lai"] < amt(t) - 1:
             continue
-        give(t, inv, amt(t), "Khớp 1 HĐ: " + ", ".join(why))
+        early = (_inv_date(inv) or t["ngay"]) > t["ngay"]
+        who = t.get("doi_ung") or ""
+        payer = bool(t["co"] and who and _personal(who) and not _is_partner(inv, t))
+        if payer:   # cá nhân chuyển tiền trả HĐ của công ty mua hàng
+            t["canh_bao"] = (t.get("canh_bao", "") + f"; Cá nhân trả thay: {who} – kiểm tra điều kiện khấu trừ VAT").strip("; ")
+        give(t, inv, amt(t), "Khớp 1 HĐ: " + ", ".join(why) + (" (trả trước ngày lập HĐ)" if early else ""),
+             85 if payer else 100)
 
-    # 2) Nội dung ghi số hóa đơn (1 hoặc nhiều HĐ) của đúng đối tác
+    # 2) Nội dung ghi số hóa đơn (1 hoặc nhiều HĐ, "HD 101+102, 104-106") – chỉ số đứng sau HĐ / INV / SO
     for t in order:
         if left(t) <= 1:
             continue
-        digits = {d.lstrip("0") for d in re.findall(r"\d{2,8}", _desc(t))}
-        hit = [i for i in pool(t) if str(i.get("shdon") or "").lstrip("0") in digits and _is_partner(i, t)]
+        nums = set(_inv_nums(t))
+        if not nums:
+            continue
+        cand = [i for i in pool(t, PREPAY_DAYS) if str(i.get("shdon") or "").lstrip("0") in nums]
+        hit = [i for i in cand if _is_partner(i, t)]
+        payer = ""
         if not hit:
-            hit = [i for i in pool(t) if str(i.get("shdon") or "").lstrip("0") in digits
-                   and len(str(i.get("shdon") or "").lstrip("0")) >= 3]
-            if sum(i["_con_lai"] for i in hit) > left(t) + TOL * 50:
-                hit = []  # số trùng ngẫu nhiên, không cùng đối tác -> bỏ
+            # Ghi đúng số HĐ + đúng tổng tiền các HĐ đó, cùng 1 đối tác -> nhận. Tiền THU mà người chuyển là cá nhân
+            # (không phải công ty mua hàng) -> "cá nhân trả thay", gắn cờ kiểm tra điều kiện khấu trừ VAT của bên mua
+            if cand and abs(sum(i["_con_lai"] for i in cand) - left(t)) <= TOL and len(
+                    {partner(i)[0] for i in cand}) == 1:
+                hit = cand
+                who = t.get("doi_ung") or ""
+                if t["co"] and who and _personal(who):
+                    payer = f"Cá nhân trả thay: {who} – kiểm tra điều kiện khấu trừ VAT"
         hit.sort(key=lambda i: _inv_date(i) or date.min)
         if hit:
-            how = (f"Nội dung ghi số HĐ ({len(hit)} HĐ)" if len(hit) > 1 else "Nội dung ghi số HĐ")
+            full = abs(sum(i["_con_lai"] for i in hit) - left(t)) <= TOL
+            how = (f"Nội dung ghi số HĐ ({len(hit)} HĐ" + (", cộng đúng số tiền)" if full else ")")) if len(hit) > 1 \
+                else "Nội dung ghi số HĐ"
+            if payer:
+                t["canh_bao"] = (t.get("canh_bao", "") + "; " + payer).strip("; ")
             for inv in hit:
                 if left(t) <= 1:
                     break
-                give(t, inv, left(t), how)
+                give(t, inv, left(t), how, 85 if payer else (98 if full else 90))
+            round_off(t)
 
     def recent_first(t, days):
         """HĐ còn nợ của đúng đối tác, ưu tiên HĐ trong `days` ngày trước giao dịch (HĐ quá cũ thường đã trả
@@ -374,7 +450,7 @@ def allocate(invoices: list[dict[str, Any]], txns: list[dict[str, Any]]) -> None
             combo = _subset(group, amt(t), ref=t["ngay"]) if len(group) >= 2 else None
             if combo and len(combo) >= 2:
                 for inv in sorted(combo, key=lambda i: _inv_date(i) or date.min):
-                    give(t, inv, inv["_con_lai"], f"Trả gộp {len(combo)} HĐ cùng đối tác, cộng đúng số tiền")
+                    give(t, inv, inv["_con_lai"], f"Trả gộp {len(combo)} HĐ cùng đối tác, cộng đúng số tiền", 90)
                 round_off(t)
                 break
 
@@ -402,7 +478,7 @@ def allocate(invoices: list[dict[str, Any]], txns: list[dict[str, Any]]) -> None
                     for inv in invs:
                         if left(u) <= 1:
                             break
-                        give(u, inv, left(u), how)
+                        give(u, inv, left(u), how, 85)
                     done.add(id(u))
                 round_off(grp[-1])
                 break
@@ -413,7 +489,7 @@ def allocate(invoices: list[dict[str, Any]], txns: list[dict[str, Any]]) -> None
         if t["alloc"]:
             continue
         for inv in pool(t):
-            if abs(inv["_con_lai"] - amt(t)) <= 1:
+            if abs(inv["_con_lai"] - amt(t)) <= TOL:
                 gap = abs(((_inv_date(inv) or t["ngay"]) - t["ngay"]).days)
                 if gap <= 120:
                     cands.append((gap, j, id(inv), inv))
@@ -425,7 +501,7 @@ def allocate(invoices: list[dict[str, Any]], txns: list[dict[str, Any]]) -> None
             continue
         sure = gap <= 3 and n_same.get(j) == 1  # duy nhất 1 HĐ đúng số tiền, lập trong 3 ngày
         give(t, inv, amt(t), "Khớp số tiền, HĐ duy nhất cùng ngày" if sure
-             else "Chỉ khớp số tiền (cần kiểm tra lại đối tác)")
+             else "Chỉ khớp số tiền (cần kiểm tra lại đối tác)", 75 if sure else 60)
 
     # 5) Cùng đối tác nhưng không khớp tổng: trừ dần vào HĐ gần đây, cũ trước (thanh toán 1 phần / trả trước).
     #    Chỉ xét HĐ trong 90 ngày trước giao dịch – HĐ cũ hơn thường đã thanh toán ở kỳ sao kê trước.
@@ -437,7 +513,8 @@ def allocate(invoices: list[dict[str, Any]], txns: list[dict[str, Any]]) -> None
             if left(t) <= 1:
                 break
             part = left(t) < inv["_con_lai"] - 1
-            give(t, inv, left(t), "Thanh toán 1 phần HĐ" if part else "Trừ dần công nợ HĐ cũ nhất của đối tác")
+            give(t, inv, left(t), "Thanh toán 1 phần HĐ" if part else "Trừ dần công nợ HĐ cũ nhất của đối tác (FIFO)",
+                 80)
         if t["alloc"] and left(t) > 1:
             t["cach_khop"] += f"; thừa {_money(left(t))} so với HĐ còn nợ (trả trước / ứng trước)"
 
@@ -462,13 +539,54 @@ def accounts(che_do: str) -> dict[str, str]:
     return {"ngan_hang": "1121", "tien_mat": "1111", "phai_thu": "131", "phai_tra": "331", "luong": "334",
             "phi_nh": "6422" if tt133 else "6427", "lai": "515", "bhxh": "3383", "tam_ung": "141", "vay": "341",
             "thue_gtgt": "33311" if not tt133 else "33311", "thue_tndn": "3334", "thue_tncn": "3335",
-            "thue_khac": "3339", "phai_tra_khac": "3388", "phai_thu_khac": "1388", "von": "4111"}
+            "thue_khac": "3339", "phai_tra_khac": "3388", "phai_thu_khac": "1388", "von": "4111",
+            "thue_gtgt_nk": "33312", "mon_bai": "3339" if tt133 else "3338", "cham_nop": "811",
+            "vat_dau_vao": "1331", "bhyt": "3384", "bhtn": "3386", "lai_vay": "635"}
+
+
+# Tiểu mục (mã nội dung kinh tế) trên giấy nộp tiền NSNN -> khóa tài khoản, diễn giải, cảnh báo
+TIEU_MUC = {"1701": ("thue_gtgt", "Nộp thuế GTGT hàng SXKD trong nước", ""),
+            "1702": ("thue_gtgt_nk", "Nộp thuế GTGT hàng nhập khẩu", ""),
+            "1052": ("thue_tndn", "Nộp thuế TNDN", ""), "1053": ("thue_tndn", "Nộp thuế TNDN", ""),
+            "1001": ("thue_tncn", "Nộp thuế TNCN", ""), "1003": ("thue_tncn", "Nộp thuế TNCN", ""),
+            "1004": ("thue_tncn", "Nộp thuế TNCN", ""), "1014": ("thue_tncn", "Nộp thuế TNCN", ""),
+            "2862": ("mon_bai", "Nộp lệ phí môn bài", ""), "2863": ("mon_bai", "Nộp lệ phí môn bài", ""),
+            "2864": ("mon_bai", "Nộp lệ phí môn bài", ""),
+            "4911": ("cham_nop", "Nộp tiền chậm nộp thuế",
+                     "Tiền chậm nộp thuế (TK 811) – chi phí KHÔNG được trừ khi quyết toán thuế TNDN"),
+            "4917": ("cham_nop", "Nộp tiền chậm nộp thuế",
+                     "Tiền chậm nộp thuế (TK 811) – chi phí KHÔNG được trừ khi quyết toán thuế TNDN"),
+            "4944": ("cham_nop", "Nộp tiền chậm nộp thuế",
+                     "Tiền chậm nộp thuế (TK 811) – chi phí KHÔNG được trừ khi quyết toán thuế TNDN"),
+            "4254": ("cham_nop", "Nộp tiền phạt vi phạm hành chính thuế",
+                     "Tiền phạt vi phạm (TK 811) – chi phí KHÔNG được trừ khi quyết toán thuế TNDN")}
+
+
+def tax_detail(text: str) -> tuple[str, str, str, str] | None:
+    """Nộp NSNN: (khóa TK, diễn giải, cảnh báo, kỳ thuế) theo mã tiểu mục trong nội dung; None nếu không có mã."""
+    f = fold(text)
+    if not re.search(r"\b(nsnn|kbnn|kho bac|etax|nop thue|ngan sach|tieu muc|ndkt|ma chuong|thue|le phi|mon bai|phi mon bai)\b", f):
+        return None
+    codes = re.findall(r"(?:tieu muc|ndkt|\btm|noi dung kinh te)\D{0,6}(\d{4})\b", f) or \
+        [c for c in re.findall(r"\b(\d{4})\b", f) if c in TIEU_MUC]
+    for c in codes:
+        if c in TIEU_MUC:
+            k, txt, warn = TIEU_MUC[c]
+            ky = re.search(r"\bky (?:thue|tinh thue)?\s*(\d{2} \d{2} \d{4}|\d{2} q\d \d{4}|q\d \d{4}|\d{2} \d{4})", f)
+            return k, txt + f" (tiểu mục {c})", warn, (ky.group(1).replace(" ", "/") if ky else "")
+    return None
 
 
 _RULES_OUT = [  # (từ khóa trong nội dung đã bỏ dấu, khóa tài khoản, diễn giải, cần kiểm tra?)
+    (r"facebk|facebook|\bmeta\b|google ads|\bgoogle\b|tiktok ads|quang cao", "phai_tra",
+     "Chi quảng cáo (Facebook / Google / TikTok)", True),
     (r"\bung (luong|tien)\b|\bung\b.{0,25}\bluong\b|tam ung", "tam_ung", "Tạm ứng cho nhân viên", True),
     (r"\bluong\b|\bsalary\b|thuong tet", "luong", "Trả lương nhân viên", False),
-    (r"\bbhxh\b|bao hiem xa hoi|\bbhyt\b|bao hiem y te", "bhxh", "Nộp bảo hiểm", False),
+    (r"\bbhxh\b|bao hiem xa hoi|\bbhyt\b|bao hiem y te|\bbhtn\b|bao hiem that nghiep|\bkcb\b",
+     "bhxh", "Nộp bảo hiểm (BHXH / BHYT / BHTN)", False),
+    # VAT của phí ngân hàng (dòng "VAT" / "thuế GTGT của phí" ngay sau dòng phí) -> thuế GTGT đầu vào 1331
+    (r"^vat$|^vat\b.{0,30}\b(phi|fee|qltk|sms)\b|thue gtgt (cua|tren) phi|\bvat\b.{0,15}\bphi\b|\bphi\b.{0,30}\bvat\b",
+     "vat_dau_vao", "Thuế GTGT của phí ngân hàng", False),
     (r"thue gtgt|thue gia tri gia tang|\bvat\b", "thue_gtgt", "Nộp thuế GTGT", True),
     (r"thue tndn|thu nhap doanh nghiep", "thue_tndn", "Nộp thuế TNDN", True),
     (r"thue tncn|thu nhap ca nhan", "thue_tncn", "Nộp thuế TNCN", True),
@@ -478,11 +596,16 @@ _RULES_OUT = [  # (từ khóa trong nội dung đã bỏ dấu, khóa tài kho�
      "Phí ngân hàng", False),
     (r"rut tien mat|\brut tien\b|\batm\b", "tien_mat", "Rút tiền gửi về quỹ tiền mặt", False),
     (r"tam ung", "tam_ung", "Chi tạm ứng", True),
-    (r"tra no vay|tra goc|tra vay|\bvay\b", "vay", "Trả nợ vay", True),
+    (r"tra lai vay|thu lai vay|lai khe uoc|lai tien vay|\blai vay\b", "lai_vay", "Trả lãi vay", True),
+    (r"tra no vay|tra goc|tra vay|\bvay\b|khe uoc", "vay", "Trả nợ gốc vay", True),
     (r"tra lai ck nham|chuyen nham|ck nham|hoan tra|tra lai tien", "phai_tra_khac",
      "Trả lại tiền chuyển nhầm", True),
 ]
 _RULES_IN = [
+    (r"\b(shopee|tiktok shop|tiktok|lazada|tiki|sendo)\b", "phai_thu",
+     "Tiền sàn TMĐT về (đã trừ phí sàn – doanh thu ghi theo hóa đơn)", False),
+    (r"\bcod\b|ghn|giao hang nhanh|ghtk|giao hang tiet kiem|viettel post|vietnam post|\bvnpost\b|j t express|"
+     r"ninja van|best express|ahamove|grab express", "phai_thu", "Thu tiền COD từ đơn vị vận chuyển (đã trừ phí ship)", True),
     (r"lai tien gui|tra lai tien gui|\binterest\b|lai nhap goc|\b(chi|tra|nhan) lai\b.{0,20}\b(tk|tai khoan|tien gui)\b",
      "lai", "Lãi tiền gửi ngân hàng", False),
     (r"nop tien mat|nop tm\b|\bnop tien\b(?!.*\b(chuyen|ck|mbvcb|ibft)\b)", "tien_mat",
@@ -524,6 +647,13 @@ def post(t: dict[str, Any], acc: dict[str, str], own_name: str = "") -> dict[str
                 key, text, chk = k, txt, c
                 t["_rule"] = txt
                 break
+        if not inflow and (key in (None, "thue_gtgt", "thue_tndn", "thue_tncn", "thue_khac")):
+            td = tax_detail(" ".join([t.get("mo_ta", ""), t.get("doi_ung", "")]))
+            if td:
+                key, text, chk = td[0], td[1] + (f" kỳ {td[3]}" if td[3] else ""), bool(td[2])
+                t["_rule"] = text
+                if td[2]:
+                    t["canh_bao"] = (t.get("canh_bao", "") + "; " + td[2]).strip("; ")
         ai = t.get("_ai")
         if key is None and ai and ai["key"] not in ("phai_thu", "phai_tra", "khac", "noi_bo"):
             key, text, chk = ai["key"], f"{ai['muc_dich']} (AI gợi ý)", True

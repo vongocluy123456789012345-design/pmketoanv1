@@ -462,7 +462,8 @@ def status_of(t: dict[str, Any], v: dict[str, Any]) -> str:
 
 # ------------------------------------------------------------------ file kết quả ghép thu chi
 def write_result(dest: Path, vouchers: list[dict[str, Any]], info: dict[str, str], notes: list[str],
-                 sources: list[str]) -> dict[str, int]:
+                 sources: list[str], invoices: list[dict[str, Any]] | None = None,
+                 period: tuple[date, date] | None = None) -> dict[str, int]:
     from openpyxl import Workbook
     from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
     from openpyxl.utils import get_column_letter
@@ -474,7 +475,8 @@ def write_result(dest: Path, vouchers: list[dict[str, Any]], info: dict[str, str
              ("Tên / TK đối ứng (sao kê)", 28), ("Mã đối tượng", 16), ("Tên đối tượng", 36), ("KH / NCC", 7),
              ("Căn cứ nhận diện đối tượng", 30), ("Thu / chi cho việc gì", 46), ("Hóa đơn / chứng từ ghép", 46),
              ("TK Nợ", 7), ("TK Có", 7), ("Số chứng từ", 12), ("Kết quả", 22), ("Cần kiểm tra", 36),
-             ("Gợi ý từ lịch sử (đã hạch toán trước đây)", 50)]
+             ("Gợi ý từ lịch sử (đã hạch toán trước đây)", 50), ("Độ tin cậy (%)", 9),
+             ("Lý do khớp (Match Reason)", 60), ("Cảnh báo thuế / công nợ", 50)]
     rows, stat = [], {"Chắc chắn": 0, "Cần kiểm tra": 0, "CHƯA RÕ thu / chi cho ai": 0, "Đã có chứng từ trên sổ": 0}
     for v in vouchers:
         t = v["tx"]
@@ -504,7 +506,8 @@ def write_result(dest: Path, vouchers: list[dict[str, Any]], info: dict[str, str
                       t.get("mo_ta", ""), " ".join(x for x in (t.get("doi_ung"), t.get("tk_doi_ung")) if x),
                       v.get("ma") or ln.get("ma") or "", (b or {}).get("doi_tuong") or v.get("_dt_out") or v.get("ten") or dt.get("ten", ""),
                       dt.get("loai", ""), dt.get("why", why) if b else why, purpose, docs, ln["no"], ln["co"],
-                      b["so_ct"] if b else v.get("so_ct", ""), st, "" if b else v.get("kiem_tra", ""), hoc_txt], fills[st]))
+                      b["so_ct"] if b else v.get("so_ct", ""), st, "" if b else v.get("kiem_tra", ""), hoc_txt,
+                      confidence(t, v), match_reason(t), t.get("canh_bao", "")], fills[st]))
     wb = Workbook()
     ws = wb.active
     ws.title = "Tong hop"
@@ -545,10 +548,64 @@ def write_result(dest: Path, vouchers: list[dict[str, Any]], info: dict[str, str
     sheet("Ghep thu chi", rows)
     sheet("Chua ro", [x for x in rows if x[1] == fills["CHƯA RÕ thu / chi cho ai"]])
     sheet("Can kiem tra", [x for x in rows if x[1] == fills["Cần kiểm tra"]])
+    # ---- truy vết 2 chiều xuống từng dòng hàng của hóa đơn đã ghép
+    from .bank_post import NON_CASH_LIMIT
+    sh = wb.create_sheet("Chi tiet dong hang")
+    h2 = [("Ngày GD", 11), ("Số tiền GD", 14), ("Chứng từ NH", 22), ("Hóa đơn", 22), ("Đối tác", 34), ("Tổng HĐ", 14),
+          ("Tỷ lệ đã TT", 9), ("Trạng thái TT", 22), ("Tên hàng / dịch vụ", 44), ("ĐVT", 8), ("SL", 9),
+          ("Thành tiền dòng (gồm thuế)", 15), ("Đã TT qua NH", 15), ("Còn phải thu / trả", 15)]
+    for c, (h, w) in enumerate(h2, 1):
+        cell = sh.cell(1, c, h)
+        cell.font, cell.fill, cell.border = Font(bold=True), PatternFill("solid", fgColor="DDEBF7"), box
+        sh.column_dimensions[get_column_letter(c)].width = w
+    r = 2
+    seen_inv: set[int] = set()
+    for v in vouchers:
+        t = v["tx"]
+        for it in item_lines(t):
+            inv = it["inv"]
+            key = (id(inv), it["ten"], it["line"])
+            if hash(key) in seen_inv:
+                continue
+            seen_inv.add(hash(key))
+            pm = inv.get("nbten") if inv.get("huong") == "purchase" else inv.get("nmten")
+            vals = [t["ngay"], t.get("co") or t.get("no"), f"{t['ngay']:%d/%m/%Y} {t.get('tham_chieu') or ''}".strip(),
+                    f"{inv.get('khhdon') or ''}-{inv.get('shdon') or ''}", pm or "", float(inv.get("tgtttbso") or 0),
+                    f"{it['k'] * 100:.0f}%", it["status"], it["ten"], it["dvt"], it["sl"], it["line"], it["paid"], it["con"]]
+            for c, val in enumerate(vals, 1):
+                cell = sh.cell(r, c, val)
+                cell.border = box
+                if isinstance(val, date):
+                    cell.number_format = "dd/mm/yyyy"
+                elif isinstance(val, float) or (isinstance(val, int) and c in (2, 6, 12, 13, 14)):
+                    cell.number_format = "#,##0"
+            r += 1
+    sh.freeze_panes = "A2"
+    # ---- cảnh báo thuế: HĐ mua vào >= ngưỡng chưa thanh toán qua ngân hàng
+    risks = tax_risks(invoices or [], *(period or (date.min, date.max)), NON_CASH_LIMIT) if invoices else []
+    sh3 = wb.create_sheet("Canh bao thue")
+    sh3.cell(1, 1, f"HĐ MUA VÀO TỪ {NON_CASH_LIMIT:,.0f} Đ CHƯA THANH TOÁN QUA NGÂN HÀNG TRONG KỲ SAO KÊ – rủi ro không được "
+                   "khấu trừ thuế GTGT đầu vào (Luật thuế GTGT 2024: thanh toán không dùng tiền mặt từ 5 triệu)".replace(",", ".")
+             ).font = Font(bold=True)
+    h3 = [("Ngày HĐ", 11), ("Ký hiệu - Số HĐ", 22), ("MST người bán", 15), ("Tên người bán", 40), ("Tổng thanh toán", 15),
+          ("Đã TT qua NH", 15), ("Còn chưa TT", 15), ("Cảnh báo", 50)]
+    for c, (h, w) in enumerate(h3, 1):
+        cell = sh3.cell(2, c, h)
+        cell.font, cell.fill, cell.border = Font(bold=True), PatternFill("solid", fgColor="F8CBAD"), box
+        sh3.column_dimensions[get_column_letter(c)].width = w
+    for r3, x in enumerate(risks, 3):
+        i = x["inv"]
+        for c, val in enumerate([str(i.get("ngay_lap"))[:10], f"{i.get('khhdon') or ''}-{i.get('shdon') or ''}",
+                                 i.get("nbmst"), i.get("nbten"), float(i.get("tgtttbso") or 0), x["paid"], x["con"],
+                                 x["why"]], 1):
+            cell = sh3.cell(r3, c, val)
+            cell.border = box
+            if isinstance(val, float):
+                cell.number_format = "#,##0"
     dest.parent.mkdir(parents=True, exist_ok=True)
     wb.save(dest)
     return {"chac": stat["Chắc chắn"], "kiem_tra": stat["Cần kiểm tra"], "chua_ro": stat["CHƯA RÕ thu / chi cho ai"],
-            "da_co": stat["Đã có chứng từ trên sổ"]}
+            "da_co": stat["Đã có chứng từ trên sổ"], "canh_bao_thue": len(risks)}
 
 
 # ================================================================== sổ chi tiết công nợ (MISA, nhóm theo đối tượng)
@@ -977,3 +1034,169 @@ def fill_misa_template(tpl: bytes, tpl_name: str, vouchers: list[dict[str, Any]]
     out = io.BytesIO()
     wb2.save(out)
     return out.getvalue(), ".xlsx"
+
+
+# ================================================================== độ tin cậy, lý do khớp, cảnh báo thuế / công nợ
+def confidence(t: dict[str, Any], v: dict[str, Any]) -> int:
+    """Độ tin cậy (%) của kết quả ghép 1 dòng sao kê."""
+    if t.get("booked"):
+        return 100
+    if t.get("alloc"):
+        return int(t.get("tin_cay") or 80)
+    hoc = t.get("hoc")
+    if hoc:
+        base = 95 if hoc["how"].startswith("cùng nội dung") else 85 if hoc["how"].startswith("bộ nhớ") else 80
+        return int(base * hoc["share"])
+    if t.get("_rule"):
+        return 75 if v.get("kiem_tra") else 95
+    dt = t.get("dt")
+    if dt:
+        return 50 if dt.get("ai") else int(min(dt.get("diem", 70), 85))
+    if t.get("_ai"):
+        return 40
+    return 0
+
+
+def match_reason(t: dict[str, Any]) -> str:
+    if t.get("booked"):
+        b = t["booked"]
+        return f"Đã có chứng từ {b['so_ct']} trên {b['nguon']} (đúng số tiền, lệch ngày ≤ 5)"
+    parts = []
+    if t.get("cach_khop"):
+        parts.append(t["cach_khop"])
+    if t.get("hoc"):
+        h = t["hoc"]
+        parts.append(f"Theo lịch sử hạch toán: {h['how']} ({h['n']} lần, {int(h['share'] * 100)}%)")
+    if t.get("_rule"):
+        parts.append(f"Theo từ khóa: {t['_rule']}")
+    if t.get("dt") and t["dt"].get("why"):
+        parts.append(f"Đối tượng: {t['dt']['why']}")
+    if t.get("_ai"):
+        parts.append("AI gợi ý")
+    return "; ".join(parts) or "Chưa xác định – không đoán (cần kế toán xem)"
+
+
+def tax_risks(invoices: list[dict[str, Any]], d1: date, d2: date, limit: float) -> list[dict[str, Any]]:
+    """HĐ mua vào từ ngưỡng (5 triệu) lập trong kỳ sao kê mà chưa thanh toán qua ngân hàng (hoặc cá nhân trả thay):
+    rủi ro KHÔNG được khấu trừ thuế GTGT đầu vào."""
+    out = []
+    for i in invoices:
+        if i.get("huong") != "purchase" or float(i.get("tgtttbso") or 0) < limit:
+            continue
+        try:
+            d = date.fromisoformat(str(i.get("ngay_lap"))[:10])
+        except ValueError:
+            continue
+        if not (d1 <= d <= d2):
+            continue
+        paid = float(i.get("tgtttbso") or 0) - float(i.get("_con_lai") or 0)
+        by_person = any("Cá nhân trả thay" in (t.get("canh_bao") or "") for t in i.get("_tt", []))
+        if i.get("_con_lai", 0) > 1 or by_person:
+            out.append({"inv": i, "paid": paid, "con": float(i.get("_con_lai") or 0),
+                        "why": ("Cá nhân trả thay – kiểm tra điều kiện khấu trừ" if by_person else
+                                "Chưa thấy thanh toán qua ngân hàng trong sao kê" if paid <= 1 else
+                                "Mới thanh toán 1 phần qua ngân hàng")})
+    return out
+
+
+def item_lines(t: dict[str, Any]) -> list[dict[str, Any]]:
+    """Truy vết xuống từng dòng hàng của HĐ đã ghép: tỷ lệ k = đã trả / tổng HĐ, tiền đã trả từng dòng = thành tiền x k."""
+    from .misa_import import from_xml
+    rows = []
+    for a in t.get("alloc", []):
+        inv = a["inv"]
+        total = float(inv.get("tgtttbso") or 0)
+        paid_all = total - float(inv.get("_con_lai") or 0)
+        k = min(1.0, paid_all / total) if total else 0.0
+        items = []
+        xml = inv.get("file_xml")
+        if xml and Path(str(xml)).exists():
+            try:
+                items = from_xml(Path(str(xml)).read_bytes()).get("items") or []
+            except Exception:  # noqa: BLE001
+                items = []
+        if not items:
+            items = [{"ten": "(tổng hóa đơn / chứng từ – chưa có chi tiết dòng hàng)", "dvt": "", "sl": None,
+                      "tt": total, "thue": 0, "ck": 0}]
+        for it in items:
+            line = float(it.get("tt") or 0) - float(it.get("ck") or 0) + float(it.get("thue") or 0)
+            rows.append({"t": t, "inv": inv, "k": k, "ten": it.get("ten") or "", "dvt": it.get("dvt") or "",
+                         "sl": it.get("sl"), "line": line, "paid": round(line * k), "con": round(line - line * k),
+                         "status": "Đã thanh toán đủ" if k >= 0.999 else f"Thanh toán một phần ({k * 100:.0f}%)"})
+    return rows
+
+
+# ================================================================== bộ nhớ ánh xạ (học cho các kỳ sau)
+
+
+def _mem_file() -> Path:
+    from .config import ROOT
+    return ROOT / "data" / "bank_memory.json"
+
+
+def load_memory(acct: str) -> list[dict[str, Any]]:
+    try:
+        return json.loads(_mem_file().read_text(encoding="utf-8")).get(acct, [])
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def save_memory(acct: str, txns: list[dict[str, Any]]) -> int:
+    """Lưu cặp (nội dung ngân hàng / STK đối ứng -> đối tượng, lý do, diễn giải) từ các dòng ĐÃ hạch toán của tài khoản
+    này để kỳ sau tự gợi ý (kể cả khi không tải lại sổ thu chi cũ)."""
+    if not acct:
+        return 0
+    f = _mem_file()
+    try:
+        allm = json.loads(f.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        allm = {}
+    cur = {(m["thu"], m["sig"], m["doi_tuong"], m["ly_do"], m["dien_giai"]): m for m in allm.get(acct, [])}
+    n = 0
+    for t in txns:
+        b = t.get("booked")
+        if not b:
+            continue
+        key = (bool(t.get("co")), _sig(t.get("mo_ta", "")), b["doi_tuong"], b["ly_do"], b["dien_giai"])
+        if not key[1]:
+            continue
+        m = cur.setdefault(key, {"thu": key[0], "sig": key[1], "doi_tuong": key[2], "ly_do": key[3],
+                                 "dien_giai": key[4], "n": 0, "tk": ""})
+        m["n"] += 1
+        m["tk"] = m["tk"] or str(t.get("tk_doi_ung") or "")
+        n += 1
+    allm[acct] = list(cur.values())[-3000:]
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(json.dumps(allm, ensure_ascii=False), encoding="utf-8")
+    return n
+
+
+def apply_memory(txns: list[dict[str, Any]], memory: list[dict[str, Any]]) -> int:
+    """Dòng chưa hạch toán, chưa có gợi ý: dùng bộ nhớ các kỳ trước (cùng STK đối ứng, hoặc cùng nội dung ngân hàng)."""
+    from collections import Counter
+    if not memory:
+        return 0
+    by_sig: dict[tuple[bool, str], Counter] = {}
+    by_tk: dict[tuple[bool, str], Counter] = {}
+    for m in memory:
+        by_sig.setdefault((m["thu"], m["sig"]), Counter())[(m["doi_tuong"], m["ly_do"], m["dien_giai"])] += m["n"]
+        if m.get("tk"):
+            by_tk.setdefault((m["thu"], m["tk"]), Counter())[(m["doi_tuong"], m["ly_do"], m["dien_giai"])] += m["n"]
+    n = 0
+    for t in txns:
+        if t.get("booked") or t.get("hoc"):
+            continue
+        thu = bool(t.get("co"))
+        cnt = by_tk.get((thu, str(t.get("tk_doi_ung") or ""))) if t.get("tk_doi_ung") else None
+        how = "bộ nhớ: cùng STK đối ứng"
+        if not cnt:
+            cnt, how = by_sig.get((thu, _sig(t.get("mo_ta", "")))), "bộ nhớ: cùng nội dung ngân hàng các kỳ trước"
+        if not cnt:
+            continue
+        (dt, ly, dg), k = cnt.most_common(1)[0]
+        total = sum(cnt.values())
+        if k / total < 0.6:
+            continue
+        t["hoc"] = {"doi_tuong": dt, "ly_do": ly, "dien_giai": dg, "n": total, "share": round(k / total, 2), "how": how}
+        n += 1
+    return n

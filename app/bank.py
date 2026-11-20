@@ -409,7 +409,7 @@ def _score(inv: dict[str, Any], tx: dict[str, Any]) -> tuple[int, list[str]]:
     if not amt or not val:
         return 0, []
     why, s = [], 0
-    if abs(val - amt) <= 1:
+    if abs(val - amt) <= 5:          # sai số làm tròn ±5đ
         s += 50
         why.append("đúng số tiền")
     elif abs(val - amt) <= max(50000, amt * 0.003):
@@ -418,9 +418,9 @@ def _score(inv: dict[str, Any], tx: dict[str, Any]) -> tuple[int, list[str]]:
     else:
         return 0, []
     desc = " ".join([tx.get("mo_ta", ""), tx.get("doi_ung", ""), tx.get("tham_chieu", "")])
-    digits = set(re.findall(r"\d+", desc))
     shdon = str(inv.get("shdon") or "").lstrip("0")
-    if shdon and (shdon in {d.lstrip("0") for d in digits}):
+    from .bank_post import parse_desc
+    if shdon and shdon in parse_desc(tx.get("mo_ta", ""))["invoices"]:   # chỉ số HĐ có ngữ cảnh (HĐ / INV / SO)
         s += 30
         why.append(f"có số HĐ {shdon}")
     mst = inv.get("nbmst") if inv.get("huong") == "purchase" else inv.get("nmmst")
