@@ -37,3 +37,30 @@ def test_task_xml():
     assert root.find(".//t:StartWhenAvailable", ns).text == "true"         # máy tắt đúng giờ -> nhắc khi bật lại
     assert "--nhac-vat" in root.find(".//t:Arguments", ns).text
     assert "tải hóa đơn" in vl.reminder_text() and "dự báo" in vl.reminder_text()
+
+
+def test_schedule_due_and_period():
+    from datetime import date
+    from types import SimpleNamespace
+
+    from app import scheduler as sc
+    s = sc.Scheduler.__new__(sc.Scheduler)
+    s.enabled, s.day, s.hour, s.minute, s.ky, s.last_run = True, 20, 9, 35, "nay", ""
+    assert not s._due(datetime(2026, 11, 20, 9, 34))
+    assert s._due(datetime(2026, 11, 20, 9, 35))
+    assert s._due(datetime(2026, 11, 22, 8, 0))                 # máy tắt đúng giờ -> chạy bù khi mở
+    s.last_run = "2026-11-20"
+    assert not s._due(datetime(2026, 11, 25, 8, 0))             # mỗi tháng 1 lần
+    assert sc.period_for(date(2026, 11, 20), "nay") == (date(2026, 11, 1), date(2026, 11, 20))
+    assert sc.period_for(date(2026, 11, 20), "truoc") == (date(2026, 10, 1), date(2026, 10, 31))
+    job = SimpleNamespace(status="done", get_xml=True, get_pdf=True, total=10, done=10, xml_ok=10, pdf_ok=8,
+                          pdf_hddt=2, pdf_missing=0, excel_ok=3, errors=[], out_dir="x", summary_file=None, mst="1")
+    assert sc.judge(job)["ok"] and "ĐẦY ĐỦ" in sc.judge(job)["title"]
+    job.pdf_missing, job.errors = 2, ["11/2026 HĐ máy tính tiền bán ra: bỏ qua – không nhập captcha"]
+    r = sc.judge(job)
+    assert not r["ok"] and any("PDF" in m for m in r["missing"]) and any("captcha" in m for m in r["missing"])
+    job.pdf_missing, job.xml_ok = 0, 8
+    job.errors = ["10/2026 Mua vào – CQT nhận không mã K26TAB-1: không tải được XML (cổng trả lỗi 500 – Không tồn tại hồ sơ gốc của hóa đơn.)",
+                  "10/2026 Mua vào – CQT nhận không mã K26TTU-2: không tải được XML (cổng trả lỗi 500 – Không tồn tại hồ sơ gốc của hóa đơn.)"]
+    r = sc.judge(job)
+    assert r["ok"] and r["notes"] and not r["missing"]           # cổng không có XML gốc: lưu ý, không phải thiếu

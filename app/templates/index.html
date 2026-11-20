@@ -515,13 +515,17 @@
  <div class="page" id="page-lich">
   <section class="card">
     <h2>Tự động tải hóa đơn hằng tháng</h2>
-    <p class="page-intro">Đến ngày/giờ đã đặt, phần mềm tự tải hóa đơn của THÁNG TRƯỚC. Phần mềm phải đang mở.
-      Muốn tự mở cùng Windows: đặt shortcut của run.bat vào thư mục Startup (Win+R → shell:startup).</p>
-    <div style="max-width:640px">
+    <p class="page-intro">Đến đúng ngày + giờ:phút đã đặt, phần mềm tự tải hóa đơn – <b>kể cả khi chưa mở phần mềm</b>
+      (lịch được đặt vào Windows; máy tắt lúc đó thì tải ngay khi bật máy lại). Khi tải hiện 1 cửa sổ nhỏ góc phải màn hình:
+      thanh tiến độ, <b>ô nhập captcha chỉ khi cổng thuế yêu cầu</b>, tải xong báo <b>đầy đủ</b> hoặc <b>thiếu gì</b> kèm nút vào phần mềm kiểm tra.
+      Phiên đăng nhập cổng hết hạn thì mở Chrome để bạn tự đăng nhập, đăng nhập xong tự tải tiếp.</p>
+    <div style="max-width:720px">
         <div class="inline">
           <div style="flex:0 0 auto"><label><input type="checkbox" id="scOn" style="width:auto"> Bật</label></div>
-          <div><label>Ngày</label><input type="number" id="scDay" min="1" max="28" value="5"></div>
-          <div><label>Giờ</label><input type="number" id="scHour" min="0" max="23" value="8"></div>
+          <div style="flex:0 0 110px"><label>Ngày trong tháng</label><input type="number" id="scDay" min="1" max="31" value="5"></div>
+          <div style="flex:0 0 130px"><label>Giờ : phút</label><input type="time" id="scTime" value="08:00"></div>
+          <div><label>Tải hóa đơn</label><select id="scKy"><option value="truoc">Cả tháng trước</option>
+            <option value="nay">Từ đầu tháng đến hôm đó</option></select></div>
         </div>
         <div style="margin-top:6px">
           <label style="display:inline;margin-right:8px"><input type="checkbox" class="scKind" value="mua-vao" checked style="width:auto"> Mua vào có mã</label>
@@ -530,8 +534,24 @@
           <label style="display:inline;margin-right:8px"><input type="checkbox" class="scKind" value="mua-vao-mtt" style="width:auto"> MTT mua vào*</label>
           <label style="display:inline"><input type="checkbox" class="scKind" value="ban-ra-mtt" style="width:auto"> MTT bán ra*</label>
         </div>
-        <div class="muted">* tự động giải captcha bằng OCR khi tới lịch (chỉ báo âm thanh và hiện ô nhập tay nếu OCR đọc lỗi). Chưa đăng nhập cổng thì phần mềm mở Chrome, báo Windows và thử lại mỗi 15 phút.</div>
-        <div style="margin-top:6px"><button id="btnSc">Lưu lịch</button> <button id="btnScNow" class="sec">Chạy ngay (tháng trước)</button></div>
+        <div class="muted">* hóa đơn máy tính tiền: cổng thuế bắt nhập captcha – tới lịch phần mềm kêu chuông và hiện ô để bạn nhập (bỏ qua thì loại đó không tải).</div>
+        <div style="margin-top:10px;padding:8px 10px;border:1px dashed var(--pri);border-radius:8px">
+          <b>Tài khoản cổng thuế các công ty tải tự động</b>
+          <div class="muted">Tới lịch phần mềm tải <b>lần lượt từng công ty đang tích “Tải tự động”</b>: tự điền tài khoản + mật khẩu
+            và bấm đăng nhập, bạn chỉ nhập mã captcha trên cửa sổ nhỏ. Mật khẩu được mã hóa bằng khóa Windows của máy này,
+            không hiện lại ở đâu. Chưa lưu công ty nào thì tới lịch mở Chrome để bạn tự đăng nhập.</div>
+          <table class="tbl" style="margin-top:6px;width:100%"><thead><tr><th>Tải tự động</th><th>MST / tên đăng nhập</th>
+            <th>Tên công ty</th><th>Mật khẩu</th><th></th></tr></thead><tbody id="gaRows"></tbody></table>
+          <div class="inline" style="margin-top:6px;align-items:flex-end">
+            <div><label>MST / tên đăng nhập</label><input id="gaUser" autocomplete="off"></div>
+            <div><label>Tên công ty (tùy chọn)</label><input id="gaTen" autocomplete="off"></div>
+            <div><label>Mật khẩu cổng thuế</label><input id="gaPass" type="password" autocomplete="new-password"
+              placeholder="sửa công ty cũ: để trống = giữ"></div>
+            <div style="flex:0 0 auto"><button id="btnGaSave" class="sec">+ Thêm / lưu công ty</button></div>
+          </div>
+          <div class="muted" id="gaInfo"></div>
+        </div>
+        <div style="margin-top:6px"><button id="btnSc">Lưu lịch</button> <button id="btnScNow" class="sec">Chạy ngay</button></div>
         <div id="scMsg" class="msg"></div>
     </div>
   </section>
@@ -1068,19 +1088,50 @@ $("btnTk").onclick = async () => {
 
 // ----- lịch tự động -----
 function renderSchedule(s) {
-  $("scOn").checked = s.enabled; $("scDay").value = s.day; $("scHour").value = s.hour;
+  const p2 = n => String(n).padStart(2, "0");
+  $("scOn").checked = s.enabled; $("scDay").value = s.day; $("scTime").value = `${p2(s.hour)}:${p2(s.minute || 0)}`;
+  $("scKy").value = s.ky || "truoc";
   document.querySelectorAll(".scKind").forEach(c => c.checked = s.kinds.includes(c.value));
-  msg($("scMsg"), (s.message || (s.enabled ? `Đang bật – ngày ${s.day} lúc ${s.hour}h` : "Đang tắt")) +
-    (s.last_run ? ` · Lần tự động gần nhất: ${s.last_run}` : ""), !s.waiting_login);
+  msg($("scMsg"), (s.message || s.mo_ta) + (s.enabled && s.windows ? ` · ${s.windows}` : "") +
+    (s.last_run ? ` · Lần tự động gần nhất: ${s.last_run}` : ""), !s.waiting_login && !(s.result && !s.result.ok));
 }
 $("btnSc").onclick = async () => {
+  const [hh, mm] = ($("scTime").value || "08:00").split(":").map(Number);
   try { renderSchedule(await api("/api/schedule", {method: "POST", headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({enabled: $("scOn").checked, day: +$("scDay").value, hour: +$("scHour").value,
+    body: JSON.stringify({enabled: $("scOn").checked, day: +$("scDay").value, hour: hh, minute: mm, ky: $("scKy").value,
       kinds: [...document.querySelectorAll(".scKind:checked")].map(c => c.value)})})); } catch (e) { msg($("scMsg"), e.message); }
 };
 $("btnScNow").onclick = async () => { unlockAlerts(); try { renderSchedule(await api("/api/schedule/run-now", {method: "POST"})); } catch (e) { msg($("scMsg"), e.message); } };
 api("/api/schedule").then(renderSchedule).catch(() => {});
-setInterval(() => api("/api/schedule").then(s => { if (document.activeElement.closest && !document.activeElement.closest("#scOn,#scDay,#scHour,.scKind")) renderSchedule(s); }).catch(() => {}), 10000);
+function showGa(r) {
+  const items = r.items || [];
+  $("gaRows").innerHTML = items.map(a => `<tr>
+    <td><input type="checkbox" style="width:auto" data-gaauto="${esc(a.username)}" ${a.auto ? "checked" : ""}></td>
+    <td><a href="#" data-gaedit="${esc(a.username)}">${esc(a.username)}</a></td><td>${esc(a.ten || "")}</td>
+    <td>${a.ok ? "✅ đã lưu (mã hóa)" : "⚠️ không đọc được – lưu lại"}</td>
+    <td><button class="sec" style="padding:2px 8px" data-gadel="${esc(a.username)}">Xóa</button></td></tr>`).join("")
+    || `<tr><td colspan="5" class="muted">Chưa có công ty nào</td></tr>`;
+  const n = items.filter(a => a.auto && a.ok).length;
+  $("gaInfo").textContent = n ? `Tới lịch sẽ tải ${n} công ty: ` + items.filter(a => a.auto && a.ok).map(a => a.ten || a.username).join(", ") : "";
+}
+const loadGa = () => api("/api/gdt-accounts").then(showGa).catch(() => {});
+loadGa();
+$("btnGaSave").onclick = async () => {
+  try { showGa(await api("/api/gdt-accounts", {method: "POST", headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({username: $("gaUser").value, ten: $("gaTen").value, password: $("gaPass").value || null, auto: true})}));
+        $("gaPass").value = ""; $("gaUser").value = ""; $("gaTen").value = ""; } catch (e) { $("gaInfo").textContent = e.message; }
+};
+$("gaRows").addEventListener("click", async ev => {
+  const del = ev.target.dataset.gadel, ed = ev.target.dataset.gaedit;
+  if (del && confirm(`Xóa tài khoản ${del} khỏi danh sách tải tự động?`)) showGa(await api(`/api/gdt-accounts/${encodeURIComponent(del)}`, {method: "DELETE"}));
+  if (ed) { ev.preventDefault(); $("gaUser").value = ed; $("gaTen").value = ev.target.closest("tr").children[2].textContent; $("gaPass").focus(); }
+});
+$("gaRows").addEventListener("change", async ev => {
+  const u = ev.target.dataset.gaauto;
+  if (u) showGa(await api(`/api/gdt-accounts/${encodeURIComponent(u)}/auto`, {method: "POST",
+    headers: {"Content-Type": "application/json"}, body: JSON.stringify({auto: ev.target.checked})}));
+});
+setInterval(() => api("/api/schedule").then(s => { if (document.activeElement.closest && !document.activeElement.closest("#scOn,#scDay,#scTime,#scKy,.scKind")) renderSchedule(s); }).catch(() => {}), 10000);
 
 // ----- số tiền: gõ 1234567 -> hiện 1.234.567 -----
 const parseVn = s => Number(String(s || "").replace(/[^\d-]/g, "")) || 0;

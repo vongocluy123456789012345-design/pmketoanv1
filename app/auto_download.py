@@ -139,6 +139,7 @@ class AutoJob:
     get_xml: bool
     get_pdf: bool
     easy_captcha: bool = False  # có hỏi captcha để lấy PDF gốc EasyInvoice của người bán khác không
+    manual_captcha: bool = False  # tải theo lịch: captcha hiện bảng cho người dùng tự nhập (không tự đọc)
     mst: str = ""
     out_dir: str = ""
     status: str = "running"  # running | done | error | auth_error | cancelled
@@ -178,7 +179,7 @@ class AutoJob:
 
     def prompt_captcha(self, image: str, reason: str, allow_ocr: bool = True) -> str:
         """Tự động đọc captcha bằng OCR trước; nếu không đọc được thì hiện ảnh chờ người dùng nhập."""
-        if allow_ocr:
+        if allow_ocr and not self.manual_captcha:
             auto_val = _solve_captcha_ocr(image)
             if auto_val:
                 self.say(f"OCR tự giải captcha ({reason}): {auto_val}")
@@ -1233,8 +1234,9 @@ def running_job() -> AutoJob | None:
 
 
 def start(d_from: date, d_to: date, kinds: list[str], get_excel: bool, get_xml: bool,
-          get_pdf: bool, easy_captcha: bool = False) -> AutoJob:
-    job = AutoJob(uuid.uuid4().hex, date_chunks(d_from, d_to), kinds, get_excel, get_xml, get_pdf, easy_captcha)
+          get_pdf: bool, easy_captcha: bool = False, manual_captcha: bool = False) -> AutoJob:
+    job = AutoJob(uuid.uuid4().hex, date_chunks(d_from, d_to), kinds, get_excel, get_xml, get_pdf, easy_captcha,
+                  manual_captcha=manual_captcha)
     JOBS[job.id] = job
     threading.Thread(target=run, args=(job,), daemon=True, name=f"auto-{job.id[:6]}").start()
     return job

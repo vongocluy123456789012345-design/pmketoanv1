@@ -70,26 +70,27 @@ def describe(d: dict[str, Any] | None = None) -> str:
 
 
 # ------------------------------------------------------------------ Windows Task Scheduler
-def _command() -> tuple[str, str, str]:
-    """(chương trình, tham số, thư mục) để Windows chạy bảng nhắc."""
+def _command(arg: str = "--nhac-vat") -> tuple[str, str, str]:
+    """(chương trình, tham số, thư mục) để Windows chạy phần mềm với tham số arg."""
     if getattr(sys, "frozen", False):
         exe = Path(sys.executable)
-        return str(exe), "--nhac-vat", str(exe.parent)
+        return str(exe), arg, str(exe.parent)
     py = Path(sys.executable)
     pyw = py.with_name("pythonw.exe")
     launcher = Path(__file__).resolve().parent.parent / "desktop.py"
-    return str(pyw if pyw.exists() else py), f'"{launcher}" --nhac-vat', str(launcher.parent)
+    return str(pyw if pyw.exists() else py), f'"{launcher}" {arg}', str(launcher.parent)
 
 
-def task_xml(d: dict[str, Any]) -> str:
+def task_xml(d: dict[str, Any], arg: str = "--nhac-vat",
+             desc: str = "AWBook: nhắc tải hóa đơn và dự báo thuế GTGT") -> str:
     from xml.sax.saxutils import escape
-    cmd, args, wd = _command()
+    cmd, args, wd = _command(arg)
     days = "".join(f"<Day>{x}</Day>" for x in d["ngay"])
     months = "".join(f"<{m}/>" for m in ("January", "February", "March", "April", "May", "June", "July", "August",
                                           "September", "October", "November", "December"))
     return f"""<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
-  <RegistrationInfo><Description>AWBook: nhắc tải hóa đơn và dự báo thuế GTGT</Description></RegistrationInfo>
+  <RegistrationInfo><Description>{escape(desc)}</Description></RegistrationInfo>
   <Triggers>
     <CalendarTrigger>
       <StartBoundary>{date.today().year}-01-01T{d['gio']}:00</StartBoundary>
@@ -119,27 +120,30 @@ def _schtasks(*args: str) -> subprocess.CompletedProcess:
                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0), timeout=30)
 
 
-def register_task(d: dict[str, Any]) -> str:
-    """Đăng ký / gỡ lịch nhắc trong Windows. Trả về mô tả trạng thái (hiện trên phần mềm)."""
+def register_task(d: dict[str, Any], name: str = "", arg: str = "--nhac-vat",
+                  desc: str = "AWBook: nhắc tải hóa đơn và dự báo thuế GTGT",
+                  ok_text: str = "Đã đặt lịch trên Windows: đến giờ máy tự hiện bảng nhắc, kể cả khi chưa mở phần mềm") -> str:
+    """Đăng ký / gỡ lịch trong Windows Task Scheduler (d: bat, ngay, gio). Trả về mô tả trạng thái."""
+    name = name or TASK_NAME
     if sys.platform != "win32":
         return "Không phải Windows – chỉ nhắc khi phần mềm đang mở"
     try:
         if not d["bat"] or not d["ngay"]:
-            _schtasks("/Delete", "/TN", TASK_NAME, "/F")
+            _schtasks("/Delete", "/TN", name, "/F")
             return "Đã gỡ lịch nhắc khỏi Windows"
         with tempfile.TemporaryDirectory() as td:
             f = Path(td) / "awbook_nhac_vat.xml"
-            f.write_text(task_xml(d), encoding="utf-16")
-            r = _schtasks("/Create", "/TN", TASK_NAME, "/XML", str(f), "/F")
+            f.write_text(task_xml(d, arg, desc), encoding="utf-16")
+            r = _schtasks("/Create", "/TN", name, "/XML", str(f), "/F")
         if r.returncode != 0:
             return f"Chưa đặt được lịch trên Windows: {(r.stderr or r.stdout).strip()[:200]}"
-        return "Đã đặt lịch trên Windows: đến giờ máy tự hiện bảng nhắc, kể cả khi chưa mở phần mềm"
+        return ok_text
     except Exception as e:  # noqa: BLE001
         return f"Chưa đặt được lịch trên Windows: {e}"
 
 
-def task_exists() -> bool:
-    return sys.platform == "win32" and _schtasks("/Query", "/TN", TASK_NAME).returncode == 0
+def task_exists(name: str = "") -> bool:
+    return sys.platform == "win32" and _schtasks("/Query", "/TN", name or TASK_NAME).returncode == 0
 
 
 # ------------------------------------------------------------------ chạy khi phần mềm đang mở

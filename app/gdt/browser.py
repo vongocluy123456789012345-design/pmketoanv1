@@ -155,6 +155,7 @@ class BrowserWorker:
         self._browser = None
         self._lock = threading.Lock()
         self.profile_name: str | None = None
+        self.hidden = False
 
     # ---------- luồng riêng cho Playwright ----------
     def _ensure_thread(self) -> None:
@@ -247,18 +248,21 @@ class BrowserWorker:
             aux[key] = p
         return p
 
-    def _open(self) -> dict[str, Any]:
+    def _open(self, hidden: bool = False) -> dict[str, Any]:
         if not self._connected():
             if not self._cdp_alive():
                 exe = find_browser()
                 self.profile_name = Path(exe).stem
                 PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+                # hidden: tải tự động theo lịch khi chưa mở phần mềm – Chrome chạy ẩn, dùng lại phiên đăng nhập đã lưu
                 subprocess.Popen([
                     exe, f"--remote-debugging-port={settings.cdp_port}",
                     f"--user-data-dir={PROFILE_DIR}", "--no-first-run", "--no-default-browser-check",
+                    *(["--headless=new", "--window-size=1366,900"] if hidden else []),
                     PORTAL + "/",
                 ])
-                for _ in range(60):
+                self.hidden = hidden
+                for _ in range(180 if hidden else 60):     # Chrome chạy ẩn lần đầu khởi động chậm
                     if self._cdp_alive():
                         break
                     time.sleep(0.5)
@@ -273,8 +277,94 @@ class BrowserWorker:
             pass
         return self._status()
 
-    def open(self) -> dict[str, Any]:
-        return self.call(self._open, 120)
+    def open(self, hidden: bool = False) -> dict[str, Any]:
+        if not hidden and self.hidden:
+            return self.show_for_login()        # người dùng bấm mở cổng mà Chrome đang chạy ẩn -> hiện lên
+        return self.call(lambda: self._open(hidden), 120)
+
+    def _shutdown(self) -> None:
+        """Tắt hẳn Chrome cổng thuế do phần mềm mở (để mở lại ở chế độ khác: ẩn <-> hiện)."""
+        try:
+            if not self._connected() and self._cdp_alive():
+                self._browser = self._pw.chromium.connect_over_cdp(f"http://127.0.0.1:{settings.cdp_port}")
+            if self._connected():
+                self._browser.new_browser_cdp_session().send("Browser.close")
+        except Exception:  # noqa: BLE001
+            pass
+        self._browser = None
+        for _ in range(40):
+            if not self._cdp_alive():
+                break
+            time.sleep(0.25)
+        else:   # không tắt được qua cổng debug: dừng hẳn các tiến trình Chrome dùng hồ sơ cổng thuế của phần mềm
+            try:
+                import psutil
+                key = str(PROFILE_DIR).lower()
+                for proc in psutil.process_iter(["cmdline"]):
+                    if any(key in str(x).lower() for x in (proc.info["cmdline"] or [])):
+                        proc.kill()
+            except Exception:  # noqa: BLE001
+                pass
+        self.hidden = False
+        time.sleep(1.5)
+
+    def show_for_login(self) -> dict[str, Any]:
+        """Chrome đang chạy ẩn mà cần đăng nhập: mở lại thành cửa sổ thường để người dùng tự đăng nhập."""
+        def run() -> dict[str, Any]:
+            if getattr(self, "hidden", False):
+                self._shutdown()
+            return self._open(False)
+        return self.call(run, 120)
+
+    def close(self) -> None:
+        try:
+            self.call(self._shutdown, 30)
+        except Exception:  # noqa: BLE001
+            pass
+
+    # ---------- tự đăng nhập bằng tài khoản đã lưu (captcha do người dùng nhập) ----------
+    def login_captcha(self) -> dict[str, str]:
+        """Captcha của trang đăng nhập cổng: {"key", "image"} (ảnh data-uri để người dùng tự đọc và nhập)."""
+        def run() -> dict[str, str]:
+            page = self._portal_page()
+            res = page.evaluate(_FETCH_JS, {"url": API + "/captcha", "timeoutMs": 30000,
+                                            "headers": {"Accept": "application/json, text/plain, */*"}})
+            if res.get("error") or res.get("status") != 200:
+                raise BrowserError("Không lấy được captcha đăng nhập: " + (res.get("error") or str(res.get("status"))))
+            d = json.loads(base64.b64decode(res["b64"]).decode("utf-8"))
+            return {"key": d["key"],
+                    "image": "data:image/svg+xml;base64," + base64.b64encode(d["content"].encode()).decode()}
+        return self.call(run, 60)
+
+    def login(self, username: str, password: str, ckey: str, cvalue: str) -> dict[str, Any]:
+        """Đăng nhập cổng NGAY TRONG Chrome của phần mềm (như bấm Đăng nhập trên trang), lưu phiên vào trình duyệt."""
+        def run() -> dict[str, Any]:
+            page = self._portal_page()
+            r = page.evaluate("""async (a) => {
+              try {
+                const r = await fetch(a.url, {method: 'POST', credentials: 'include',
+                  headers: {'Content-Type': 'application/json', 'Accept': 'application/json, text/plain, */*'},
+                  body: JSON.stringify(a.body)});
+                return {status: r.status, text: await r.text()};
+              } catch (e) { return {status: 0, text: String(e)}; }
+            }""", {"url": API + "/security-taxpayer/authenticate",
+                   "body": {"username": username, "password": password, "cvalue": cvalue, "ckey": ckey}})
+            try:
+                data = json.loads(r.get("text") or "{}")
+            except ValueError:
+                data = {}
+            token = data.get("token")
+            if r.get("status") != 200 or not token:
+                msg = data.get("message") or (r.get("text") or "")[:200] or f"lỗi {r.get('status')}"
+                return {"ok": False, "message": msg}
+            self._context().add_cookies([{"name": "jwt", "value": token, "domain": "hoadondientu.gdt.gov.vn",
+                                          "path": "/", "secure": True}])
+            try:
+                page.reload(wait_until="domcontentloaded", timeout=45000)
+            except Exception:  # noqa: BLE001
+                pass
+            return {"ok": True, **self._status()}
+        return self.call(run, 90)
 
     # ---------- trạng thái đăng nhập ----------
     def _jwt(self) -> str | None:

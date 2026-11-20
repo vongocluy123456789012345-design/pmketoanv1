@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="vi" translate="no">
+<head>
+<meta charset="utf-8">
+<meta name="google" content="notranslate">
+<title>AWBook – Tải hóa đơn tự động</title>
+<link rel="icon" href="/favicon.ico">
+<style>
+  :root { --pri: #0b5cad; --ok: #1a7f37; --warn: #b35900; --bg: #f6f8fa; --bd: #d0d7de; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 15px/1.45 "Segoe UI", Arial, sans-serif; color: #1f2328; background: #fff; }
+  header { background: var(--pri); color: #fff; padding: 10px 16px; display: flex; align-items: center; gap: 10px; }
+  header .logo { width: 30px; height: 30px; border-radius: 8px; background: #fff; color: var(--pri); font: 800 15px "Segoe UI";
+    display: flex; align-items: center; justify-content: center; }
+  header b { font-size: 16px; }
+  main { padding: 14px 18px; }
+  .muted { color: #57606a; font-size: 13px; }
+  .bar { height: 16px; background: #eaeef2; border-radius: 9px; overflow: hidden; margin: 10px 0 6px; }
+  .bar > div { height: 100%; width: 0; background: linear-gradient(90deg, #2f81f7, var(--pri)); transition: width .4s; }
+  .bar.busy > div { width: 35% !important; animation: slide 1.2s infinite ease-in-out; }
+  @keyframes slide { 0% { margin-left: -35%; } 100% { margin-left: 100%; } }
+  .big { font-size: 17px; font-weight: 700; margin: 2px 0 4px; }
+  .cap { border: 2px solid #f2b705; background: #fff8e1; border-radius: 10px; padding: 10px 12px; margin-top: 10px; }
+  .cap img { display: block; height: 56px; background: #fff; border: 1px solid var(--bd); border-radius: 6px; margin: 6px 0; }
+  input { font-size: 20px; padding: 6px 10px; width: 170px; border: 1px solid var(--bd); border-radius: 6px; letter-spacing: 2px; }
+  button { font: 600 14px "Segoe UI"; padding: 8px 14px; border-radius: 6px; border: 1px solid var(--pri); background: var(--pri);
+    color: #fff; cursor: pointer; }
+  button.sec { background: #fff; color: var(--pri); }
+  .res { border-radius: 10px; padding: 12px 14px; margin-top: 4px; }
+  .res.ok { background: #dafbe1; border: 1px solid #4ac26b; }
+  .res.bad { background: #fff1e5; border: 1px solid #fb8f44; }
+  .res ul { margin: 6px 0 0 18px; padding: 0; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+  .log { font: 12px Consolas, monospace; color: #57606a; margin-top: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+</style>
+</head>
+<body>
+<header><div class="logo">AW</div><div><b>Tải hóa đơn tự động</b><div style="font-size:12px;opacity:.85" id="sub">AWBook</div></div></header>
+<main>
+  <div id="vRun">
+    <div class="big" id="title">Đang chuẩn bị…</div>
+    <div class="muted" id="info"></div>
+    <div class="bar busy" id="bar"><div></div></div>
+    <div class="muted" id="pct"></div>
+    <div class="log" id="last"></div>
+  </div>
+  <div class="cap" id="vCap" style="display:none">
+    <b>Cổng thuế yêu cầu nhập mã captcha</b>
+    <div class="muted" id="capWhy"></div>
+    <img id="capImg" alt="captcha">
+    <form id="capForm" style="display:flex;gap:8px;align-items:center">
+      <input id="capVal" autocomplete="off" maxlength="10" placeholder="Nhập mã">
+      <button type="submit">Gửi</button>
+      <button type="button" class="sec" id="capSkip" title="Không tải loại hóa đơn đang cần captcha">Bỏ qua</button>
+    </form>
+  </div>
+  <div class="cap" id="vLogin" style="display:none">
+    <b>Đăng nhập cổng thuế tự động</b>
+    <div class="muted">Công ty <b id="lgUser"></b> – phần mềm đã điền sẵn tài khoản, mật khẩu. Nhập mã captcha rồi bấm <b>Đăng nhập</b>.</div>
+    <div id="lgErr" style="color:#cf222e;font-size:13px;margin-top:4px"></div>
+    <img id="lgImg" alt="captcha đăng nhập">
+    <form id="lgForm" style="display:flex;gap:8px;align-items:center">
+      <input id="lgVal" autocomplete="off" maxlength="10" placeholder="Mã captcha">
+      <button type="submit" id="lgBtn">Đăng nhập</button>
+      <button type="button" class="sec" id="lgSkip">Bỏ qua</button>
+    </form>
+  </div>
+  <div id="vDone" style="display:none">
+    <div class="res" id="res"></div>
+    <div class="row">
+      <button id="btnApp">Vào phần mềm kiểm tra</button>
+      <button class="sec" id="btnDir">Mở thư mục hóa đơn</button>
+      <button class="sec" id="btnClose">Đóng</button>
+    </div>
+  </div>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+let lgShown = "", capShown = "", jobId = null, outDir = "", noCapSince = 0, done = false;
+function beep() {
+  try { const a = new AudioContext(), o = a.createOscillator(), g = a.createGain(); o.connect(g); g.connect(a.destination);
+        o.frequency.value = 880; g.gain.value = .15; o.start(); setTimeout(() => { o.frequency.value = 1320; }, 160);
+        setTimeout(() => { o.stop(); a.close(); }, 360); } catch (e) {}
+}
+async function api(u, opt) { const r = await fetch(u, opt); if (!r.ok) throw new Error(await r.text()); return r.json(); }
+async function poll() {
+  let s;
+  try { s = await api("/api/schedule"); } catch (e) { $("title").textContent = "Mất kết nối với phần mềm"; return; }
+  const j = s.job; jobId = j ? j.id : jobId;
+  if (s.phase === "done" && s.result) return showDone(s.result);
+  const nCty = (s.results || []).length + (s.cur ? 1 : 0) + (s.queue || []).length;
+  $("sub").textContent = nCty > 1 ? `Công ty ${(s.results || []).length + 1}/${nCty}` + (s.cur_ten ? ` – ${s.cur_ten}` : "") : "AWBook";
+  $("vRun").style.display = ""; $("vDone").style.display = "none";
+  const lc = s.login_cap;
+  if (lc) {
+    $("vLogin").style.display = ""; $("lgUser").textContent = (s.cur_ten ? s.cur_ten + " – " : "") + (lc.user || ""); $("lgErr").textContent = lc.error || "";
+    if (lc.image !== lgShown) { lgShown = lc.image; $("lgImg").src = lc.image; $("lgVal").value = ""; $("lgVal").focus();
+      $("lgBtn").disabled = false; beep(); window.focus(); }
+  } else { $("vLogin").style.display = "none"; lgShown = ""; }
+  if (lc) {
+    $("title").textContent = "Đến lịch tải hóa đơn tự động";
+    $("info").textContent = "Đăng nhập cổng thuế xong phần mềm tự tải, không cần làm gì thêm.";
+    $("bar").className = "bar busy"; $("pct").textContent = ""; $("last").textContent = "";
+  } else if (s.phase === "login" || s.waiting_login) {
+    $("title").textContent = "Cần đăng nhập cổng thuế";
+    $("info").innerHTML = "Phiên đăng nhập đã hết hạn. Hãy <b>tự đăng nhập</b> hoadondientu trên cửa sổ Chrome vừa mở – " +
+      "đăng nhập xong phần mềm tự tải tiếp.";
+    $("bar").className = "bar busy"; $("pct").textContent = ""; $("last").textContent = s.message || "";
+  } else if (j) {
+    $("title").textContent = "Đang tải hóa đơn " + (s.cur_ten || "") + (j.mst ? " – MST " + j.mst : "");
+    $("info").textContent = "Kỳ: " + (j.months || []).join(", ") + (s.enabled ? " · " + s.mo_ta : "");
+    const p = j.total ? Math.round(j.done * 100 / j.total) : 0;
+    const more = !j.total || j.done >= j.total;          // đang lấy danh sách / tải PDF / chuyển loại hóa đơn kế tiếp
+    $("bar").className = more ? "bar busy" : "bar"; $("bar").firstElementChild.style.width = p + "%";
+    $("pct").textContent = j.total ? `Đã xử lý ${j.done}/${j.total} hóa đơn` + (more ? " – đang tải tiếp" : ` (${p}%)`) +
+      ` · XML ${j.xml_ok} · PDF gốc ${j.pdf_ok} · PDF bản in ${j.pdf_hddt}` : "Đang lấy danh sách hóa đơn…";
+    $("last").textContent = j.last || "";
+  } else {
+    $("title").textContent = "Đang mở cổng thuế…"; $("info").textContent = s.message || s.mo_ta || "";
+  }
+  const cap = j && j.captcha;
+  if (cap) {
+    noCapSince = 0;
+    $("vCap").style.display = "";
+    if (cap.image !== capShown) {
+      capShown = cap.image; $("capImg").src = cap.image; $("capWhy").textContent = cap.reason || "";
+      $("capVal").value = ""; $("capVal").focus(); beep(); window.focus();
+    }
+  } else {
+    $("vCap").style.display = "none"; capShown = "";
+  }
+}
+function showDone(r) {
+  if (done) return; done = true;
+  outDir = r.out_dir || "";
+  $("vRun").style.display = "none"; $("vCap").style.display = "none"; $("vLogin").style.display = "none";
+  $("vDone").style.display = "";
+  $("sub").textContent = "Đã xong lượt tải tự động";
+  $("res").className = "res " + (r.ok ? "ok" : "bad");
+  $("res").innerHTML = `<div class="big">${r.ok ? "✅" : "⚠️"} ${esc(r.title)}</div>` +
+    (r.detail ? `<div class="muted">${esc(r.detail)}</div>` : "") +
+    (r.missing && r.missing.length ? `<b style="display:block;margin-top:6px">Còn thiếu / cần kiểm tra:</b><ul>${r.missing.map(m => `<li>${esc(m)}</li>`).join("")}</ul>` : "") +
+    (r.companies ? r.companies.map(c => `<div style="margin-top:8px;padding-top:6px;border-top:1px solid #0001">
+       <b>${c.ok ? "✅" : "⚠️"} ${esc(c.ten || c.user)}</b> – ${esc(c.title)}
+       ${c.detail ? `<div class="muted">${esc(c.detail)}</div>` : ""}
+       ${(c.missing || []).length ? `<ul>${c.missing.map(m => `<li>${esc(m)}</li>`).join("")}</ul>` : ""}
+       ${(c.notes || []).length ? `<ul class="muted">${c.notes.map(m => `<li>${esc(m)}</li>`).join("")}</ul>` : ""}</div>`).join("") : "") +
+    (r.notes && r.notes.length ? `<b style="display:block;margin-top:6px">Lưu ý:</b><ul class="muted">${r.notes.map(m => `<li>${esc(m)}</li>`).join("")}</ul>` : "") +
+    (r.ok ? `<div style="margin-top:6px">Bấm <b>Vào phần mềm kiểm tra</b> để xem file tổng hợp.</div>` : "");
+  $("btnDir").style.display = outDir ? "" : "none";
+  beep(); window.focus();
+}
+$("capForm").onsubmit = async ev => {
+  ev.preventDefault(); const v = $("capVal").value.trim(); if (!v || !jobId) return;
+  await api(`/api/auto/${jobId}/captcha`, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({value: v})});
+  $("vCap").style.display = "none"; capShown = "";
+};
+$("lgForm").onsubmit = async ev => {
+  ev.preventDefault(); const v = $("lgVal").value.trim(); if (!v) return;
+  $("lgBtn").disabled = true; $("lgErr").textContent = "Đang đăng nhập…";
+  try { const r = await api("/api/schedule/login", {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({value: v})});
+    $("lgErr").textContent = r.ok ? "" : (r.message || "Đăng nhập chưa được"); } catch (e) { $("lgErr").textContent = e.message; }
+  $("lgBtn").disabled = false;
+};
+$("lgSkip").onclick = () => api("/api/schedule/login", {method: "POST", headers: {"Content-Type": "application/json"},
+  body: JSON.stringify({value: null})});
+$("capSkip").onclick = async () => {
+  if (!jobId) return;
+  await api(`/api/auto/${jobId}/captcha`, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({value: null})});
+  $("vCap").style.display = "none"; capShown = "";
+};
+$("btnApp").onclick = async () => { try { await api("/api/schedule/open-app", {method: "POST"}); } catch (e) {} window.close(); };
+$("btnDir").onclick = () => fetch("/api/open-folder?path=" + encodeURIComponent(outDir), {method: "POST"});
+$("btnClose").onclick = () => window.close();
+poll(); setInterval(poll, 1000);
+</script>
+</body>
+</html>

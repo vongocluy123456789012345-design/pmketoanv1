@@ -235,6 +235,41 @@ def _open_window(url: str, root: Path):
     return proc
 
 
+def _run_background(server, root: Path) -> None:
+    """Tải hóa đơn theo lịch khi CHƯA mở phần mềm: không mở cửa sổ phần mềm, Chrome cổng thuế chạy ẩn; chỉ hiện cửa
+    sổ nhỏ tiến trình (thanh tiến độ, captcha khi cần, kết quả). Thoát khi xong và người dùng đã đóng các cửa sổ."""
+    from app.gdt.browser import BROWSER
+    from app.scheduler import SCHEDULER
+
+    SCHEDULER.background = True
+    SCHEDULER.trigger(scheduled=True)
+    ui_key = str(root / "data" / "ui-profile").lower()
+    pop_key = str(root / "data" / "popup-profile").lower()
+    t0, quiet = time.time(), 0
+    while not server.should_exit and time.time() - t0 < 12 * 3600:
+        time.sleep(3)
+        if _ui_alive(ui_key):           # người dùng bấm "Vào phần mềm kiểm tra" / tự mở phần mềm
+            _brand_windows(_icon_path(), _relaunch_cmd())
+            quiet = 0
+            continue
+        if SCHEDULER.busy() or _ui_alive(pop_key):
+            quiet = 0
+            continue
+        quiet += 1
+        if quiet >= 3:                  # đã xong, không còn cửa sổ nào (~9 giây) -> thoát
+            break
+    try:
+        if BROWSER.hidden:
+            BROWSER.close()
+        elif BROWSER._browser is not None:
+            BROWSER.call(lambda: BROWSER._browser.close(), 10)
+    except Exception:  # noqa: BLE001
+        pass
+    server.should_exit = True
+    time.sleep(1)
+    os._exit(0)
+
+
 def main() -> None:
     multiprocessing.freeze_support()  # bắt buộc với bản đóng gói (đọc PDF dùng nhiều tiến trình)
     from app.config import ROOT, settings
@@ -251,11 +286,20 @@ def main() -> None:
         if running:
             _open_window(f"http://127.0.0.1:{port}/#vat", ROOT)
             return
+    bg = "--tai-tu-dong" in sys.argv    # Windows Task Scheduler gọi đúng lịch tải hóa đơn tự động
     if not _port_free(port):
-        if _is_our_app(port):  # đã có một cửa sổ phần mềm đang chạy -> chỉ mở thêm cửa sổ
-            _open_window(f"http://127.0.0.1:{port}/", ROOT)
+        if _is_our_app(port):
+            if bg:   # phần mềm đang mở: chạy lượt theo lịch ngay trong phần mềm đó
+                try:
+                    urllib.request.urlopen(urllib.request.Request(
+                        f"http://127.0.0.1:{port}/api/schedule/run-scheduled", method="POST"), timeout=15)
+                except Exception:  # noqa: BLE001
+                    pass
+                return
+            _open_window(f"http://127.0.0.1:{port}/", ROOT)  # đã có cửa sổ phần mềm đang chạy -> mở thêm cửa sổ
             return
         port = next(p for p in range(port + 1, port + 50) if _port_free(p))
+        object.__setattr__(settings, "port", port)
 
     import uvicorn
 
@@ -268,6 +312,9 @@ def main() -> None:
         if server.started:
             break
         time.sleep(0.1)
+    if bg:
+        _run_background(server, ROOT)
+        return
     url = f"http://127.0.0.1:{port}/" + ("#vat" if "--nhac-vat" in sys.argv else "")   # từ bảng nhắc: vào Dự báo VAT
     proc = _open_window(url, ROOT)
 

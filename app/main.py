@@ -11,7 +11,7 @@ from typing import Literal
 
 import uvicorn
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 
 from . import db
@@ -875,23 +875,102 @@ class ScheduleIn(BaseModel):
     enabled: bool
     day: int = 5
     hour: int = 8
+    minute: int = 0
+    ky: Literal["truoc", "nay"] = "truoc"
     kinds: list[str] = ["mua-vao", "mua-vao-khong-ma", "ban-ra"]
 
 
 @app.post("/api/schedule")
 def schedule_set(body: ScheduleIn):
     from .scheduler import SCHEDULER
-    if not 1 <= body.day <= 28 or not 0 <= body.hour <= 23:
-        raise HTTPException(400, "Ngày chạy 1–28, giờ 0–23")
-    SCHEDULER.configure(body.enabled, body.day, body.hour, body.kinds)
+    if not 1 <= body.day <= 31 or not 0 <= body.hour <= 23 or not 0 <= body.minute <= 59:
+        raise HTTPException(400, "Ngày chạy 1–31, giờ 0–23, phút 0–59")
+    if not body.kinds:
+        raise HTTPException(400, "Chọn ít nhất một loại hóa đơn")
+    SCHEDULER.configure(body.enabled, body.day, body.hour, body.kinds, body.minute, body.ky)
     return SCHEDULER.status()
 
 
 @app.post("/api/schedule/run-now")
 def schedule_run_now():
+    """Bấm Chạy ngay: tải như lượt theo lịch (lần lượt các công ty đã lưu, cửa sổ tiến trình) nhưng không tính là
+    lượt của tháng."""
     from .scheduler import SCHEDULER
-    SCHEDULER.trigger()
+    if SCHEDULER.busy():
+        raise HTTPException(409, "Đang có lượt tải tự động chạy")
+    SCHEDULER.trigger(scheduled=True, mark=False)
     return SCHEDULER.status()
+
+
+@app.post("/api/schedule/run-scheduled")
+def schedule_run_scheduled():
+    """Windows gọi đúng giờ đã đặt khi phần mềm đang mở: chạy lượt theo lịch (có cửa sổ tiến trình)."""
+    from .scheduler import SCHEDULER
+    if not SCHEDULER.busy():
+        SCHEDULER.trigger(scheduled=True)
+    return SCHEDULER.status()
+
+
+class SchedLoginIn(BaseModel):
+    value: str | None = None     # captcha đăng nhập; trống = bỏ qua
+
+
+@app.post("/api/schedule/login")
+def schedule_login(body: SchedLoginIn):
+    from .scheduler import SCHEDULER
+    return SCHEDULER.submit_login(body.value)
+
+
+class GdtAccountIn(BaseModel):
+    username: str
+    password: str | None = None   # sửa công ty đã có: để trống = giữ mật khẩu cũ
+    ten: str = ""
+    auto: bool = True
+
+
+@app.get("/api/gdt-accounts")
+def gdt_accounts():
+    from .gdt import credentials
+    return {"items": credentials.accounts()}          # không bao giờ trả mật khẩu
+
+
+@app.post("/api/gdt-accounts")
+def gdt_account_save(body: GdtAccountIn):
+    from .gdt import credentials
+    try:
+        return {"items": credentials.save(body.username, body.password, body.ten, body.auto)}
+    except (ValueError, OSError) as e:
+        raise HTTPException(400, str(e)) from e
+
+
+class GdtAutoIn(BaseModel):
+    auto: bool
+
+
+@app.post("/api/gdt-accounts/{username}/auto")
+def gdt_account_auto(username: str, body: GdtAutoIn):
+    from .gdt import credentials
+    return {"items": credentials.set_auto(username, body.auto)}
+
+
+@app.delete("/api/gdt-accounts/{username}")
+def gdt_account_delete(username: str):
+    from .gdt import credentials
+    return {"items": credentials.delete(username)}
+
+
+@app.post("/api/schedule/open-app")
+def schedule_open_app():
+    """Nút "Vào phần mềm kiểm tra" trên cửa sổ tiến trình."""
+    from .scheduler import open_window
+    open_window("/#tai")
+    return {"ok": True}
+
+
+@app.get("/tien-trinh", response_class=HTMLResponse)
+def tien_trinh_page():
+    return HTMLResponse((TEMPLATES / "tien_trinh.html").read_text(encoding="utf-8"),
+                        headers={"Cache-Control": "no-store, no-cache, must-revalidate", "Pragma": "no-cache"})
 
 
 @app.post("/api/open-folder")
