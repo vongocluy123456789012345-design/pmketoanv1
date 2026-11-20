@@ -76,3 +76,7 @@ dự báo thuế GTGT, đối chiếu tờ khai, đọc chứng từ và đối 
   → tự gọi công cụ đọc dữ liệu, trả lời bằng số thật, không đoán.
 - Sửa cài đặt (cai_dat_vat, nhap_so_lieu_vat, cai_lich_tai_tu_dong, cai_lich_nhac_vat): làm khi khách yêu cầu; giá trị chưa rõ
   thì hỏi lại 1 câu; xong báo lại đã đổi gì. Không xóa dữ liệu, không nhập mật khẩu / captcha.
+- Kiểm tra đầu vào trước khi xuất HĐ (kiemxuat, kiem_tra_dau_vao_xuat_hd): khách nhắn "em muốn xuất hóa đơn này, kiểm tra
+  đầu vào giúp em" kèm danh sách hàng → đọc từng mặt hàng (tên, ĐVT, SL, đơn giá) rồi gọi công cụ; báo mặt hàng nào đủ,
+  thiếu bao nhiêu, gần giống cần xác nhận (khác ĐVT, tên gần giống), không có đầu vào; giá bán thấp hơn giá vốn; đưa lời
+  nhắn trả lời khách. Khách gửi ảnh / PDF / Excel hoặc cần dùng file tồn kho mới → mở trang kiemxuat để khách tải lên.

@@ -139,6 +139,7 @@
     <div class="tiDrop">
       <a href="#tongquan" data-page="tongquan">📊 Bảng điều khiển tất cả khách hàng</a>
       <a href="#hannop" data-page="hannop">📅 Lịch hạn nộp thuế &amp; nhắc việc</a>
+      <a href="#kiemxuat" data-page="kiemxuat">🔎 Kiểm tra đầu vào trước khi xuất HĐ</a>
       <a href="#ruiro" data-page="ruiro">🛡️ Kiểm tra rủi ro hóa đơn đầu vào</a>
       <a href="#dinhkhoan" data-page="dinhkhoan">🧾 Định khoản HĐ mua vào theo mặt hàng</a>
       <a href="#bbcn" data-page="bbcn">🤝 Biên bản đối chiếu công nợ</a>
@@ -163,6 +164,30 @@
     <p>Công ty: <select id="hnMst" class="tiMst" data-all="1"></select> · Xem trước <select id="hnAhead"><option value="30">30 ngày</option><option value="60" selected>60 ngày</option><option value="120">120 ngày</option></select>
       <label><input type="checkbox" id="hnShowDone"> Hiện cả hạn đã nộp</label> <button id="hnLoad">Xem</button></p>
     <div style="overflow:auto"><table id="hnTable"></table></div>
+  </section>
+ </div>
+ <div class="page" id="page-kiemxuat">
+  <section class="card">
+    <h2>Kiểm tra đầu vào trước khi xuất hóa đơn</h2>
+    <p class="muted">Khách nhắn "em muốn xuất hóa đơn này, chị kiểm tra đầu vào giúp em": tải lên ảnh chụp / PDF / Excel (báo giá, hợp đồng, đơn hàng) hoặc dán tin nhắn. Phần mềm đọc từng mặt hàng, dò với <b>file tồn kho chi tiết</b> và với <b>hàng mua vào – đã bán ra trên hóa đơn điện tử đã tải</b>, báo mặt hàng nào đủ, thiếu bao nhiêu, gần giống cần xác nhận, hay không có đầu vào, rồi soạn sẵn lời nhắn trả lời khách.</p>
+    <p>Công ty: <select id="kxMst" class="tiMst"></select> Dò hóa đơn từ <input type="date" id="kxTu"> đến <input type="date" id="kxDen"></p>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px">
+      <div class="card" style="background:var(--bg)">
+        <b>1. Yêu cầu của khách</b> <span class="muted">(ảnh, PDF, Excel – chọn nhiều file được)</span>
+        <p><input type="file" id="kxFiles" multiple accept="image/*,.pdf,.xlsx,.xls,.xlsm,.csv,.txt"></p>
+        <textarea id="kxText" rows="6" style="width:100%" placeholder="Dán tin nhắn của khách, ví dụ:&#10;10 thùng sữa Ensure 850g&#10;Bàn làm việc x 2 cái&#10;3 cuộn dây cước Yonex BG 65 giá 120k"></textarea>
+        <p class="muted"><label><input type="checkbox" id="kxAi" checked> Dùng AI đọc ảnh / PDF scan / tin nhắn khó (chính xác hơn với chữ tiếng Việt)</label></p>
+      </div>
+      <div class="card" style="background:var(--bg)">
+        <b>2. Tồn kho chi tiết</b> <span class="muted">(tùy chọn – Tổng hợp tồn kho MISA, danh mục, bảng kê tồn kho)</span>
+        <p><input type="file" id="kxKho" accept=".xlsx,.xls,.xlsm,.csv"></p>
+        <p class="muted" id="kxKhoInfo"></p>
+        <p class="muted"><label><input type="checkbox" id="kxKhoCu" checked> Không chọn file thì dùng file tồn kho đã lưu lần trước của công ty này</label></p>
+        <p class="muted">Không có tồn kho thì phần mềm tính còn lại = SL mua vào − SL đã bán ra trên hóa đơn đã tải.</p>
+      </div>
+    </div>
+    <p><button id="kxRun">Kiểm tra đầu vào</button> <span class="muted" id="kxMsg"></span></p>
+    <div id="kxOut"></div>
   </section>
  </div>
  <div class="page" id="page-ruiro">
@@ -1665,9 +1690,9 @@ $("btnAiKeyDel").onclick = async () => { await api("/api/ai/key", {method: "POST
 aiStatus();
 
 // ----- chuyển trang theo menu (#tai, #vat, #doichieu, #lich, #nhapfile, #dulieu); #ai = mở bóng chat -----
-const PAGES = ["tai", "vat", "misa", "tonkho", "chungtu", "doichieu", "lich", "nhapfile", "dulieu", "tongquan", "hannop", "ruiro", "laulo", "bbcn", "dinhkhoan", "xmltk"];
+const PAGES = ["tai", "vat", "misa", "tonkho", "chungtu", "doichieu", "lich", "nhapfile", "dulieu", "tongquan", "hannop", "ruiro", "laulo", "bbcn", "dinhkhoan", "xmltk", "kiemxuat"];
 // ----- ☰ Tiện ích -----
-const TI_PAGES = ["tongquan", "hannop", "ruiro", "laulo", "bbcn", "dinhkhoan", "xmltk"];
+const TI_PAGES = ["tongquan", "hannop", "ruiro", "laulo", "bbcn", "dinhkhoan", "xmltk", "kiemxuat"];
 let tiCos = null;
 $("tiBtn").onclick = e => { e.preventDefault(); $("tiMenu").classList.toggle("open"); };
 document.addEventListener("click", e => { if (!$("tiMenu").contains(e.target)) $("tiMenu").classList.remove("open"); });
@@ -1689,6 +1714,7 @@ async function tiLoadCos(force) {
 (function tiDates() {
   const n = new Date(), a = new Date(n.getFullYear(), n.getMonth() - 1, 1), b = new Date(n.getFullYear(), n.getMonth(), 0);
   ["rr", "dk"].forEach(p => { $(p + "Tu").value = tiIso(a); $(p + "Den").value = tiIso(b); });
+  $("kxTu").value = tiIso(new Date(n.getFullYear() - 1, n.getMonth(), 1)); $("kxDen").value = tiIso(n);
   $("llTu").value = `${n.getFullYear()}-01-01`; $("llDen").value = tiIso(b); $("bbNgay").value = tiIso(n);
 })();
 async function tiEnter(p) {
@@ -1698,7 +1724,40 @@ async function tiEnter(p) {
   if (p === "ruiro" && !$("rrList").dataset.ok) api("/api/ti/mst-rui-ro").then(r => { $("rrList").value = r.list.join("\n"); $("rrList").dataset.ok = 1; });
   if (p === "laulo" && !$("llNhom").options.length) api("/api/ti/nhom-hkd").then(r => { $("llNhom").innerHTML = r.rows.map(x => `<option value="${x.ma}">${esc(x.ten)} (GTGT ${x.gtgt}% + TNCN ${x.tncn}%)</option>`).join(""); });
   if (p === "xmltk") xmLoadKy();
+  if (p === "kiemxuat") kxKhoInfo();
 }
+// Kiểm tra đầu vào trước khi xuất HĐ
+async function kxKhoInfo() {
+  const r = await api("/api/ti/kiem-xuat/kho?mst=" + encodeURIComponent($("kxMst").value)).catch(() => null);
+  $("kxKhoInfo").textContent = r && r.file ? `Đã lưu: ${r.ten} (${r.luc.slice(6, 8)}/${r.luc.slice(4, 6)}/${r.luc.slice(0, 4)})` : "Chưa lưu file tồn kho nào cho công ty này";
+}
+$("kxMst").onchange = kxKhoInfo;
+$("kxRun").onclick = async () => {
+  const fd = new FormData();
+  fd.append("mst", $("kxMst").value); fd.append("tu", $("kxTu").value); fd.append("den", $("kxDen").value);
+  fd.append("tin_nhan", $("kxText").value); fd.append("dung_ai", $("kxAi").checked); fd.append("dung_kho_cu", $("kxKhoCu").checked);
+  for (const f of $("kxFiles").files) fd.append("yeu_cau", f);
+  if ($("kxKho").files[0]) fd.append("ton_kho", $("kxKho").files[0]);
+  if (!$("kxFiles").files.length && !$("kxText").value.trim()) return alert("Chọn file yêu cầu của khách hoặc dán tin nhắn");
+  $("kxMsg").textContent = "Đang đọc yêu cầu và dò kho / hóa đơn…"; $("kxOut").innerHTML = ""; $("kxRun").disabled = true;
+  try {
+    const r = await api("/api/ti/kiem-xuat", {method: "POST", body: fd});
+    const t = r.tong, n = (v, d) => v == null ? "" : Number(v).toLocaleString("vi-VN", {maximumFractionDigits: d ?? 3});
+    $("kxMsg").innerHTML = `<b style="color:var(--ok)">Đủ ${t.DU}</b> · <b style="color:var(--warn)">Cần xác nhận ${t.GAN}</b> · <b style="color:var(--err)">Thiếu ${t.THIEU}</b> · Vật tư liên quan ${t.LIENQUAN} · <b style="color:var(--err)">Không có đầu vào ${t.KHONG}</b> · <a href="#" id="kxOpen">Mở Excel</a>`;
+    $("kxOpen").onclick = e => { e.preventDefault(); tiOpen(r.file); };
+    kxKhoInfo();
+    const cls = {DU: "", GAN: "lvCB", THIEU: "lvLOI", LIENQUAN: "lvLY", KHONG: "lvLOI"};
+    $("kxOut").innerHTML = `<p class="muted">${r.notes.map(esc).join(" · ")} · HĐ đã dò: ${r.hoa_don.mua} mua vào, ${r.hoa_don.ban} bán ra${r.hoa_don.khong_xml ? ` (${r.hoa_don.khong_xml} HĐ chưa có XML chi tiết)` : ""}</p>
+      <div style="overflow:auto"><table><tr><th>Mặt hàng khách yêu cầu</th><th>ĐVT</th><th>SL</th><th>Đơn giá</th><th>Kết quả</th><th>Trong kho / trên HĐ mua vào</th><th>Tồn kho</th><th>Mua vào</th><th>Đã bán</th><th>Giá vốn BQ</th><th>Ghi chú</th></tr>` +
+      r.rows.map(x => `<tr class="${cls[x.muc]}"><td><b>${esc(x.ten)}</b>${x.mo_ta ? `<br><span class="muted">${esc(x.mo_ta)}</span>` : ""}</td><td>${esc(x.dvt || "")}</td><td style="text-align:right">${n(x.sl)}</td><td style="text-align:right">${money(x.dg || null)}</td>
+        <td><b>${esc(x.ket_qua)}</b></td><td>${esc(x.kho_ten || x.hd_ten || "")}${x.lien_quan.length ? `<br><span class="muted">Liên quan: ${x.lien_quan.map(esc).join("<br>")}</span>` : ""}${(x.hd_mua_so || []).length ? `<br><span class="muted">HĐ: ${x.hd_mua_so.slice(0, 3).map(esc).join("; ")}</span>` : ""}</td>
+        <td style="text-align:right">${n(x.kho_ton)}</td><td style="text-align:right">${n(x.hd_nhap)}</td><td style="text-align:right">${n(x.hd_ban)}</td><td style="text-align:right">${money(x.gia_von ? Math.round(x.gia_von) : null)}</td><td class="muted">${esc(x.ghi_chu || "")}</td></tr>`).join("") + `</table></div>
+      <h3>Lời nhắn trả lời khách</h3><textarea id="kxReply" rows="9" style="width:100%">${esc(r.loi_nhan)}</textarea>
+      <p><button class="sec" id="kxCopy">Chép lời nhắn</button></p>`;
+    $("kxCopy").onclick = () => { navigator.clipboard.writeText($("kxReply").value); $("kxCopy").textContent = "Đã chép"; };
+  } catch (e) { $("kxMsg").textContent = e.message; }
+  $("kxRun").disabled = false;
+};
 // Bảng điều khiển
 function tqRender() {
   const rows = tiCos || [];

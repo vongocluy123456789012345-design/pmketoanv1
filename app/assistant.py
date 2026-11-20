@@ -259,9 +259,9 @@ APP_TOOLS = [
                           "hóa đơn vào mẫu MISA), tonkho (tổng hợp tồn kho mẫu MISA), chungtu (sao kê & chứng từ), doichieu, lich (lịch tự động "
                           "tải HĐ + nhắc VAT + tài khoản tải tự động), nhapfile, dulieu; menu Tiện ích: tongquan (bảng điều khiển "
                           "tất cả khách hàng), hannop (lịch hạn nộp), ruiro (rủi ro HĐ đầu vào), dinhkhoan (định khoản mua vào), "
-                          "bbcn (biên bản đối chiếu công nợ), laulo (lãi lỗ & thuế tạm tính), xmltk (xuất XML tờ khai). Với vat có "
+                          "bbcn (biên bản đối chiếu công nợ), kiemxuat (kiểm tra đầu vào trước khi xuất HĐ), laulo (lãi lỗ & thuế tạm tính), xmltk (xuất XML tờ khai). Với vat có "
                           "thể kèm kỳ (ky_key dạng YYYY-MM hoặc YYYY-Qn, để trống nếu không cần) và mst.",
-          {"trang": {"type": "string", "enum": ["tai", "vat", "misa", "tonkho", "chungtu", "doichieu", "lich", "nhapfile", "dulieu", "tongquan", "hannop", "ruiro", "dinhkhoan", "bbcn", "laulo", "xmltk"]},
+          {"trang": {"type": "string", "enum": ["tai", "vat", "misa", "tonkho", "chungtu", "doichieu", "lich", "nhapfile", "dulieu", "tongquan", "hannop", "ruiro", "dinhkhoan", "bbcn", "laulo", "xmltk", "kiemxuat"]},
            "mst": S, "ky_key": S}),
     _tool("mo_file", "Mở file kết quả (PDF/Excel) hoặc thư mục trong nơi lưu hóa đơn cho khách xem.", {"duong_dan": S}),
     # ---- đọc toàn bộ dữ liệu các công ty
@@ -309,6 +309,14 @@ APP_TOOLS = [
           {"bat": {"type": "boolean"}, "ngay": I, "gio": I, "phut": I,
            "ky": {"type": "string", "enum": ["truoc", "nay", "quy_truoc", "quy_nay", "thang", "quy", "khoang"]},
            "tu": S, "den": S, "loai": {"type": "array", "items": {"type": "string", "enum": KINDS}}}),
+    _tool("kiem_tra_dau_vao_xuat_hd",
+          "Khách nhờ kiểm tra đầu vào trước khi xuất hóa đơn: với danh sách mặt hàng khách muốn xuất (đọc từ tin nhắn khách "
+          "dán vào), dò file tồn kho đã lưu của công ty + hàng mua vào / đã bán ra trên HĐ đã tải (12 tháng gần nhất) -> "
+          "từng mặt hàng Đủ / Thiếu / Gần giống / Không có đầu vào, giá vốn, lời nhắn trả lời khách. Khách gửi ẢNH / PDF / "
+          "Excel thì mở trang kiemxuat để khách tải file lên.",
+          {"mst": S, "mat_hang": {"type": "array", "items": {"type": "object", "properties": {
+              "ten": S, "dvt": S, "sl": {"type": "number"}, "don_gia": {"type": "number"}},
+              "required": ["ten", "dvt", "sl", "don_gia"], "additionalProperties": False}}}),
     _tool("cai_lich_nhac_vat", "Cài lịch nhắc / tự dự báo VAT: bat, ngay = các ngày trong tháng (vd '1,15'), gio 'HH:MM'.",
           {"bat": {"type": "boolean"}, "ngay": S, "gio": S}),
 ]
@@ -487,7 +495,7 @@ def _run_tool(name: str, a: dict[str, Any]) -> Any:
     return {"loi": f"Không có công cụ {name}"}
 
 
-TI_TOOLS = {"tong_quan_khach_hang", "thong_tin_cong_ty", "han_nop", "danh_dau_da_nop", "kiem_tra_rui_ro_hd",
+TI_TOOLS = {"kiem_tra_dau_vao_xuat_hd", "tong_quan_khach_hang", "thong_tin_cong_ty", "han_nop", "danh_dau_da_nop", "kiem_tra_rui_ro_hd",
             "them_mst_rui_ro", "uoc_tinh_lai_lo", "goi_y_dinh_khoan", "hoc_dinh_khoan", "xuat_xml_to_khai", "ket_qua_sao_ke",
             "cai_dat_vat", "nhap_so_lieu_vat", "xem_lich_tu_dong", "cai_lich_tai_tu_dong", "cai_lich_nhac_vat"}
 
@@ -514,6 +522,25 @@ def _run_ti(name: str, a: dict[str, Any]) -> Any:
     mst = re.sub(r"[^\d-]", "", str(a.get("mst") or ""))
     if name == "tong_quan_khach_hang":
         return tienich.dashboard()
+    if name == "kiem_tra_dau_vao_xuat_hd":
+        from datetime import date
+
+        from . import kiemxuat
+        req = [{"ten": x["ten"], "mo_ta": "", "dvt": x.get("dvt", ""), "sl": float(x.get("sl") or 0),
+                "dg": float(x.get("don_gia") or 0), "tt": float(x.get("sl") or 0) * float(x.get("don_gia") or 0),
+                "ma": "", "nguon": "tin nhắn"} for x in a.get("mat_hang", []) if x.get("ten")]
+        f = kiemxuat.last_stock(mst)
+        stock = kiemxuat.read_stock(f.read_bytes()) if f else None
+        t = date.today()
+        res = kiemxuat.check(mst, req, stock, date(t.year - 1, t.month, 1), t)
+        out = Path(settings.output_dir) / mst / "KiemTraXuatHD"
+        out.mkdir(parents=True, exist_ok=True)
+        fx = out / f"KiemTraDauVao_AI_{t:%Y%m%d}.xlsx"
+        fx.write_bytes(kiemxuat.write_excel(res))
+        return {"tong": res["tong"], "co_ton_kho": bool(stock), "hoa_don": res["hoa_don"], "file": str(fx),
+                "mat_hang": [{k: r.get(k) for k in ("ten", "dvt", "sl", "ket_qua", "kho_ten", "kho_ton", "hd_ten", "hd_nhap",
+                                                    "hd_ban", "gia_von", "ghi_chu", "lien_quan")} for r in res["rows"]],
+                "loi_nhan_cho_khach": kiemxuat.reply_text(res)}
     if name == "thong_tin_cong_ty":
         cfg = vat.get_cfg(mst)
         return {**tienich.company(mst), "kieu_ke_khai": cfg["kieu"], "tu_du_bao": cfg["auto"],

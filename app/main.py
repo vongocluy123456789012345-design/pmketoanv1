@@ -922,6 +922,61 @@ def ti_xml_tk(body: TiXmlIn):
     return {"file": str(f), "ghi_chu": note}
 
 
+@app.get("/api/ti/kiem-xuat/kho")
+def ti_kiem_xuat_kho(mst: str):
+    from . import kiemxuat
+    f = kiemxuat.last_stock(mst)
+    return {"file": str(f) if f else "", "ten": f.name.split("_", 2)[-1] if f else "",
+            "luc": f.name[:15] if f else ""}
+
+
+@app.post("/api/ti/kiem-xuat")
+async def ti_kiem_xuat(mst: str = Form(...), tu: str = Form(""), den: str = Form(""), tin_nhan: str = Form(""),
+                       dung_ai: bool = Form(True), dung_kho_cu: bool = Form(True),
+                       ton_kho: UploadFile | None = File(None), yeu_cau: list[UploadFile] = File(default=[])):
+    from datetime import datetime as _dt
+
+    from starlette.concurrency import run_in_threadpool
+
+    from . import kiemxuat
+    files = [(f.filename or "file", await f.read()) for f in yeu_cau if f is not None]
+    files = [(n, d) for n, d in files if d]
+    if not files and not tin_nhan.strip():
+        raise HTTPException(400, "Tải lên ảnh / PDF / Excel yêu cầu của khách hoặc dán tin nhắn")
+    notes: list[str] = []
+    stock = None
+    if ton_kho is not None and ton_kho.filename:
+        data = await ton_kho.read()
+        if data:
+            try:
+                stock = await run_in_threadpool(kiemxuat.read_stock, data)
+            except ValueError as e:
+                raise HTTPException(400, str(e)) from e
+            kiemxuat.save_stock(mst, ton_kho.filename, data)
+            notes.append(f"Tồn kho: {ton_kho.filename} – {len(stock)} mặt hàng (đã lưu cho lần sau)")
+    elif dung_kho_cu and kiemxuat.last_stock(mst):
+        f = kiemxuat.last_stock(mst)
+        try:
+            stock = await run_in_threadpool(kiemxuat.read_stock, f.read_bytes())
+            notes.append(f"Tồn kho: dùng file đã lưu {f.name} – {len(stock)} mặt hàng")
+        except ValueError:
+            stock = None
+    try:
+        req, n2 = await run_in_threadpool(kiemxuat.read_request, files, tin_nhan, dung_ai)
+    except RuntimeError as e:
+        raise HTTPException(400, str(e)) from e
+    notes += n2
+    if not req:
+        raise HTTPException(400, "Không đọc được mặt hàng nào từ yêu cầu. " + " · ".join(notes))
+    t = date.today()
+    d1 = _d(tu, date(t.year - 1, t.month, 1))
+    d2 = max(d1, _d(den, t))
+    res = await run_in_threadpool(kiemxuat.check, mst, req, stock, d1, d2)
+    out = _ti_out(mst, "KiemTraXuatHD") / f"KiemTraDauVao_{_dt.now():%Y%m%d_%H%M%S}.xlsx"
+    out.write_bytes(await run_in_threadpool(kiemxuat.write_excel, res))
+    return {**res, "file": str(out), "notes": notes, "loi_nhan": kiemxuat.reply_text(res)}
+
+
 @app.get("/api/ti/ky-vat")
 def ti_ky_vat(mst: str):
     from . import vat
