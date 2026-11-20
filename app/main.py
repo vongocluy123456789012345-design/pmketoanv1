@@ -809,15 +809,18 @@ async def docs_bank_book(stmt: list[UploadFile] = File(...), book: list[UploadFi
 
 
 @app.post("/api/docs/bank")
-async def docs_bank(files: list[UploadFile] = File(...), mst: str = Form(""), months_back: int = Form(6),
-                    che_do: str = Form("TT200"), lay_cong: bool = Form(True), so_ct_bat_dau: int = Form(1)):
-    """Đọc sao kê, ghép từng giao dịch với hóa đơn (đã tải + hóa đơn các tháng trước lấy từ cổng HĐĐT),
-    hạch toán Nợ/Có và xuất file nhập khẩu MISA / EasyBooks."""
+async def docs_bank(files: list[UploadFile] = File(...), mst: str = Form(""), months_back: int = Form(12),
+                    che_do: str = Form("TT200"), lay_cong: bool = Form(True), so_ct_bat_dau: int = Form(1),
+                    phai_thu: list[UploadFile] | None = File(None), phai_tra: list[UploadFile] | None = File(None),
+                    so_ban: list[UploadFile] | None = File(None), dung_ai: bool = Form(True)):
+    """Đọc sao kê, dò từng giao dịch: với hóa đơn HĐĐT (5 loại, tháng sao kê lùi về các tháng trước), danh mục công nợ
+    phải thu / phải trả (mã đối tượng), sổ chi tiết bán hàng; AI đoán các dòng còn chưa rõ. Hạch toán Nợ/Có, xuất
+    file nhập khẩu MISA / EasyBooks có mã đối tượng và file kết quả ghép thu chi."""
     from datetime import datetime, timedelta
 
     from starlette.concurrency import run_in_threadpool
 
-    from . import bank, bank_post
+    from . import bank, bank_post, bank_smart, quick_read
     mst, root = _doc_root(mst)
     payload = await _read_uploads(files)
     txns, errors, info = [], [], {}
@@ -832,10 +835,12 @@ async def docs_bank(files: list[UploadFile] = File(...), mst: str = Form(""), mo
         raise HTTPException(400, "Không đọc được giao dịch nào. " + " | ".join(errors))
     txns.sort(key=lambda t: t["ngay"])
     d1, d2 = txns[0]["ngay"], txns[-1]["ngay"]
-    months_back = max(0, min(int(months_back or 0), 24))
+    months_back = max(0, min(int(months_back or 0), 36))
     start = (d1.replace(day=1) - timedelta(days=31 * months_back)).replace(day=1)
-    local = bank.invoices_for_range(root, start + timedelta(days=62), d2) if months_back >= 2 else \
-        bank.invoices_for_range(root, d1, d2)
+    sources, notes = [], []
+
+    # 1) hóa đơn HĐĐT: dữ liệu trên máy (đủ 5 loại nếu đã tải / đọc nhanh) + lấy thêm từ cổng (loại không captcha)
+    local = bank.invoices_for_range(root, start + timedelta(days=62), d2)
     portal, note = [], ""
     if lay_cong:
         portal, perr = await run_in_threadpool(bank_post.portal_invoices, root, start, d2, lambda m: None)
@@ -843,8 +848,71 @@ async def docs_bank(files: list[UploadFile] = File(...), mst: str = Form(""), mo
             errors.append(perr)
         note = f"Hóa đơn lấy thêm từ cổng HĐĐT {start:%m/%Y} – {d2:%m/%Y}: {len(portal)}"
     invoices = bank_post.merge_invoices(local, portal)
+    by_kind: dict[str, int] = {}
+    for i in invoices:
+        by_kind[i.get("loai") or i.get("huong") or "?"] = by_kind.get(i.get("loai") or i.get("huong") or "?", 0) + 1
+    sources.append(f"Hóa đơn HĐĐT {start:%m/%Y} – {d2:%m/%Y}: {len(invoices)} HĐ (" +
+                   ", ".join(f"{k}: {v}" for k, v in sorted(by_kind.items())) + ")")
+    months = bank_post._months(start, d2)
+    try:
+        miss = [x for x in quick_read.coverage(root, months, invoices) if " CHƯA đọc:" in x or "THIẾU" in x]
+        lab = sorted({re.search(r"Tháng (\d{2}/\d{4})", x).group(1) for x in miss if re.search(r"Tháng \d{2}/\d{4}", x)},
+                     key=lambda m: m[3:] + m[:2])
+        if lab:
+            notes.append(f"{len(lab)} tháng chưa đọc đủ hóa đơn trên HĐĐT (nhất là máy tính tiền): {', '.join(lab)} – vào "
+                         "Tải hóa đơn hoặc Dự báo VAT bấm ⚡ Đọc nhanh từ cổng các tháng này để dò chính xác hơn")
+    except Exception:  # noqa: BLE001
+        pass
+
+    # 2) danh mục công nợ phải thu / phải trả -> danh bạ đối tượng (mã, tên, MST, số TK)
+    partners = []
+    for loai, ups in (("KH", phai_thu), ("NCC", phai_tra)):
+        for name, data in await _read_uploads(ups or []):
+            try:
+                ps = bank_smart.read_partners(name, data, loai)
+                partners += ps
+                sources.append(f"{'Phải thu (khách hàng)' if loai == 'KH' else 'Phải trả (nhà cung cấp)'} – {name}: {len(ps)} đối tượng")
+            except Exception as e:  # noqa: BLE001
+                errors.append(f"{name}: {e}")
+    dirx = bank_smart.Directory(partners) if partners else None
+    if dirx:
+        for t in txns:
+            t["dt"] = dirx.identify(t)
+
+    # 3) ghép hóa đơn, rồi sổ chi tiết bán hàng cho tiền thu chưa ghép
     bank_post.allocate(invoices, txns)
-    vouchers = bank_post.build_vouchers(txns, che_do, info.get("chu_tk", ""), max(1, int(so_ct_bat_dau or 1)))
+    sales = []
+    for name, data in await _read_uploads(so_ban or []):
+        try:
+            vs = bank_smart.read_sales(name, data)
+            sales += vs
+            sources.append(f"Sổ chi tiết bán hàng – {name}: {len(vs)} chứng từ")
+        except Exception as e:  # noqa: BLE001
+            errors.append(f"{name}: {e}")
+    if sales:
+        n = bank_smart.apply_sales(txns, sales, dirx)
+        sources.append(f"Ghép thêm {n} khoản thu theo sổ chi tiết bán hàng")
+    for t in txns:                      # đối tượng lấy theo hóa đơn đã ghép (nếu chưa nhận diện được)
+        if not t.get("dt") and t.get("alloc"):
+            inv = t["alloc"][0]["inv"]
+            pm, pn = bank_post.partner(inv)
+            p = dirx.by_partner(pm, pn) if dirx else None
+            t["dt"] = {"ma": (p or {}).get("ma") or pm, "ten": (p or {}).get("ten") or pn, "mst": pm,
+                       "loai": "NCC" if inv.get("huong") == "purchase" else "KH", "why": "theo hóa đơn đã ghép",
+                       "diem": 80, "nghi_ngo": []}
+
+    # 4) định khoản lượt 1 (nhận ra phí NH, lương, thuế...), AI cho dòng còn chưa rõ, định khoản lại
+    start_no = max(1, int(so_ct_bat_dau or 1))
+    bank_post.build_vouchers(txns, che_do, info.get("chu_tk", ""), start_no)
+    if dung_ai:
+        try:
+            n_ai = await run_in_threadpool(bank_smart.ai_classify, txns, dirx, lambda m: errors.append(m))
+            if n_ai:
+                sources.append(f"AI gợi ý cho {n_ai} giao dịch chưa rõ (đều đánh dấu cần kiểm tra)")
+        except Exception as e:  # noqa: BLE001
+            errors.append(f"AI phân loại lỗi: {e}")
+    vouchers = bank_post.build_vouchers(txns, che_do, info.get("chu_tk", ""), start_no)
+    bank_smart.fill_codes(vouchers, dirx)
 
     tag = f"{d1:%Y%m%d}_{d2:%Y%m%d}_{datetime.now():%H%M%S}"
     out_dir = root / "DocChungTu"
@@ -852,16 +920,19 @@ async def docs_bank(files: list[UploadFile] = File(...), mst: str = Form(""), mo
     tpl_dir.mkdir(parents=True, exist_ok=True)
     codes = bank_post.load_codes(tpl_dir)
     dest = bank_post.write_report(out_dir / f"DoiChieu_SaoKe_{tag}.xlsx", txns, invoices, vouchers, info, errors, note)
+    ket_qua = out_dir / f"KetQua_GhepThuChi_{tag}.xlsx"
+    stat = bank_smart.write_result(ket_qua, vouchers, info, notes, sources)
     misa = bank_post.export_misa(tpl_dir, out_dir, tag, vouchers, info, codes)
     easy = bank_post.export_easybooks(tpl_dir, out_dir, tag, vouchers, info, codes)
     matched = sum(1 for t in txns if t.get("alloc"))
-    return {"file": str(dest), "from": d1.isoformat(), "to": d2.isoformat(), "txns": len(txns),
+    return {"file": str(dest), "ket_qua": str(ket_qua), "from": d1.isoformat(), "to": d2.isoformat(), "txns": len(txns),
             "invoices": len(invoices), "matched": matched, "unmatched": len(txns) - matched,
             "unpaid": sum(1 for i in invoices if i["_con_lai"] > 1 and str(i.get("ngay_lap"))[:10] >= d1.isoformat()),
             "kiem_tra": sum(1 for v in vouchers if v.get("kiem_tra")),
             "tien_vao": sum(t["co"] for t in txns), "tien_ra": sum(t["no"] for t in txns), "errors": errors,
             "note": note, "misa": [str(p) for p in misa], "easybooks": [str(p) for p in easy],
-            "tai_khoan": info, "mau_nhap_khau": str(tpl_dir)}
+            "tai_khoan": info, "mau_nhap_khau": str(tpl_dir), "stat": stat, "sources": sources, "notes": notes,
+            "doi_tuong": len(partners), "co_doi_tuong": sum(1 for t in txns if t.get("dt"))}
 
 
 # ---------- chạy tự động theo lịch ----------

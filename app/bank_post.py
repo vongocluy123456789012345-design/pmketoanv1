@@ -210,6 +210,12 @@ def _desc(t: dict[str, Any]) -> str:
 
 def _is_partner(inv: dict[str, Any], t: dict[str, Any]) -> bool:
     mst, name = partner(inv)
+    dt = t.get("dt")          # đối tượng đã nhận diện từ danh mục công nợ (số TK, MST, mã, tên)
+    if dt and not dt.get("ai") and dt.get("diem", 0) >= 85:   # chỉ dùng đối tượng nhận diện chắc chắn
+        if mst and dt.get("mst") and mst[:10] == dt["mst"][:10]:
+            return True
+        if dt.get("ten") and name_sim(name, dt["ten"]) >= 0.9:
+            return True
     d = _desc(t)
     if mst and mst in re.sub(r"\D", " ", d).split():
         return True
@@ -484,10 +490,19 @@ def post(t: dict[str, Any], acc: dict[str, str], own_name: str = "") -> dict[str
         f = fold(" ".join([t.get("mo_ta", ""), t.get("doi_ung", "")]))
         same_owner = own_name and name_sim(own_name, t.get("doi_ung")) >= 0.85
         key, text, chk = None, "", True
+        company_peer = re.search(r"\b(cty|cong ty|tnhh|co phan|ctcp|dntn)\b", fold(t.get("doi_ung")))
         for pat, k, txt, c in (_RULES_IN if inflow else _RULES_OUT):
+            if k == "phi_nh" and company_peer:
+                continue        # "tt tiền phí dịch vụ" chuyển cho 1 công ty: trả nhà cung cấp, không phải phí ngân hàng
             if re.search(pat, f):
                 key, text, chk = k, txt, c
+                t["_rule"] = txt
                 break
+        ai = t.get("_ai")
+        if key is None and ai and ai["key"] not in ("phai_thu", "phai_tra", "khac", "noi_bo"):
+            key, text, chk = ai["key"], f"{ai['muc_dich']} (AI gợi ý)", True
+        elif key is None and ai and ai["key"] == "noi_bo":
+            key, text, chk = ("phai_thu_khac" if inflow else "phai_tra_khac"), f"{ai['muc_dich']} (AI gợi ý)", True
         if key is None and same_owner:
             key, text, chk = ("phai_thu_khac" if inflow else "phai_tra_khac"), "Chuyển tiền nội bộ giữa các TK", True
         first = lines[0] if lines else None
@@ -500,6 +515,13 @@ def post(t: dict[str, Any], acc: dict[str, str], own_name: str = "") -> dict[str
             chk = True
         mst = first["mst"] if first and key in ("phai_thu", "phai_tra") else ""
         ten = (first["ten"] if first and key in ("phai_thu", "phai_tra") else "") or t.get("doi_ung", "")
+        dt = t.get("dt")
+        if not first and dt and key in ("phai_thu", "phai_tra", "phai_thu_khac", "phai_tra_khac"):
+            mst, ten = dt.get("mst") or "", dt.get("ten") or ten     # đối tượng nhận diện từ danh mục công nợ
+            if not t.get("_rule") and not ai:
+                text = ("Thu tiền khách hàng" if inflow else "Trả tiền nhà cung cấp") + f" {dt['ten']}"
+            if ai and ai["key"] in ("phai_thu", "phai_tra"):
+                text = f"{ai['muc_dich']} (AI gợi ý)"
         lines.append({"no": bank if inflow else acc[key], "co": acc[key] if inflow else bank, "so_tien": rest,
                       "mst": mst, "ten": ten,
                       "dien_giai": f"{text} – {t.get('doi_ung') or ''} – {t.get('mo_ta') or ''}".strip(" –")[:250]})
@@ -631,7 +653,7 @@ def _write(dest: Path, header: list[str], vouchers: list[dict[str, Any]], info: 
     warn = PatternFill("solid", fgColor="FFF2CC")
     for v in vouchers:
         for ln in v["lines"]:
-            code = codes.get(ln["mst"]) or ln["mst"] or ""
+            code = ln.get("ma") or codes.get(ln["mst"]) or ln["mst"] or ""
             for c, h in enumerate(header, 1):
                 val = _value(h, v, ln, info, code) if h else None
                 if val is None:
