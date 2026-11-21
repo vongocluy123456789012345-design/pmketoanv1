@@ -861,7 +861,7 @@ def _read_path(args):
         return {"file": name, "loi": f"Lỗi đọc: {e}", "items": []}
 
 
-def _read_all(items: list[tuple[str, bytes]], idx: dict, job: "Job") -> list[dict[str, Any]]:
+def _read_all(items: list[tuple[str, bytes]], idx: dict, job: "Job", on_done=None) -> list[dict[str, Any]]:
     """Đọc nhiều hóa đơn song song bằng ÍT tiến trình (OCR bản scan rất tốn RAM): ghi file tạm ra ổ đĩa, mỗi tiến
     trình đọc 1 file. Tiến trình phụ hỏng (thiếu RAM...) thì đọc nốt phần còn lại ngay trong tiến trình chính."""
     import os
@@ -891,6 +891,8 @@ def _read_all(items: list[tuple[str, bytes]], idx: dict, job: "Job") -> list[dic
                 job.done += 1
             if done % 10 == 0 or done == len(items):
                 job.say(f"Đã đọc {done}/{len(items)} hóa đơn")
+            if on_done:
+                on_done(i, inv)
 
         if len(items) >= 2:
             try:
@@ -913,6 +915,7 @@ def _read_all(items: list[tuple[str, bytes]], idx: dict, job: "Job") -> list[dic
 
 
 _CACHE_VER = "1"
+AI_WORKERS = 8   # số hóa đơn AI đọc cùng lúc (chạy song song với OCR)
 
 
 def _cache_dir() -> Path:
@@ -985,29 +988,50 @@ def run(job: Job, files: list[tuple[str, bytes]], tpl: bytes, direction: str, ow
         if len(todo) < len(items):
             job.done += len(items) - len(todo)
             job.say(f"{len(items) - len(todo)} hóa đơn đã đọc ở lần trước – dùng lại kết quả, đọc mới {len(todo)}")
-        # bước 1: đọc nhanh không cần AI – vài tiến trình song song (đọc PDF / OCR tốn CPU, RAM)
-        for i, v in zip(todo, _read_all([items[i] for i in todo], idx, job) if todo else []):
-            invs[i] = v
-        need_ai = [i for i, v in enumerate(invs) if not v.get("items") and not v.get("loi")]
-        if need_ai:
-            job.say(f"{len(need_ai)} hóa đơn bố cục lạ / bản scan – AI đang đọc (song song)")
+        # bước 1: đọc nhanh không cần AI (PDF có chữ / OCR). Hóa đơn nào đọc xong mà cần AI (bố cục lạ, bản scan)
+        # thì gửi AI NGAY, chạy song song với OCR các hóa đơn còn lại – không chờ OCR xong hết mới bắt đầu AI.
+        need_ai: list[int] = []
+        ai_lock = threading.Lock()
 
-            def ai_one(i: int) -> None:
-                v = invs[i]
-                try:
-                    d = ai_extract(v.get("_text") or "")
-                    keep = {k: v.get(k) for k in ("khhdon", "shdon", "nbmst", "nmmst", "ngay_lap") if v.get(k)}
-                    invs[i] = v | {k: x for k, x in d.items() if x not in (None, "", [])} | keep
-                    if not items_ok(invs[i]):
-                        invs[i]["canh_bao"] = "Tổng dòng hàng AI đọc chưa khớp tổng tiền hàng – kiểm tra lại"
+        def ai_one(i: int) -> None:
+            v = invs[i]
+            try:
+                d = ai_extract(v.get("_text") or "")
+                keep = {k: v.get(k) for k in ("khhdon", "shdon", "nbmst", "nmmst", "ngay_lap") if v.get(k)}
+                invs[i] = v | {k: x for k, x in d.items() if x not in (None, "", [])} | keep
+                if not items_ok(invs[i]):
+                    invs[i]["canh_bao"] = "Tổng dòng hàng AI đọc chưa khớp tổng tiền hàng – kiểm tra lại"
+                with ai_lock:
                     job.ai += 1
-                except Exception as e:  # noqa: BLE001
-                    invs[i]["loi"] = f"{e}"[:200]
-                job.done += 1
-            with ThreadPoolExecutor(4) as ex:
-                for _ in ex.map(ai_one, need_ai):
-                    if job.ai and job.ai % 5 == 0:
-                        job.say(f"AI đã đọc {job.ai}/{len(need_ai)} hóa đơn")
+                    n = job.ai
+                if n % 10 == 0:
+                    job.say(f"AI đã đọc {n}/{len(need_ai)} hóa đơn bố cục lạ / bản scan (chạy song song với OCR)")
+            except Exception as e:  # noqa: BLE001
+                invs[i]["loi"] = f"{e}"[:200]
+            job.done += 1
+
+        ai_ex = ThreadPoolExecutor(AI_WORKERS)
+        ai_futs = []
+
+        def on_read(i: int, v: dict[str, Any]) -> None:
+            invs[i] = v
+            if not v.get("items") and not v.get("loi") and i not in need_ai:
+                need_ai.append(i)
+                if len(need_ai) == 1:
+                    job.say("Có hóa đơn bố cục lạ / bản scan – AI bắt đầu đọc ngay, song song với OCR")
+                ai_futs.append(ai_ex.submit(ai_one, i))
+
+        try:
+            if todo:
+                _read_all([items[i] for i in todo], idx, job, on_done=lambda k, v: on_read(todo[k], v))
+            if need_ai:
+                left = sum(1 for f in ai_futs if not f.done())
+                job.say(f"Đã OCR xong; {len(need_ai)} hóa đơn cần AI – còn {left} đang đọc")
+                for f in ai_futs:
+                    f.result()
+                job.say(f"AI đã đọc xong {job.ai}/{len(need_ai)} hóa đơn")
+        finally:
+            ai_ex.shutdown(wait=False, cancel_futures=True)
         for i in todo + need_ai:
             _cache_put(keys[i], invs[i])
         rows: list[dict[str, Any]] = []
