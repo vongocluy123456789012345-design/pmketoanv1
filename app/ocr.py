@@ -59,6 +59,9 @@ def _prepare(img, ink: bool = False):
     return img
 
 
+_ENG = None
+
+
 async def _recognize_file(path: str) -> str:
     from winsdk.windows.graphics.imaging import BitmapDecoder
     from winsdk.windows.storage import FileAccessMode, StorageFile
@@ -68,8 +71,10 @@ async def _recognize_file(path: str) -> str:
     try:
         dec = await BitmapDecoder.create_async(stream)
         bmp = await dec.get_software_bitmap_async()
-        eng, _ = _engine()
-        res = await eng.recognize_async(bmp)
+        global _ENG
+        if _ENG is None:                 # chỉ luồng OCR dùng -> tạo 1 lần, dùng lại
+            _ENG = _engine()[0]
+        res = await _ENG.recognize_async(bmp)
     finally:
         # ĐÓNG ảnh + luồng đọc file: không đóng thì lần OCR kế tiếp báo "Not enough memory resources"
         for o in (bmp, stream):
@@ -112,12 +117,51 @@ def _rows(words: list[tuple[float, float, float, float, str]]) -> str:
     return "\n".join(out)
 
 
-_OCR_LOCK = __import__("threading").Lock()
+class _OcrThread:
+    """MỌI lần OCR của Windows (WinRT) chạy trên 1 luồng riêng, sống suốt phiên, 1 vòng lặp asyncio.
+    Trước đây mỗi luồng đọc hóa đơn tự gọi asyncio.run(...) -> đọc vài trăm bản scan liên tục thì phần mềm bị tắt
+    hẳn (lỗi bộ nhớ trong thư viện WinRT, mã thoát 139). Các luồng khác chỉ gửi việc vào hàng đợi rồi chờ kết quả."""
+
+    def __init__(self) -> None:
+        import queue
+        import threading
+        self._q: "queue.Queue" = queue.Queue()
+        self._lock = threading.Lock()
+        self._thread: "threading.Thread | None" = None
+
+    def _loop(self) -> None:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        while True:
+            path, box, ev = self._q.get()
+            try:
+                box["r"] = loop.run_until_complete(_recognize_file(path))
+            except BaseException as e:  # noqa: BLE001 - trả lỗi về luồng gọi
+                box["e"] = e
+            ev.set()
+
+    def run(self, path: str, timeout: float = 180) -> str:
+        import threading
+        with self._lock:
+            if not (self._thread and self._thread.is_alive()):
+                self._thread = threading.Thread(target=self._loop, daemon=True, name="windows-ocr")
+                self._thread.start()
+        box: dict[str, Any] = {}
+        ev = threading.Event()
+        self._q.put((path, box, ev))
+        if not ev.wait(timeout):
+            raise OSError("OCR của Windows không phản hồi (quá thời gian)")
+        if "e" in box:
+            raise box["e"]
+        return box["r"]
+
+
+_OCR = _OcrThread()
 
 
 def ocr_pil(img, ink: bool = False) -> str:
     """Bộ OCR của Windows KHÔNG chạy được nhiều lần nhận dạng cùng lúc (nhiều luồng / tiến trình -> lỗi
-    "Not enough memory resources", mã -2147024882): mỗi lúc chỉ 1 lần OCR, gặp lỗi đó thì chờ rồi thử lại."""
+    "Not enough memory resources", mã -2147024882): mọi lần OCR xếp hàng trên 1 luồng riêng, gặp lỗi đó thì thử lại."""
     import time
     img = _prepare(img, ink)
     fd, path = tempfile.mkstemp(suffix=".png")
@@ -126,8 +170,7 @@ def ocr_pil(img, ink: bool = False) -> str:
         img.save(path, "PNG")
         for attempt in range(6):
             try:
-                with _OCR_LOCK:
-                    return asyncio.run(_recognize_file(path))
+                return _OCR.run(path)
             except OSError as e:   # OCR đang bận ở tiến trình khác / tài nguyên tạm thiếu
                 if "-2147024882" not in str(e) and "memory" not in str(e).lower() or attempt == 5:
                     raise
@@ -145,13 +188,19 @@ def ocr_image(data: bytes) -> str:
     return ocr_pil(Image.open(io.BytesIO(data)))
 
 
+_PDFIUM_LOCK = __import__("threading").Lock()
+
+
 def pdf_images(data: bytes, dpi: int = 300, max_pages: int = MAX_PAGES) -> list[Any]:
+    """PDFium KHÔNG an toàn khi nhiều luồng dùng cùng lúc (đọc song song hàng trăm PDF scan có thể làm treo / tắt
+    hẳn phần mềm) -> mỗi lúc chỉ 1 luồng mở / vẽ PDF; phần OCR và đọc chữ vẫn chạy song song."""
     import pypdfium2 as pdfium
-    pdf = pdfium.PdfDocument(data)
-    try:
-        return [pdf[i].render(scale=dpi / 72).to_pil() for i in range(min(len(pdf), max_pages))]
-    finally:
-        pdf.close()
+    with _PDFIUM_LOCK:
+        pdf = pdfium.PdfDocument(data)
+        try:
+            return [pdf[i].render(scale=dpi / 72).to_pil() for i in range(min(len(pdf), max_pages))]
+        finally:
+            pdf.close()
 
 
 def ocr_pdf(data: bytes, max_pages: int = MAX_PAGES) -> str:
