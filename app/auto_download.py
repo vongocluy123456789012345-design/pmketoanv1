@@ -80,7 +80,8 @@ KINDS: dict[str, dict[str, Any]] = {
 TTHAI = {1: "Hóa đơn mới", 2: "Thay thế", 3: "Điều chỉnh", 4: "Đã bị thay thế",
          5: "Đã bị điều chỉnh", 6: "Đã bị hủy"}
 PAGE_SIZE = 50
-CAPTCHA_WAIT = 300  # giây chờ người dùng nhập captcha
+CAPTCHA_WAIT = 300  # giây chờ người dùng nhập captcha (danh sách HĐ máy tính tiền – cần để có dữ liệu)
+PDF_CAPTCHA_WAIT = 60  # captcha trang tra cứu PDF của NCC: không nhập thì dùng bản in từ cổng, không giữ cả lượt tải
 
 
 class Skip(Exception):
@@ -180,7 +181,7 @@ class AutoJob:
             "months": [period(a, b) for a, b in self.months], "kinds": self.kinds,
         }
 
-    def prompt_captcha(self, image: str, reason: str, allow_ocr: bool = True) -> str:
+    def prompt_captcha(self, image: str, reason: str, allow_ocr: bool = True, wait: float = CAPTCHA_WAIT) -> str:
         """Tự động đọc captcha bằng OCR trước; nếu không đọc được thì hiện ảnh chờ người dùng nhập."""
         if allow_ocr and not self.manual_captcha:
             auto_val = _solve_captcha_ocr(image)
@@ -192,7 +193,7 @@ class AutoJob:
         self._captcha_value = None
         self.captcha = {"image": image, "reason": reason}
         self.say(f"Chờ bạn nhập captcha: {reason}")
-        ok = self._captcha_ev.wait(CAPTCHA_WAIT)
+        ok = self._captcha_ev.wait(wait)
         self.captcha = None
         if self.cancel:
             raise Cancelled()
@@ -668,7 +669,9 @@ def download_xmls(rn: Runner, job: AutoJob, kind: dict[str, Any], folder: Path,
                 _accept_xml(job, it, xml, on_xml)
             except Exception as e:  # noqa: BLE001
                 it["xml_err"] = str(e)
-                if r.status in (0, 429) or r.status >= 500:
+                if "hồ sơ gốc" in str(e).lower() or "hồ sơ gốc" in r.message().lower():
+                    failed.append(it)          # cổng không có XML gốc của HĐ này – thử lại cũng vậy
+                elif r.status in (0, 429) or r.status >= 500:
                     retry.append(it)
                     busy = busy or r.status == 429
                 else:
@@ -725,20 +728,27 @@ def download_xmls(rn: Runner, job: AutoJob, kind: dict[str, Any], folder: Path,
             break
     failed += later
 
-    for it in failed:
-        it["rec"]["ghi_chu"] = f"Không tải được XML: {it.get('xml_err')}"[:300]
-        try:
-            det = rn.detail(kind, it["inv"])
-            jp = it["xml_path"].with_suffix(".json")
-            jp.parent.mkdir(parents=True, exist_ok=True)
-            jp.write_text(json.dumps(det, ensure_ascii=False, indent=1), encoding="utf-8")
-            it["rec"]["file_xml"] = str(jp)
-        except (BrowserAuthError, Cancelled):
-            raise
-        except Exception:  # noqa: BLE001
-            pass
-        job.err(f"{tag} {it['inv'].get('khhdon')}-{it['inv'].get('shdon')}: không tải được XML ({it.get('xml_err')})")
-        job.done += 1
+    if failed:
+        job.say(f"{tag}: lấy chi tiết thay XML cho {len(failed)} hóa đơn cổng không có XML")
+    dpath = f"/{kind['ep']}/invoices/detail"
+    for k in range(0, len(failed), DETAIL_BATCH):
+        if job.cancel:
+            raise Cancelled()
+        batch = failed[k:k + DETAIL_BATCH]
+        res = BROWSER.fetch_many([(dpath, {x: _s(it["inv"].get(x)) for x in keys}, "") for it in batch])
+        for it, r in zip(batch, res):
+            it["rec"]["ghi_chu"] = f"Không tải được XML: {it.get('xml_err')}"[:300]
+            try:
+                det = _check(r, "Lấy chi tiết").json()
+                jp = it["xml_path"].with_suffix(".json")
+                jp.parent.mkdir(parents=True, exist_ok=True)
+                jp.write_text(json.dumps(det, ensure_ascii=False, indent=1), encoding="utf-8")
+                it["rec"]["file_xml"] = str(jp)
+            except Exception:  # noqa: BLE001
+                pass
+            job.err(f"{tag} {it['inv'].get('khhdon')}-{it['inv'].get('shdon')}: không tải được XML ({it.get('xml_err')})")
+            job.done += 1
+        time.sleep(settings.gdt_delay)
 
 
 def _collect(job: AutoJob, futs: dict[Any, dict[str, Any]], tag: str, label: str) -> list[dict[str, Any]]:
@@ -837,7 +847,8 @@ def download_captcha_sites(job: AutoJob, items: list[dict[str, Any]], tag: str, 
         def ask(img: str, why: str) -> str:
             state["attempt"] += 1
             try:
-                return job.prompt_captcha(img, f"{reason} – {why}", allow_ocr=(state["attempt"] <= 2))
+                return job.prompt_captcha(img, f"{reason} – {why}", allow_ocr=(state["attempt"] <= 2),
+                                          wait=PDF_CAPTCHA_WAIT)
             except (Skip, Cancelled):
                 state["skip"] = True
                 return ""
@@ -890,6 +901,16 @@ def download_captcha_sites(job: AutoJob, items: list[dict[str, Any]], tag: str, 
             ex.shutdown(wait=False)
 
 
+_TRANSIENT = ("timed out", "timeout", "connect", "disconnected", "reset", "502", "503", "504", "429",
+              "temporarily", "aborted", "eof", "remoteprotocol", "readerror")
+
+
+def _transient(err: str) -> bool:
+    """Lỗi tạm thời (mạng, trang NCC quá tải) – đáng thử lại; lỗi 'không tìm thấy PDF' thì thử lại cũng vậy."""
+    e = err.lower()
+    return any(k in e for k in _TRANSIENT)
+
+
 def download_pdfs(rn: Runner, job: AutoJob, kind: dict[str, Any], items: list[dict[str, Any]], tag: str,
                   ex=None, futs: dict | None = None, d1: date | None = None, d2: date | None = None) -> None:
     from .providers import easyinvoice
@@ -902,11 +923,12 @@ def download_pdfs(rn: Runner, job: AutoJob, kind: dict[str, Any], items: list[di
     if futs:
         job.say(f"{tag}: đang tìm PDF gốc cho {len(futs)} hóa đơn có mã/link tra cứu (song song {PDF_WORKERS} luồng)")
     failed = _collect(job, futs, tag, "PDF gốc")
-    if failed:
-        job.say(f"{tag}: thử lại {len(failed)} hóa đơn chưa lấy được PDF gốc")
+    again = [it for it in failed if _transient(it.get("pdf_err") or "") and not it.get("need_captcha")]
+    if again:
+        job.say(f"{tag}: thử lại {len(again)} hóa đơn lỗi mạng / trang NCC quá tải")
         time.sleep(3)
-        failed = _collect(job, {ex.submit(fetch_pdf, it["inv"], it["parsed"]): it for it in failed}, tag,
-                          "thử lại PDF gốc")
+        failed = [it for it in failed if it not in again] + _collect(
+            job, {ex.submit(fetch_pdf, it["inv"], it["parsed"]): it for it in again}, tag, "thử lại PDF gốc")
     cap = [it for it in failed if it.get("need_captcha") and not easyinvoice.is_easyinvoice(it["rec"].get("link_tra_cuu"))]
     if cap:
         download_captcha_sites(job, cap, tag, ex)
@@ -1050,7 +1072,8 @@ def download_easyinvoice(job: AutoJob, items: list[dict[str, Any]], tag: str) ->
 
         def ask_easy(img: str, why: str) -> str:
             state["attempt"] += 1
-            return job.prompt_captcha(img, f"{label} – {why}", allow_ocr=(state["attempt"] <= 2))
+            return job.prompt_captcha(img, f"{label} – {why}", allow_ocr=(state["attempt"] <= 2),
+                                      wait=PDF_CAPTCHA_WAIT)
 
         try:
             pdf = easyinvoice.fetch(rec["link_tra_cuu"], it["parsed"]["lookup_code"], ask_easy, label)

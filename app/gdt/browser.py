@@ -202,6 +202,9 @@ _POLL_JS = """(id) => { const W = window.__awb; if (!W || !W[id]) return null;
 
 
 RATE_GAP = 0.12        # khoảng cách tối thiểu giữa 2 lần gọi cổng (mọi công ty cộng lại)
+# Cổng chỉ nhận khoảng 5 lệnh cùng lúc từ 1 máy; gửi dồn 10–30 lệnh thì gần như tất cả bị trả 429 (đo 21/11/2026)
+# -> mọi luồng (mọi công ty) dùng chung tối đa 4 lệnh đang chờ cổng trả lời.
+PORTAL_CONC = 4
 RATE_GAP_MAX = 2.5
 BUSY_RETRIES = 5       # cổng báo quá tải (429) -> chờ rồi thử lại tối đa 5 lần
 
@@ -224,6 +227,8 @@ class BrowserWorker:
         self._next_slot = 0.0
         self._gap = RATE_GAP
         self._cool_until = 0.0
+        self._inflight = 0
+        self._conc = threading.Condition()
 
     # ---------- luồng riêng cho Playwright ----------
     def _ensure_thread(self) -> None:
@@ -690,6 +695,26 @@ class BrowserWorker:
             if time.time() > end:
                 return [{**x, "error": "Quá thời gian chờ cổng trả lời"} for x in lost]
 
+    def _take(self, k: int) -> None:
+        with self._conc:
+            while self._inflight and self._inflight + k > PORTAL_CONC:
+                self._conc.wait(1)
+            self._inflight += k
+
+    def _give(self, k: int) -> None:
+        with self._conc:
+            self._inflight -= k
+            self._conc.notify_all()
+
+    def _send(self, reqs: list[dict[str, Any]], timeout: float) -> list[dict[str, Any]]:
+        """Gửi tối đa PORTAL_CONC lệnh (giữ chỗ trong giới hạn chung của cả phần mềm)."""
+        self._throttle()
+        self._take(len(reqs))
+        try:
+            return self._run_async(reqs, timeout)
+        finally:
+            self._give(len(reqs))
+
     def _throttle(self) -> None:
         with self._rate_lock:
             now = time.time()
@@ -771,8 +796,7 @@ class BrowserWorker:
         res: dict[str, Any] = {}
         attempt = busy_n = 0
         while True:
-            self._throttle()
-            res = self._run_async([{"url": url, "headers": headers}], timeout)[0]
+            res = self._send([{"url": url, "headers": headers}], timeout)[0]
             if not res.get("error") and self._rate_result([res["status"]]) and busy_n < BUSY_RETRIES:
                 busy_n += 1
                 time.sleep(2 * busy_n)
@@ -809,18 +833,18 @@ class BrowserWorker:
             q = urlencode(query) if isinstance(query, dict) else query
             reqs.append({"url": API + path + (("?" + q) if q else ""), "headers": self._headers(action, token)})
         res: list[dict[str, Any]] = [{}] * len(reqs)
-        todo = list(range(len(reqs)))
-        for busy_n in range(BUSY_RETRIES + 1):
-            self._throttle()
-            got = self._run_async([reqs[i] for i in todo], timeout)
-            for i, x in zip(todo, got):
-                res[i] = x
-            if not self._rate_result([x.get("status", 0) for x in got]) or busy_n == BUSY_RETRIES:
-                break
-            todo = [i for i in todo if res[i].get("status") == 429]   # chỉ gửi lại các lệnh bị báo quá tải
-            for i in todo:
-                reqs[i]["headers"]["request-id"] = str(uuid.uuid4())
-            time.sleep(2 * (busy_n + 1))
+        for start in range(0, len(reqs), PORTAL_CONC):      # từng nhóm nhỏ, không gửi dồn cả lô
+            todo = list(range(start, min(len(reqs), start + PORTAL_CONC)))
+            for busy_n in range(BUSY_RETRIES + 1):
+                got = self._send([reqs[i] for i in todo], timeout)
+                for i, x in zip(todo, got):
+                    res[i] = x
+                if not self._rate_result([x.get("status", 0) for x in got]) or busy_n == BUSY_RETRIES:
+                    break
+                todo = [i for i in todo if res[i].get("status") == 429]   # chỉ gửi lại các lệnh bị báo quá tải
+                for i in todo:
+                    reqs[i]["headers"]["request-id"] = str(uuid.uuid4())
+                time.sleep(2 * (busy_n + 1))
         out = [FetchResult(x["status"], x["ctype"], base64.b64decode(x["b64"] or "")) for x in res]
         if any(r.status == 401 for r in out):
             raise BrowserAuthError("Phiên đăng nhập cổng thuế đã hết hạn, hãy đăng nhập lại trên trình duyệt.")
