@@ -312,6 +312,12 @@ CT_LABELS = {
 }
 
 
+def _iso_vn(d: Any) -> str:
+    """'dd/mm/yyyy' -> 'yyyy-mm-dd' (để bảng kê sắp xếp / hiển thị như ngày hóa đơn)."""
+    m = re.match(r"(\d{1,2})/(\d{1,2})/(\d{4})", str(d or ""))
+    return f"{m[3]}-{int(m[2]):02d}-{int(m[1]):02d}" if m else str(d or "")
+
+
 def _orig_ref(r: dict[str, Any]) -> dict[str, Any] | None:
     """Hóa đơn gốc mà HĐ này thay thế / điều chỉnh: {kh, so, ngay, loai(1 thay thế, 2 điều chỉnh)}.
     Lấy từ danh sách cổng (khhdgoc/shdgoc), nếu không có thì đọc XML (TTHDLQuan) hoặc JSON chi tiết."""
@@ -465,6 +471,10 @@ def _pair_invoices(prepared: list[dict[str, Any]]) -> list[str]:
 
 def compute(mst: str, kieu: str, ky: int, nam: int, inputs: dict[str, Any] | None = None) -> dict[str, Any]:
     inputs = {k: round(_num((inputs or {}).get(k))) for k in INPUT_KEYS}
+    nhap_khau = imports(mst, period_key(kieu, ky, nam))
+    if nhap_khau:   # có danh sách tờ khai hải quan nhập khẩu của kỳ -> [23a]/[24a] = tổng danh sách
+        from .nhapkhau import totals
+        inputs["ct23a"], inputs["ct24a"] = totals(nhap_khau)
     root = Path(settings.output_dir) / mst
     rows, missing, partial = load_rows(root, kieu, ky, nam)
     # ---- kỳ chưa kết thúc (vd dự báo quý 4 vào ngày 19/11): tính bằng dữ liệu đến hôm nay, ghi rõ "tính đến ngày"
@@ -635,6 +645,15 @@ def compute(mst: str, kieu: str, ky: int, nam: int, inputs: dict[str, Any] | Non
 
     # ----- chỉ tiêu nhập tay + công thức của tờ khai
     ct["23a"], ct["24a"] = inputs["ct23a"], inputs["ct24a"]
+    nk_note = []
+    for x in nhap_khau:
+        try:
+            d = datetime.strptime(x.get("ngay") or "", "%d/%m/%Y").date()
+            if not p_from <= d <= p_to:
+                nk_note.append(f"Tờ khai nhập khẩu {x.get('so_tk')} đăng ký ngày {x['ngay']} – ngoài kỳ {period_label(kieu, ky, nam)}"
+                               " (vẫn kê khai kỳ này nếu chứng từ nộp thuế GTGT nhập khẩu thuộc kỳ này)")
+        except ValueError:
+            pass
     ct["23"] += inputs["ct23a"]
     ct["24"] += inputs["ct24a"]
     ct["25"] = max(0.0, ct["24"] - inputs["khong_kt"])
@@ -662,7 +681,20 @@ def compute(mst: str, kieu: str, ky: int, nam: int, inputs: dict[str, Any] | Non
     pl8 = _pl8(items["sold"], bk["sold"])
     pl8_mua = _pl8(items["purchase"], [b for b in bk["purchase"] if b.get("kt")])
 
+    for x in nhap_khau:
+        ts = rate_class((x.get("thue_suat") or "").split(";")[0]) if x.get("thue_suat") else "?"
+        bk["purchase"].append({"ngay": _iso_vn(x.get("ngay")), "mau": "TKHQ", "kh": "", "so": x.get("so_tk"),
+                               "mst": "", "ten": x.get("ncc") or "Người xuất khẩu (tờ khai nhập khẩu)",
+                               "ts": ts if ts != "?" else "10", "gt": round(x.get("tri_gia_tinh_thue") or 0),
+                               "thue": round(x.get("thue_gtgt") or 0), "tthai": "", "loai": "Tờ khai hải quan nhập khẩu",
+                               "kt": True, "nk": True,
+                               "ghi_chu": "Tờ khai nhập khẩu – số HĐ là số tờ khai; đưa vào [23]/[24] và [23a]/[24a]"
+                                          + (f"; hàng: {x['hang'][:120]}" if x.get("hang") else "")})
     warnings = []
+    if nhap_khau:
+        warnings.append(f"Có {len(nhap_khau)} tờ khai hải quan nhập khẩu: trị giá {fmt(inputs['ct23a'])} đ đưa vào [23a] và"
+                        f" [23], thuế GTGT nhập khẩu {fmt(inputs['ct24a'])} đ đưa vào [24a] và [24].")
+        warnings.extend(nk_note)
     if missing:
         warnings.append(f"Chưa có dữ liệu hóa đơn tháng {', '.join(missing)} – hãy tải trọn tháng ở mục Tải hóa đơn.")
     if partial:
@@ -730,7 +762,7 @@ def compute(mst: str, kieu: str, ky: int, nam: int, inputs: dict[str, Any] | Non
                       "loai": r.get("loai"), "why": why}
                      for r, why in excluded],
         "rows": len(rows),
-        "lien_quan": lien_quan,
+        "lien_quan": lien_quan, "nhap_khau": nhap_khau,
         "chua_het_ky": chua_het_ky, "den_ngay": den_ngay.isoformat(), "future": future,
         "label_den": (f"{period_label(kieu, ky, nam)} (tính đến ngày {den_ngay:%d/%m/%Y})" if chua_het_ky
                       else period_label(kieu, ky, nam)),
@@ -1136,6 +1168,32 @@ def _write_excel(res: dict[str, Any], dest: Path) -> Path:
                 c.font, c.number_format = bold, money
         w.freeze_panes = "A5"
 
+    nk = res.get("nhap_khau") or []
+    if nk:
+        w = wb.create_sheet("To khai nhap khau")
+        cols = [("STT", 6), ("Số tờ khai (số HĐ)", 18), ("Ngày đăng ký", 13), ("Người xuất khẩu (NCC)", 38), ("Nước", 10),
+                ("Hàng hóa", 44), ("Trị giá tính thuế GTGT [23a]", 22), ("Thuế suất", 10), ("Thuế GTGT [24a]", 18),
+                ("Ghi chú", 40)]
+        w.cell(1, 1, "TỜ KHAI HẢI QUAN HÀNG HÓA NHẬP KHẨU ĐƯA VÀO CHỈ TIÊU [23a], [24a] (CỘNG VÀO [23], [24])").font = Font(bold=True, size=13)
+        w.cell(2, 1, f"Kỳ tính thuế: {res['label']} – Người nộp thuế: {res['company']['ten']} – MST {res['mst']}")
+        for i, (h, wd) in enumerate(cols, 1):
+            c = w.cell(4, i, h)
+            c.font, c.fill, c.alignment, c.border = bold, head, center, box
+            w.column_dimensions[c.column_letter].width = wd
+        for n, x in enumerate(nk, 1):
+            for i, v in enumerate([n, x.get("so_tk"), x.get("ngay"), x.get("ncc"), x.get("nuoc"), x.get("hang"),
+                                   x.get("tri_gia_tinh_thue"), x.get("thue_suat"), x.get("thue_gtgt"), x.get("ghi_chu")], 1):
+                c = w.cell(n + 4, i, v)
+                c.border = box
+                if i in (7, 9):
+                    c.number_format = money
+        rr = len(nk) + 5
+        w.cell(rr, 6, "TỔNG CỘNG").font = bold
+        for i, k in ((7, "tri_gia_tinh_thue"), (9, "thue_gtgt")):
+            c = w.cell(rr, i, sum(int(x.get(k) or 0) for x in nk))
+            c.font, c.number_format = bold, money
+        w.freeze_panes = "A5"
+
     lq = res.get("lien_quan") or {}
     lq_sheet("HD ngan hang", "HÓA ĐƠN CỦA NGÂN HÀNG (ĐÃ TÁCH RA – KHÔNG ĐƯA VÀO BẢNG KÊ MUA VÀO VÀ TỜ KHAI)",
              lq.get("ngan_hang", []), "")
@@ -1204,6 +1262,27 @@ def set_cfg(mst: str, **kw: Any) -> dict[str, Any]:
     return get_cfg(mst)
 
 
+def imports(mst: str, key: str) -> list[dict[str, Any]]:
+    """Danh sách tờ khai hải quan nhập khẩu đã lưu của kỳ (đưa vào [23a]/[24a])."""
+    with _lock:
+        return list(((_load_state().get(mst) or {}).get("nhapkhau") or {}).get(key) or [])
+
+
+def save_imports(mst: str, key: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    from .nhapkhau import clean
+    rows = [clean(r) for r in rows]
+    rows = [r for r in rows if r["so_tk"] or r["tri_gia_tinh_thue"] or r["thue_gtgt"] or r["ncc"]]
+    with _lock:
+        st = _load_state()
+        nk = st.setdefault(mst, {}).setdefault("nhapkhau", {})
+        if rows:
+            nk[key] = rows
+        else:
+            nk.pop(key, None)
+        _save_state(st)
+    return rows
+
+
 def saved_result(mst: str, key: str) -> dict[str, Any] | None:
     f = out_folder(mst, key) / "ketqua.json"
     try:
@@ -1236,6 +1315,7 @@ def summary(res: dict[str, Any]) -> dict[str, Any]:
         "phai_nop": ct["40"], "chuyen_ky_sau": ct["43"], "files": res.get("files", {}),
         "created": res.get("created"), "source": res.get("source"),
         "n_items": {"sold": len(res["items"]["sold"]), "purchase": len(res["items"]["purchase"])},
+        "nhap_khau": res.get("nhap_khau") or [],
     }
 
 

@@ -514,6 +514,57 @@ def vat_forecast(body: VatIn):
     return vat.forecast(mst, body.kieu, body.ky, body.nam, body.inputs, source="manual")
 
 
+# ---------- tờ khai hải quan nhập khẩu -> [23a]/[24a] ----------
+def _nk_key(kieu: str, ky: int, nam: int) -> str:
+    from . import vat
+    if kieu not in ("M", "Q") or not (1 <= ky <= (4 if kieu == "Q" else 12)) or not 2020 <= nam <= 2100:
+        raise HTTPException(400, "Kỳ tính thuế không hợp lệ")
+    return vat.period_key(kieu, ky, nam)
+
+
+@app.get("/api/vat/nhapkhau")
+def vat_nk_get(mst: str, kieu: str, ky: int, nam: int):
+    from . import vat
+    from .nhapkhau import totals
+    rows = vat.imports(_vat_mst(mst), _nk_key(kieu, ky, nam))
+    gt, thue = totals(rows)
+    return {"rows": rows, "tri_gia": gt, "thue": thue}
+
+
+@app.post("/api/vat/nhapkhau/doc")
+async def vat_nk_read(mst: str = Form(""), kieu: str = Form("M"), ky: int = Form(...), nam: int = Form(...),
+                      dung_ai: bool = Form(True), files: list[UploadFile] = File(...)):
+    """Đọc file tờ khai (Excel / PDF / XML / ảnh) -> các dòng để người dùng xem, sửa rồi bấm Lưu."""
+    from . import nhapkhau, vat
+    mst = _vat_mst(mst)
+    key = _nk_key(kieu, ky, nam)
+    got = [(f.filename or "to_khai", await f.read()) for f in files]
+    folder = vat.out_folder(mst, key) / "ToKhaiNhapKhau"       # lưu bản gốc để đối chiếu sau
+    folder.mkdir(parents=True, exist_ok=True)
+    for name, data in got:
+        (folder / Path(name).name).write_bytes(data)
+    import asyncio
+    rows, notes = await asyncio.to_thread(nhapkhau.read_files, got, dung_ai)
+    return {"rows": rows, "notes": notes}
+
+
+class NkIn(BaseModel):
+    mst: str | None = None
+    kieu: Literal["M", "Q"] = "M"
+    ky: int
+    nam: int
+    rows: list[dict] = []
+
+
+@app.post("/api/vat/nhapkhau")
+def vat_nk_save(body: NkIn):
+    from . import vat
+    from .nhapkhau import totals
+    rows = vat.save_imports(_vat_mst(body.mst), _nk_key(body.kieu, body.ky, body.nam), body.rows)
+    gt, thue = totals(rows)
+    return {"rows": rows, "tri_gia": gt, "thue": thue}
+
+
 @app.post("/api/vat/quick-read")
 def vat_quick_read(body: VatIn):
     """Đọc nhanh danh sách hóa đơn kỳ này trên cổng (Chrome đã đăng nhập đúng MST) rồi dự báo ngay."""

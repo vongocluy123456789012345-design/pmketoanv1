@@ -46,6 +46,11 @@ dự báo thuế GTGT, đối chiếu tờ khai, đọc chứng từ và đối 
    độ nền và báo ở chuông; khách hỏi file thì gọi tien_do_bang_ke rồi mo_file.
 4. Không gọi start_download chỉ để dự báo VAT (tải đầy đủ XML/PDF rất lâu) – chỉ dùng khi khách muốn tải hóa đơn về.
 
+- Tờ khai hải quan nhập khẩu (mục Dự báo VAT, khung "🚢 Tờ khai hải quan nhập khẩu của kỳ"): khách tải file Excel / PDF tờ khai
+  -> phần mềm đọc số tờ khai (dùng làm số hóa đơn), ngày đăng ký, người xuất khẩu (NCC), hàng, trị giá tính thuế GTGT, thuế
+  suất, thuế GTGT nhập khẩu; khách sửa / thêm dòng tay rồi bấm Lưu -> tổng đưa vào [23a]/[24a] và cộng vào [23]/[24], mỗi tờ
+  khai 1 dòng bảng kê mua vào, Excel có sheet "To khai nhap khau". Có danh sách thì ô [23a]/[24a] khóa, sửa ở danh sách.
+
 ## Quy tắc khi giúp khách
 - Ưu tiên LÀM luôn bằng công cụ; nếu thao tác cần khách tự làm (đăng nhập, nhập captcha, chọn file để tải lên) thì mở đúng
   màn hình bằng mo_trang_app và hướng dẫn từng bước ngắn gọn.

@@ -527,6 +527,22 @@
       <div style="flex:0 0 auto"><button id="btnVat" style="padding:9px 18px;font-size:15px">Dự báo VAT</button>
         <button id="btnVatQuick" class="sec" title="Chưa tải hóa đơn? Đăng nhập cổng hóa đơn điện tử (mục Tải hóa đơn) rồi bấm – đọc danh sách hóa đơn kỳ này trong vài giây và dự báo ngay">⚡ Đọc nhanh từ cổng</button></div>
     </div>
+    <details id="nkBox" style="margin-top:8px;border:1px dashed var(--pri);border-radius:8px;padding:6px 10px">
+      <summary><b>🚢 Tờ khai hải quan nhập khẩu của kỳ</b> <span class="muted" id="nkSum">– chưa có</span></summary>
+      <p class="muted" style="margin:6px 0">Tải lên tờ khai nhập khẩu (Excel hoặc PDF – chọn nhiều file được): phần mềm đọc số tờ khai (dùng làm số hóa đơn), ngày đăng ký,
+        người xuất khẩu (nhà cung cấp), hàng hóa, trị giá tính thuế GTGT, thuế suất và thuế GTGT hàng nhập khẩu. Kiểm tra / sửa trên bảng (thêm dòng nhập tay được) rồi bấm
+        <b>Lưu</b>: tổng trị giá đưa vào <b>[23a]</b> và <b>[23]</b>, tổng thuế đưa vào <b>[24a]</b> và <b>[24]</b>, mỗi tờ khai thành 1 dòng trên bảng kê mua vào.</p>
+      <div class="inline" style="align-items:center">
+        <div style="flex:2"><input type="file" id="nkFiles" multiple accept=".xlsx,.xls,.xlsm,.csv,.pdf,.xml,image/*"></div>
+        <div style="flex:0 0 auto"><label style="display:inline"><input type="checkbox" id="nkAi" checked style="width:auto"> Dùng AI đọc (chính xác hơn, đọc được PDF scan)</label></div>
+        <div style="flex:0 0 auto"><button id="nkRead" class="sec">Đọc tờ khai</button> <button id="nkAdd" class="sec">+ Thêm dòng nhập tay</button></div>
+      </div>
+      <div id="nkNotes" class="muted" style="margin-top:4px"></div>
+      <div style="overflow:auto;margin-top:6px"><table id="nkTable"><thead><tr><th>Số tờ khai (số HĐ)</th><th>Ngày ĐK</th><th>Người xuất khẩu (NCC)</th><th>Hàng hóa</th>
+        <th>Trị giá tính thuế GTGT [23a]</th><th>Thuế suất</th><th>Thuế GTGT [24a]</th><th>Ghi chú</th><th></th></tr></thead><tbody id="nkRows"></tbody>
+        <tfoot><tr><th colspan="4" style="text-align:right">Tổng cộng</th><th id="nkTotGt" style="text-align:right"></th><th></th><th id="nkTotThue" style="text-align:right"></th><th colspan="2"></th></tr></tfoot></table></div>
+      <p><button id="nkSave">Lưu tờ khai nhập khẩu &amp; dự báo lại</button> <span id="nkMsg" class="muted"></span></p>
+    </details>
     <details style="margin-top:6px"><summary class="muted">Chỉ tiêu khác (nhập khẩu, không được khấu trừ, điều chỉnh, hoàn thuế…)</summary>
       <div class="inline">
         <div><label>[23a] Giá trị HHDV nhập khẩu</label><input id="v23a" class="vnum"></div>
@@ -1560,6 +1576,7 @@ async function loadVatInfo() {
     vatForm = r.form; $("vAuto").checked = r.cfg.auto;
     Object.entries(VAT_INPUTS).forEach(([k, id]) => setVn(id, r.inputs[k]));
     if (!("ct22" in r.inputs)) setVn("v22", r.ct22.value);
+    if (typeof nkLoad === "function") nkLoad();
     $("v22Hint").textContent = r.ct22.source ? `Gợi ý: ${Number(r.ct22.value).toLocaleString("vi-VN")} đ (${r.ct22.source})` : "Kỳ trước chưa dự báo – nhập số dư khấu trừ kỳ trước nếu có";
     if (r.result) renderVat(r.result); else $("vRes").style.display = "none";
     $("vHist").innerHTML = r.history.map(h => `<tr><td><a href="#" data-vkey="${esc(h.key)}">${esc(h.label)}</a></td>
@@ -1662,6 +1679,74 @@ $("btnVLich").onclick = async () => {
   } catch (e) { msg($("vMsg"), e.message); }
 };
 loadVatLich();
+
+// ----- tờ khai hải quan nhập khẩu -> [23a]/[24a]
+const nkFmt = v => (Number(v) || 0) ? Math.round(Number(v)).toLocaleString("vi-VN") : "";
+function nkRow(r = {}) {
+  const tr = document.createElement("tr");
+  const inp = (k, w, money) => `<td><input data-k="${k}" value="${esc(money ? nkFmt(r[k]) : (r[k] || ""))}" style="width:${w}px${money ? ";text-align:right" : ""}" ${money ? 'inputmode="numeric" class="nkMoney"' : ""}></td>`;
+  tr.innerHTML = inp("so_tk", 130) + inp("ngay", 95) + inp("ncc", 220) + inp("hang", 220) + inp("tri_gia_tinh_thue", 140, 1) +
+    inp("thue_suat", 60) + inp("thue_gtgt", 120, 1) + inp("ghi_chu", 200) + `<td><a href="#" class="nkDel" title="Xóa dòng">✕</a></td>`;
+  tr.dataset.file = r.file || "";
+  $("nkRows").appendChild(tr);
+}
+function nkRead() {
+  return [...$("nkRows").querySelectorAll("tr")].map(tr => {
+    const o = {file: tr.dataset.file};
+    tr.querySelectorAll("input").forEach(i => o[i.dataset.k] = i.classList.contains("nkMoney") ? parseVn(i.value) : i.value.trim());
+    return o;
+  });
+}
+function nkTotals() {
+  const rows = nkRead(), gt = rows.reduce((a, r) => a + (r.tri_gia_tinh_thue || 0), 0), th = rows.reduce((a, r) => a + (r.thue_gtgt || 0), 0);
+  $("nkTotGt").textContent = nkFmt(gt) || "0"; $("nkTotThue").textContent = nkFmt(th) || "0";
+  return [gt, th, rows.length];
+}
+function nkShow(rows, saved) {
+  $("nkRows").innerHTML = ""; (rows || []).forEach(nkRow); const [gt, th, n] = nkTotals();
+  if (saved) {
+    $("nkSum").textContent = n ? `– ${n} tờ khai đã lưu: [23a] ${nkFmt(gt) || 0} đ · [24a] ${nkFmt(th) || 0} đ` : "– chưa có";
+    ["v23a", "v24a"].forEach((id, i) => { $(id).readOnly = !!n; $(id).title = n ? "Lấy từ danh sách tờ khai hải quan nhập khẩu (sửa ở khung Tờ khai nhập khẩu)" : "";
+      if (n) setVn(id, i ? th : gt); });
+  }
+}
+async function nkLoad() {
+  const p = vatPeriod(); if (!$("vMst").value || !p.ky || !p.nam) return;
+  try { const r = await api(`/api/vat/nhapkhau?mst=${encodeURIComponent($("vMst").value)}&kieu=${p.kieu}&ky=${p.ky}&nam=${p.nam}`); nkShow(r.rows, true); $("nkMsg").textContent = ""; $("nkNotes").textContent = ""; }
+  catch (e) {}
+}
+$("nkRows").addEventListener("input", e => {
+  if (e.target.classList.contains("nkMoney")) { const v = parseVn(e.target.value); e.target.value = v ? v.toLocaleString("vi-VN") : ""; }
+  nkTotals();
+});
+$("nkRows").addEventListener("click", e => { if (e.target.classList.contains("nkDel")) { e.preventDefault(); e.target.closest("tr").remove(); nkTotals(); } });
+$("nkAdd").onclick = () => { $("nkBox").open = true; nkRow({}); };
+$("nkRead").onclick = async () => {
+  const p = vatPeriod(); if (!p.ky || !p.nam) return alert("Chọn kỳ tính thuế");
+  if (!$("nkFiles").files.length) return alert("Chọn file tờ khai nhập khẩu (Excel hoặc PDF)");
+  const fd = new FormData(); fd.append("mst", $("vMst").value); fd.append("kieu", p.kieu); fd.append("ky", p.ky); fd.append("nam", p.nam);
+  fd.append("dung_ai", $("nkAi").checked); for (const f of $("nkFiles").files) fd.append("files", f);
+  $("nkRead").disabled = true; $("nkMsg").textContent = "Đang đọc tờ khai…";
+  try {
+    const r = await api("/api/vat/nhapkhau/doc", {method: "POST", body: fd});
+    const have = new Set(nkRead().map(x => x.so_tk).filter(Boolean));
+    r.rows.forEach(x => { if (!x.so_tk || !have.has(x.so_tk)) nkRow(x); });
+    nkTotals(); $("nkNotes").textContent = r.notes.join(" · ");
+    $("nkMsg").textContent = r.rows.length ? "Kiểm tra / sửa các dòng rồi bấm Lưu." : "Không đọc được – nhập tay các dòng rồi bấm Lưu.";
+    $("nkFiles").value = "";
+  } catch (e) { $("nkMsg").textContent = e.message; }
+  $("nkRead").disabled = false;
+};
+$("nkSave").onclick = async () => {
+  const p = vatPeriod(); if (!p.ky || !p.nam) return alert("Chọn kỳ tính thuế");
+  try {
+    const r = await api("/api/vat/nhapkhau", {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({mst: $("vMst").value, ...p, rows: nkRead()})});
+    nkShow(r.rows, true);
+    $("nkMsg").textContent = r.rows.length ? `Đã lưu ${r.rows.length} tờ khai – đang dự báo lại…` : "Đã xóa danh sách tờ khai nhập khẩu của kỳ – đang dự báo lại…";
+    $("btnVat").click();
+  } catch (e) { $("nkMsg").textContent = e.message; }
+};
 $("btnVat").onclick = async () => {
   const p = vatPeriod(); if (!p.ky || !p.nam) return msg($("vMsg"), "Chọn kỳ tính thuế");
   const inputs = {}; Object.entries(VAT_INPUTS).forEach(([k, id]) => inputs[k] = parseVn($(id).value));
