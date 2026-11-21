@@ -875,6 +875,9 @@ def _read_all(items: list[tuple[str, bytes]], idx: dict, job: "Job") -> list[dic
     with tempfile.TemporaryDirectory(prefix="awb_hd_") as td:
         paths = []
         for i, (n, d) in enumerate(items):
+            if isinstance(d, Path):               # đã nằm trên ổ đĩa (tải lên nhiều file) -> đọc thẳng
+                paths.append(str(d))
+                continue
             p = Path(td) / f"{i:05d}{Path(n).suffix.lower() or '.bin'}"
             p.write_bytes(d)
             paths.append(str(p))
@@ -916,9 +919,24 @@ def _cache_dir() -> Path:
     return Path(settings.output_dir) / ".cache" / "hoadon"
 
 
-def _cache_key(data: bytes) -> str:
+def _cache_key(data: "bytes | Path") -> str:
     import hashlib
+    if isinstance(data, Path):                    # file trên ổ đĩa: băm từng khối, không đọc cả file vào RAM
+        h = hashlib.sha1()
+        with open(data, "rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                h.update(chunk)
+        return h.hexdigest() + _CACHE_VER
     return hashlib.sha1(data).hexdigest() + _CACHE_VER
+
+
+def _expand(name: str, src: "bytes | Path") -> list[tuple[str, "bytes | Path"]]:
+    """File tải lên -> các hóa đơn bên trong. File thường trên ổ đĩa giữ nguyên đường dẫn; file .zip thì giải nén."""
+    if isinstance(src, Path):
+        if src.suffix.lower() != ".zip" and not name.lower().endswith(".zip"):
+            return [(name, src)]
+        src = src.read_bytes()
+    return list(iter_files(name, src))
 
 
 def _cache_get(key: str, name: str) -> dict[str, Any] | None:
@@ -955,7 +973,7 @@ def run(job: Job, files: list[tuple[str, bytes]], tpl: bytes, direction: str, ow
         sheet_index = wb.worksheets.index(ws) + 1
         job.say(f"File mẫu: sheet '{ws.title}', tiêu đề ở dòng {hr}, nhận được {len(cols)} cột"
                 + (f"; chưa nhận: {', '.join(map(str, unknown[:8]))}" if unknown else ""))
-        items = [(n, d) for name, data in files for n, d in iter_files(name, data)
+        items = [(n, d) for name, data in files for n, d in _expand(name, data)
                  if n.lower().endswith((".xml", ".pdf", ".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"))]
         job.total = len(items)
         idx = local_index()

@@ -11,11 +11,23 @@ from typing import Literal
 
 import uvicorn
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from starlette.requests import Request as _StarletteRequest
+
+# Starlette mặc định chỉ nhận tối đa 1000 file / 1000 ô trong 1 lần gửi form ("Too many files. Maximum number of files is
+# 1000") -> nâng lên để thả hàng nghìn hóa đơn một lần. File lớn được Starlette ghi tạm ra ổ đĩa, không giữ trong RAM.
+_orig_form = _StarletteRequest.form
+
+
+def _form_no_limit(self, *, max_files=1_000_000, max_fields=1_000_000, max_part_size=16 * 1024 * 1024):
+    return _orig_form(self, max_files=max_files, max_fields=max_fields, max_part_size=max_part_size)
+
+
+_StarletteRequest.form = _form_no_limit
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 
 from . import db
-from .config import settings
+from .config import ROOT, settings
 from .gdt.client import GDTClient, GDTError
 from .providers import load_providers
 from .sync import DONE_PDF, JOBS, _storage_base, process_pdf, start_job
@@ -819,7 +831,7 @@ async def misa_convert(files: list[UploadFile] = File(...), template: UploadFile
     from . import misa_import
     if direction not in ("purchase", "sold", "auto"):
         raise HTTPException(400, "Chọn hóa đơn đầu vào, đầu ra hoặc tự nhận")
-    payload = await _read_uploads(files)
+    payload = _save_uploads(files)
     tpl = await template.read() if template is not None else b""
     tpl_name = (template.filename or "") if template is not None and tpl else ""
     if not tpl:
@@ -871,8 +883,7 @@ async def inventory_run(opening: UploadFile = File(...), tpl: UploadFile | None 
         raise HTTPException(400, "Chọn file tồn kho đầu kỳ / danh mục hàng hóa")
     for key, f, invs in (("buy", buy_file, buy_inv), ("sell", sell_file, sell_inv), ("ret", ret_file, ret_inv)):
         src = await one(f)
-        inv_files = await _read_uploads([x for x in (invs or []) if x is not None]) if invs else []
-        inv_files = [(n, d) for n, d in inv_files if d]
+        inv_files = _save_uploads([x for x in (invs or []) if x is not None]) if invs else []
         if src or inv_files:
             inp[key] = {"file": None if inv_files else src, "mau": src if inv_files else None, "invoices": inv_files}
     if not any(k in inp for k in ("buy", "sell")):
@@ -1190,13 +1201,36 @@ def _doc_root(mst: str) -> tuple[str, Path]:
 
 
 async def _read_uploads(files: list[UploadFile]) -> list[tuple[str, bytes]]:
-    out, total = [], 0
-    for f in files:
-        data = await f.read()
-        total += len(data)
-        if total > MAX_UPLOAD:
-            raise HTTPException(413, "Tổng dung lượng file quá 300 MB, hãy chia nhỏ")
-        out.append((f.filename or "file", data))
+    return [(f.filename or "file", await f.read()) for f in files]
+
+
+def _save_uploads(files: list[UploadFile]) -> list[tuple[str, Path]]:
+    """Ghi các file tải lên ra thư mục tạm (chép từng khối, không đọc cả file vào RAM) -> [(tên, đường dẫn)].
+    Dùng cho hàng nghìn hóa đơn / vài GB: bộ đọc hóa đơn đọc lần lượt từng file từ ổ đĩa."""
+    import shutil
+    import time as _t
+    import uuid as _uuid
+    base = ROOT / "data" / "tmp_upload"
+    base.mkdir(parents=True, exist_ok=True)
+    for d in base.iterdir():                      # dọn thư mục tạm của các lần trước (quá 2 ngày)
+        try:
+            if d.is_dir() and _t.time() - d.stat().st_mtime > 2 * 86400:
+                shutil.rmtree(d, ignore_errors=True)
+        except OSError:
+            pass
+    folder = base / _uuid.uuid4().hex
+    folder.mkdir()
+    out = []
+    for i, f in enumerate(files):
+        name = f.filename or f"file{i}"
+        p = folder / f"{i:06d}_{Path(name).name[-120:]}"
+        f.file.seek(0)
+        with open(p, "wb") as w:
+            shutil.copyfileobj(f.file, w, 1024 * 1024)
+        if p.stat().st_size:
+            out.append((name, p))
+        else:
+            p.unlink(missing_ok=True)
     return out
 
 
@@ -1689,13 +1723,7 @@ async def import_files(mst: str = Form(...), direction: str = Form("purchase"),
     if direction not in ("purchase", "sold", "auto"):
         raise HTTPException(400, "Loại phải là mua vào hoặc bán ra")
     db.client()
-    payload, total = [], 0
-    for f in files:
-        data = await f.read()
-        total += len(data)
-        if total > MAX_UPLOAD:
-            raise HTTPException(413, "Tổng dung lượng file quá 300 MB, hãy chia nhỏ")
-        payload.append((f.filename or "file", data))
+    payload = [(f.filename or "file", await f.read()) for f in files]
     job = start_import_job(mst, direction, payload, fetch_pdf)
     return job.public()
 
