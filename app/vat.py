@@ -239,6 +239,32 @@ def _detail(rec: dict[str, Any], mst: str, info: dict[str, Any]) -> tuple[list[d
     return items, rates
 
 
+def _zero_total_fix(r: dict[str, Any], items: list[dict[str, Any]],
+                    rates: dict[str, list[float]]) -> tuple[dict[str, list[float]], list[str]] | None:
+    """HĐ ghi Tổng tiền chưa thuế = 0, thuế = 0 nhưng Tổng thanh toán > 0 (dòng hàng có thành tiền mà bỏ trống thuế suất,
+    HĐ chỉ có tiền phí / lệ phí...): lấy giá trị theo thành tiền từng dòng hàng, phần còn lại của tổng thanh toán (phí, lệ
+    phí) tính là không chịu thuế. Thuế = 0 đúng như hóa đơn; dòng bỏ trống thuế suất coi là không chịu thuế (KCT)."""
+    pay = _num(r.get("tgtttbso"))
+    val, tax = _sum_rates(rates)
+    if pay <= 0 or abs(val) >= 1 or abs(tax) >= 1:
+        return None
+    out: dict[str, list[float]] = {}
+    for it in items:
+        if it["ts"] == "?":
+            it["ts"] = "KCT"
+        it["thue"] = 0.0
+        if it["tt"]:
+            out.setdefault(it["ts"], [0.0, 0.0])[0] += it["tt"]
+    rest = pay - sum(v[0] for v in out.values())
+    if rest >= 1:
+        out.setdefault("KCT", [0.0, 0.0])[0] += rest
+    if not out:
+        return None
+    why = ("theo thành tiền từng dòng hàng" if any(it["tt"] for it in items) else "theo tổng tiền thanh toán")
+    return out, [f"HĐ ghi tổng tiền chưa thuế = 0 nhưng tổng thanh toán {pay:,.0f}đ: lấy giá trị {why}, "
+                 "thuế = 0, phần không có thuế suất tính là không chịu thuế".replace(",", ".")]
+
+
 def _spread_tax(items: list[dict[str, Any]], rates: dict[str, list[float]]) -> None:
     """Tiền thuế từng dòng hàng = thành tiền x thuế suất; chênh lệch làm tròn dồn vào dòng lớn nhất
     để tổng thuế từng dòng khớp đúng tổng thuế theo thuế suất trên hóa đơn."""
@@ -498,9 +524,13 @@ def compute(mst: str, kieu: str, ky: int, nam: int, inputs: dict[str, Any] | Non
                 p = round(tax / val * 100)
                 guess = str(p) if p in (5, 8, 10) else "?"
             rates = {guess if tax else ("?" if direction == "purchase" else "KCT"): [val, tax]}
+        note: list[str] = []
+        zero = _zero_total_fix(r, its, rates)
+        if zero:
+            rates, note = zero
         _spread_tax(its, rates)
         prepared.append({"r": r, "code": code, "dir": direction, "its": its, "rates": rates, "no_detail": no_detail,
-                         "ref": _orig_ref(r), "drop": None, "adj": [], "note": []})
+                         "ref": _orig_ref(r), "drop": None, "adj": [], "note": note})
     pair_notes = _pair_invoices(prepared)   # ghép HĐ thay thế / điều chỉnh với HĐ gốc trong kỳ
     for p in prepared:
         if p["drop"]:

@@ -229,7 +229,7 @@ def _open_window(url: str, root: Path):
     prof.mkdir(parents=True, exist_ok=True)
     _forget_window_placement(prof)
     w, h, x, y = _window_geometry()
-    proc = subprocess.Popen([exe, f"--app={url}", f"--user-data-dir={prof}", "--no-first-run",
+    proc = subprocess.Popen([exe, f"--app={url}", f"--user-data-dir={prof}", "--lang=vi", "--no-first-run",
                              "--no-default-browser-check", f"--window-size={w},{h}", f"--window-position={x},{y}"])
     _brand_soon(_icon_path(), _relaunch_cmd())   # logo AWBook trên thanh taskbar thay cho biểu tượng trình duyệt
     return proc

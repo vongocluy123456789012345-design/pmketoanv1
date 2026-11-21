@@ -52,6 +52,25 @@
   .tiDrop a.active { background: var(--bg); }
   .tiMenu.on > a { color: var(--pri); border-bottom-color: var(--pri); }
   .lvLOI { background: #fde2dd; } .lvCB { background: #fff6d6; } .lvLY { background: #e8f1fb; }
+  /* chọn ngày / tháng tiếng Việt (dd/mm/yyyy) – không phụ thuộc ngôn ngữ máy */
+  input.vnd { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='none' stroke='%2357606a' stroke-width='1.6'%3E%3Crect x='2' y='3' width='12' height='11' rx='2'/%3E%3Cpath d='M2 6.5h12M5 1.5v3M11 1.5v3'/%3E%3C/svg%3E");
+    background-repeat: no-repeat; background-position: right 8px center; padding-right: 28px; min-width: 130px; }
+  .vnCal { position: absolute; z-index: 9999; background: #fff; border: 1px solid var(--b); border-radius: 10px;
+    box-shadow: 0 10px 28px rgba(0,0,0,.18); padding: 10px; width: 268px; font-size: 13px; color: #24292f; user-select: none; }
+  .vnCal .h { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; font-weight: 700; }
+  .vnCal .h button { background: none; color: #24292f; border: 1px solid var(--b); border-radius: 6px; width: 30px; height: 28px; padding: 0; cursor: pointer; }
+  .vnCal .h select { width: auto; padding: 2px 4px; font-weight: 700; }
+  .vnCal .g { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; text-align: center; }
+  .vnCal .g.m { grid-template-columns: repeat(3, 1fr); gap: 6px; }
+  .vnCal .w { color: #57606a; font-size: 12px; padding: 3px 0; font-weight: 600; }
+  .vnCal .d { padding: 6px 0; border-radius: 6px; cursor: pointer; }
+  .vnCal .g.m .d { padding: 9px 0; border: 1px solid var(--b); }
+  .vnCal .d:hover { background: #e8f1fb; }
+  .vnCal .d.o { color: #b0b7bf; }
+  .vnCal .d.t { outline: 1px solid var(--pri); }
+  .vnCal .d.s { background: var(--pri); color: #fff; }
+  .vnCal .f { display: flex; justify-content: space-between; margin-top: 8px; }
+  .vnCal .f a { cursor: pointer; color: var(--pri); }
   nav .badge { margin-left: 4px; }
   .page { display: none; gap: 16px; }
   .page.active { display: grid; }
@@ -894,6 +913,127 @@
 <input type="file" id="pdfFile" accept="application/pdf" hidden>
 
 <script>
+// ===== Ô chọn ngày / tháng tiếng Việt: hiện dd/mm/yyyy (tháng: mm/yyyy), lịch tiếng Việt, không theo ngôn ngữ máy.
+// .value vẫn là yyyy-mm-dd / yyyy-mm như ô date/month gốc nên mã cũ đọc/ghi giá trị không phải đổi.
+(() => {
+  const NV = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value");
+  const p2 = n => String(n).padStart(2, "0");
+  const dim = (y, m) => new Date(y, m, 0).getDate();
+  const toIso = (kind, t) => {
+    t = String(t || "").trim();
+    if (!t) return "";
+    let m;
+    if (kind === "month") {
+      if ((m = t.match(/^(\d{4})-(\d{1,2})$/))) return +m[2] >= 1 && +m[2] <= 12 ? `${m[1]}-${p2(m[2])}` : "";
+      if ((m = t.match(/^(\d{1,2})\D+(\d{4})$/))) return +m[1] >= 1 && +m[1] <= 12 ? `${m[2]}-${p2(m[1])}` : "";
+      return "";
+    }
+    if ((m = t.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/))) m = [0, m[3], m[2], m[1]];
+    else if (!(m = t.match(/^(\d{1,2})\D+(\d{1,2})\D+(\d{2,4})$/))) {
+      const d = t.replace(/\D/g, "");
+      if (d.length !== 8) return "";
+      m = [0, d.slice(0, 2), d.slice(2, 4), d.slice(4)];
+    }
+    let [, dd, mm, yy] = m.map(Number);
+    if (yy < 100) yy += 2000;
+    if (mm < 1 || mm > 12 || dd < 1 || dd > dim(yy, mm)) return "";
+    return `${yy}-${p2(mm)}-${p2(dd)}`;
+  };
+  const toTxt = (kind, iso) => {
+    const m = String(iso || "").match(/^(\d{4})-(\d{2})(?:-(\d{2}))?/);
+    if (!m) return "";
+    return kind === "month" ? `${m[2]}/${m[1]}` : `${m[3] || "01"}/${m[2]}/${m[1]}`;
+  };
+  const fire = el => { el.dispatchEvent(new Event("input", {bubbles: true})); el.dispatchEvent(new Event("change", {bubbles: true})); };
+  let cal = null, cur = null, view = null;
+  const close = () => { if (cal) cal.remove(); cal = cur = null; };
+  function draw() {
+    const kind = cur.dataset.vnd, sel = cur.value, now = new Date();
+    const todayIso = `${now.getFullYear()}-${p2(now.getMonth() + 1)}-${p2(now.getDate())}`;
+    let h;
+    if (kind === "month") {
+      h = `<div class="h"><button data-nav="-12" title="Năm trước">‹</button><span>Năm ${view.y}</span><button data-nav="12" title="Năm sau">›</button></div><div class="g m">` +
+        Array.from({length: 12}, (_, i) => { const iso = `${view.y}-${p2(i + 1)}`;
+          return `<div class="d${iso === sel ? " s" : ""}${iso === todayIso.slice(0, 7) ? " t" : ""}" data-v="${iso}">Tháng ${i + 1}</div>`; }).join("") +
+        `</div><div class="f"><a data-act="now">Tháng này</a><a data-act="clear">Xóa</a></div>`;
+    } else {
+      const first = (new Date(view.y, view.m - 1, 1).getDay() + 6) % 7;  // thứ 2 = 0
+      const cells = [];
+      for (let i = 0; i < 42; i++) {
+        const d = new Date(view.y, view.m - 1, 1 - first + i);
+        const iso = `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`;
+        cells.push(`<div class="d${d.getMonth() + 1 !== view.m ? " o" : ""}${iso === sel ? " s" : ""}${iso === todayIso ? " t" : ""}" data-v="${iso}">${d.getDate()}</div>`);
+      }
+      const yrs = []; for (let y = view.y - 6; y <= view.y + 4; y++) yrs.push(`<option${y === view.y ? " selected" : ""}>${y}</option>`);
+      h = `<div class="h"><button data-nav="-1" title="Tháng trước">‹</button>
+          <span><select data-sel="m">${Array.from({length: 12}, (_, i) => `<option value="${i + 1}"${i + 1 === view.m ? " selected" : ""}>Tháng ${i + 1}</option>`).join("")}</select>
+          <select data-sel="y">${yrs.join("")}</select></span><button data-nav="1" title="Tháng sau">›</button></div>
+        <div class="g">${["T2", "T3", "T4", "T5", "T6", "T7", "CN"].map(w => `<div class="w">${w}</div>`).join("")}${cells.join("")}</div>
+        <div class="f"><a data-act="now">Hôm nay</a><a data-act="clear">Xóa</a></div>`;
+    }
+    cal.innerHTML = h;
+  }
+  function open(el) {
+    if (cur === el && cal) return;
+    close();
+    cur = el;
+    const iso = el.value || (() => { const n = new Date(); return `${n.getFullYear()}-${p2(n.getMonth() + 1)}-01`; })();
+    view = {y: +iso.slice(0, 4), m: +iso.slice(5, 7)};
+    cal = document.createElement("div");
+    cal.className = "vnCal";
+    cal.addEventListener("mousedown", e => { if (e.target.tagName !== "SELECT" && e.target.tagName !== "OPTION") e.preventDefault(); });
+    cal.addEventListener("click", e => {
+      const t = e.target, d = t.dataset;
+      if (d.nav) { const n = +d.nav; if (Math.abs(n) === 12) view.y += n / 12; else { view.m += n; if (view.m < 1) { view.m = 12; view.y--; } if (view.m > 12) { view.m = 1; view.y++; } } draw(); }
+      else if (d.v) { cur.value = cur.dataset.vnd === "month" ? d.v.slice(0, 7) : d.v; const el = cur; close(); fire(el); }
+      else if (d.act === "now") { const n = new Date(); cur.value = `${n.getFullYear()}-${p2(n.getMonth() + 1)}-${p2(n.getDate())}`.slice(0, cur.dataset.vnd === "month" ? 7 : 10); const el = cur; close(); fire(el); }
+      else if (d.act === "clear") { cur.value = ""; const el = cur; close(); fire(el); }
+    });
+    cal.addEventListener("change", e => { const d = e.target.dataset; if (d.sel === "m") view.m = +e.target.value; if (d.sel === "y") view.y = +e.target.value; draw(); });
+    document.body.appendChild(cal);
+    draw();
+    const r = el.getBoundingClientRect(), w = cal.offsetWidth, hh = cal.offsetHeight;
+    let left = r.left + window.scrollX, top = r.bottom + window.scrollY + 4;
+    if (left + w > window.scrollX + document.documentElement.clientWidth - 8) left = window.scrollX + document.documentElement.clientWidth - w - 8;
+    if (r.bottom + hh + 4 > window.innerHeight && r.top > hh + 4) top = r.top + window.scrollY - hh - 4;
+    cal.style.left = Math.max(4, left) + "px"; cal.style.top = top + "px";
+  }
+  function upgrade(el) {
+    if (el.dataset.vnd) return;
+    const kind = el.type === "month" ? "month" : "date";
+    const iso = NV.get.call(el);
+    el.type = "text";
+    el.dataset.vnd = kind;
+    el.classList.add("vnd");
+    el.placeholder = kind === "month" ? "tháng/năm" : "ngày/tháng/năm";
+    el.autocomplete = "off";
+    el.inputMode = "numeric";
+    el.maxLength = kind === "month" ? 7 : 10;
+    Object.defineProperty(el, "value", {configurable: true,
+      get() { return toIso(kind, NV.get.call(this)); },
+      set(v) { NV.set.call(this, toTxt(kind, v) || (toIso(kind, v) ? toTxt(kind, toIso(kind, v)) : "")); if (cur === this && cal) { view = {y: +(this.value || "2026").slice(0, 4), m: +(this.value || "2026-01").slice(5, 7) || 1}; draw(); } }});
+    NV.set.call(el, toTxt(kind, iso));
+    el.addEventListener("focus", () => open(el));
+    el.addEventListener("click", () => open(el));
+    el.addEventListener("keydown", e => { if (e.key === "Escape" || e.key === "Tab") close(); if (e.key === "Enter") { const t = toIso(kind, NV.get.call(el)); if (t) NV.set.call(el, toTxt(kind, t)); close(); } });
+    el.addEventListener("input", e => {   // gõ 20112026 -> 20/11/2026
+      if (!e.isTrusted) return;
+      const raw = NV.get.call(el);
+      if (/[^\d/]/.test(raw) || raw.includes("/")) return;
+      const d = raw.slice(0, kind === "month" ? 6 : 8);
+      const f = kind === "month" ? (d.length > 2 ? d.slice(0, 2) + "/" + d.slice(2) : d)
+        : d.length > 4 ? `${d.slice(0, 2)}/${d.slice(2, 4)}/${d.slice(4)}` : d.length > 2 ? `${d.slice(0, 2)}/${d.slice(2)}` : d;
+      if (f !== raw) NV.set.call(el, f);
+    });
+    el.addEventListener("blur", () => { const t = toIso(kind, NV.get.call(el)); if (t) NV.set.call(el, toTxt(kind, t)); setTimeout(() => { if (cur === el && document.activeElement !== el && !(cal && cal.contains(document.activeElement))) close(); }, 150); });
+  }
+  window.vnDateUpgrade = root => (root || document).querySelectorAll('input[type="date"],input[type="month"]').forEach(upgrade);
+  vnDateUpgrade();
+  new MutationObserver(ms => ms.forEach(m => m.addedNodes.forEach(n => { if (n.nodeType !== 1) return;
+    if (n.matches && n.matches('input[type="date"],input[type="month"]')) upgrade(n); else if (n.querySelectorAll) vnDateUpgrade(n); }))).observe(document.body, {childList: true, subtree: true});
+  document.addEventListener("mousedown", e => { if (cal && !cal.contains(e.target) && e.target !== cur) close(); });
+  window.addEventListener("resize", close);
+})();
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const money = v => v == null ? "" : Number(v).toLocaleString("vi-VN");

@@ -77,3 +77,17 @@ if __name__ == "__main__":
         if name.startswith("test_") and callable(fn):
             fn()
             print("OK", name)
+
+
+def test_zero_pre_tax_total_uses_lines_and_fees():
+    from app import vat as v
+    # dòng hàng có thành tiền, bỏ trống thuế suất, tổng chưa thuế = 0 (vd khám sức khỏe 160.000)
+    its = [{"ten": "Khám sức khỏe", "tt": 160000.0, "ts": "?", "thue": None}]
+    rates, note = v._zero_total_fix({"tgtttbso": 160000}, its, {"?": [0.0, 0.0]})
+    assert rates == {"KCT": [160000.0, 0.0]} and its[0]["ts"] == "KCT" and note
+    # chỉ có lệ phí (đăng kiểm 40.000), dòng hàng 0đ thuế suất 0%
+    its = [{"ten": "Cấp GCN", "tt": 0.0, "ts": "0", "thue": None}]
+    rates, _ = v._zero_total_fix({"tgtttbso": 40000}, its, {"0": [0.0, 0.0]})
+    assert rates == {"KCT": [40000.0, 0.0]}
+    # HĐ bình thường: không đổi
+    assert v._zero_total_fix({"tgtttbso": 110000}, [], {"10": [100000.0, 10000.0]}) is None
